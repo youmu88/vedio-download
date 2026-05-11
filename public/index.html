@@ -277,6 +277,31 @@
     word-break: break-all;
   }
 
+  /* Phase labels - 双阶段进度 */
+  .phase-label {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-bottom: 6px;
+    display: inline-block;
+  }
+  .phase-label.preparing { background: rgba(251,191,36,0.15); color: var(--yellow); }
+  .phase-label.preparing_done { background: rgba(52,211,153,0.12); color: var(--green); }
+  .phase-label.downloading { background: rgba(91,154,255,0.15); color: var(--accent); }
+  .phase-label.done { background: rgba(52,211,153,0.12); color: var(--green); }
+  .phase-label.failed { background: rgba(248,113,113,0.12); color: var(--red); }
+
+  /* 进度信息加强 */
+  .progress-message {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 4px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .empty-state {
     text-align: center;
     padding: 48px 20px;
@@ -499,12 +524,20 @@ function renderTaskList(tasks) {
   container.innerHTML = html;
 }
 
+// ─── 阶段标签映射 ──────────────────────────────────
+const PHASE_LABEL = {
+  preparing:      { label: '🔍 准备中（解析视频）',      cls: 'preparing' },
+  preparing_done: { label: '✅ 准备完成，即将下载',     cls: 'preparing_done' },
+  downloading:    { label: '⬇ 下载中',                  cls: 'downloading' },
+};
+
 // ─── 构建任务卡片 HTML ─────────────────────────────
 function buildTaskCard(task) {
   const status = task.status || 'pending';
   const statusInfo = STATUS_MAP[status] || { label: status, icon: '❓' };
   const progress = task.progress || 0;
   const speed = task.speed || '';
+  const phase = task.phase || '';
   const isDone = status === 'done';
   const isFailed = status === 'failed';
   const isActive = status === 'downloading' || status === 'capturing' || status === 'pending';
@@ -530,6 +563,26 @@ function buildTaskCard(task) {
 
   const errorHtml = task.error ? `<div class="task-error">⚠ ${task.error}</div>` : '';
 
+  // 阶段标签（仅在 preparing / downloading 阶段显示）
+  let phaseHtml = '';
+  let messageHtml = '';
+  if (phase && PHASE_LABEL[phase]) {
+    phaseHtml = `<div class="phase-label ${phase}">${PHASE_LABEL[phase].label}</div>`;
+  }
+  if (task.message) {
+    messageHtml = `<div class="progress-message" title="${escapeHtml(task.message)}">${escapeHtml(task.message)}</div>`;
+  }
+
+  // 进度百分比显示：下载阶段显示实际百分比，准备阶段也显示实际百分比
+  let percentLabel = `${progress}%`;
+  if (phase === 'preparing') {
+    percentLabel = `${progress}%`;
+  } else if (phase === 'downloading') {
+    percentLabel = `${progress}%`;
+  } else if (isDone) {
+    percentLabel = '100%';
+  }
+
   return `
     <div class="task-card" id="task-${task.id}" data-status="${status}">
       <div class="task-header">
@@ -537,14 +590,16 @@ function buildTaskCard(task) {
         <span class="task-url" title="${escapeHtml(task.url)}">${escapeHtml(task.url)}</span>
         <span class="task-status-label ${status}">${statusInfo.icon} ${statusInfo.label}</span>
       </div>
+      ${phaseHtml}
       <div class="task-progress">
         <div class="progress-bar-bg">
           <div class="${progressClass}" style="width:${progress}%"></div>
         </div>
         <div class="progress-info">
-          <span>${progress}%</span>
+          <span>${percentLabel}</span>
           ${speed ? `<span class="speed">${speed}</span>` : ''}
         </div>
+        ${messageHtml}
       </div>
       ${errorHtml}
       <div class="task-actions">

@@ -123,15 +123,17 @@ async function processTask(taskId) {
   if (!task) return;
 
   try {
-    // Step 1: 拦截 m3u8
-    taskManager.update(taskId, { status: TaskStatus.CAPTURING });
+    // ── 回合 1: 准备工作（解析/拦截 m3u8）────────────────
+    // 阶段内进度独立显示，0%~100%
+    taskManager.update(taskId, { status: TaskStatus.CAPTURING, phase: 'preparing' });
     const captureResult = await captureM3u8(task.url, {
       onProgress: ({ stage, message }) => {
-        const stageMap = { launching: 5, navigating: 15, waiting: 25, captured: 30 };
+        const stageMap = { launching: 10, navigating: 40, waiting: 70, captured: 100 };
         taskManager.update(taskId, {
           progress: stageMap[stage] || 20,
           message,
           status: TaskStatus.CAPTURING,
+          phase: 'preparing',
         });
       },
     });
@@ -143,18 +145,26 @@ async function processTask(taskId) {
     taskManager.update(taskId, {
       m3u8Url: captureResult.m3u8Url,
       message: `捕获到: ${captureResult.m3u8Url.slice(0, 80)}...`,
-      progress: 30,
+      progress: 100,
       status: TaskStatus.DOWNLOADING,
+      phase: 'preparing_done',
     });
 
-    // Step 2: 调用下载器
+    // ── 回合 2: 下载（按实际下载进度 0~100 更新）────────
+    taskManager.update(taskId, {
+      message: '开始下载...',
+      progress: 0,
+      status: TaskStatus.DOWNLOADING,
+      phase: 'downloading',
+    });
+
     const outputFile = await startDownload(
       captureResult.m3u8Url,
       captureResult.headers || {},
       taskId,
       ({ percent, speed, message }) => {
-        const mapped = 30 + Math.floor(percent * 0.7);
-        taskManager.update(taskId, { progress: mapped, speed, message });
+        // 下载进度直接使用实际值，不再映射
+        taskManager.update(taskId, { progress: percent, speed, message, phase: 'downloading' });
       }
     );
 

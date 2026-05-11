@@ -5,6 +5,7 @@
 import { spawn, execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 
 const DOWNLOADS_DIR = path.resolve(process.cwd(), 'downloads');
 
@@ -28,8 +29,9 @@ export function startDownload(m3u8Url, headers, taskId, onProgress) {
     const outputPath = path.join(DOWNLOADS_DIR, outputName);
 
     // ── 方案 A：N_m3u8DL-RE（首选）──────────────────
-    if (which('N_m3u8DL-RE')) {
-      downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgress)
+    const n_m3u8dl_re_path = which('N_m3u8DL-RE');
+    if (n_m3u8dl_re_path) {
+      downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgress, n_m3u8dl_re_path)
         .then(resolve)
         .catch(reject);
       return;
@@ -51,8 +53,23 @@ export function startDownload(m3u8Url, headers, taskId, onProgress) {
   });
 }
 
+/**
+ * 清理 N_m3u8DL-RE 下载后残留的临时碎片目录
+ * N_m3u8DL-RE 会在 --save-dir 下生成 ${save-name}_tmp/ 目录存放 .ts 碎片
+ * 下载完成后这些碎片已无用途，应彻底删除
+ */
+function cleanupTempDir(outputPath) {
+  const saveName = path.basename(outputPath);
+  // N_m3u8DL-RE 的临时目录命名格式：${save-name}_tmp/
+  const tmpDir = path.join(DOWNLOADS_DIR, `${saveName}_tmp`);
+  if (fs.existsSync(tmpDir)) {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    console.log(`[Cleanup] 已删除临时碎片目录: ${tmpDir}`);
+  }
+}
+
 // ── N_m3u8DL-RE 下载实现 ──────────────────────────
-function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgress) {
+function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgress, binPath) {
   return new Promise((resolve, reject) => {
     const args = [
       m3u8Url,
@@ -69,7 +86,8 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
 
     onProgress({ percent: 0, speed: null, message: '启动 N_m3u8DL-RE 下载...' });
 
-    const proc = spawn('N_m3u8DL-RE', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // 使用 which() 返回的完整路径，避免子进程 PATH 不含 ~/bin 导致 ENOENT
+    const proc = spawn(binPath || 'N_m3u8DL-RE', args, { stdio: ['ignore', 'pipe', 'pipe'] });
 
     let lastPercent = 0;
 
@@ -112,6 +130,10 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
         const mp4Path = `${outputPath}.mp4`;
         const tsPath = `${outputPath}.ts`;
         const finalPath = fs.existsSync(mp4Path) ? mp4Path : fs.existsSync(tsPath) ? tsPath : outputPath;
+
+        // ✅ 清理临时碎片目录（合成 mp4 后删除 .ts 碎片）
+        cleanupTempDir(outputPath);
+
         onProgress({ percent: 100, speed: null, message: '下载完成！' });
         resolve(finalPath);
       } else {
@@ -131,8 +153,14 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
 // ── ffmpeg 回退下载 ─────────────────────────────
 function downloadWithFFmpeg(m3u8Url, headers, outputPath, taskId, onProgress) {
   return new Promise((resolve, reject) => {
-    const args = [
-      '-headers', headers?.referer ? `Referer: ${headers.referer}` : '',
+    const args = [];
+
+    // 安全构建 -headers 参数，仅在 referer 存在时添加
+    if (headers?.referer) {
+      args.push('-headers', `Referer: ${headers.referer}`);
+    }
+
+    args.push(
       '-i', m3u8Url,
       '-c', 'copy',
       '-bsf:a', 'aac_adtstoasc',
@@ -140,7 +168,7 @@ function downloadWithFFmpeg(m3u8Url, headers, outputPath, taskId, onProgress) {
       '-nostats',
       '-y',
       `${outputPath}.mp4`,
-    ];
+    );
 
     onProgress({ percent: 0, speed: null, message: '启动 ffmpeg 下载...' });
 
@@ -195,13 +223,37 @@ export function cancelDownload(taskId) {
 }
 
 /**
- * 简易 which 实现（检查命令是否在 PATH 中）
+ * 增强版 which 实现
+ * 除了标准 PATH 检查，还额外扫描用户级 bin 目录（~/bin、~/.local/bin 等）
+ * 解决 execSync 子进程不加载 shell rc 文件导致的 PATH 不完整问题
+ *
+ * @param {string} cmd - 命令名
+ * @returns {string|false} 返回完整路径（可用作 spawn 的第一个参数），找不到返回 false
  */
 function which(cmd) {
+  // 方式1：标准 PATH 检查
   try {
-    execSync(`which ${cmd}`, { stdio: 'ignore' });
-    return true;
+    const output = execSync(`which ${cmd}`, { stdio: ['ignore', 'pipe', 'ignore'] });
+    const fullPath = output.toString().trim().split('\n')[0];
+    if (fullPath && fs.existsSync(fullPath)) {
+      return fullPath;
+    }
   } catch {
-    return false;
+    // 继续到方式2
   }
+
+  // 方式2：直接检查常见用户 bin 目录
+  const homeDir = os.homedir();
+  const userBinDirs = [
+    path.join(homeDir, 'bin'),
+    path.join(homeDir, '.local', 'bin'),
+    path.join(homeDir, '.cargo', 'bin'),
+  ];
+  for (const dir of userBinDirs) {
+    const fullPath = path.join(dir, cmd);
+    if (fs.existsSync(fullPath)) {
+      return fullPath;
+    }
+  }
+  return false;
 }
