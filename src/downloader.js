@@ -71,6 +71,12 @@ function cleanupTempDir(outputPath) {
 // ── N_m3u8DL-RE 下载实现 ──────────────────────────
 function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgress, binPath) {
   return new Promise((resolve, reject) => {
+    // 安全校验：m3u8Url 必须是合法 URL，防止参数注入
+    if (!isValidUrl(m3u8Url)) {
+      reject(new Error(`非法的 m3u8 URL: ${m3u8Url.slice(0, 100)}`));
+      return;
+    }
+
     const args = [
       m3u8Url,
       '--save-dir', DOWNLOADS_DIR,
@@ -80,9 +86,15 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
       '--no-log',
     ];
 
-    // 添加请求头
-    if (headers?.referer) args.push('--header', `Referer:${headers.referer}`);
-    if (headers?.origin) args.push('--header', `Origin:${headers.origin}`);
+    // 添加请求头（转义特殊字符防止参数解析异常）
+    if (headers?.referer) {
+      const safeReferer = headers.referer.replace(/[\n\r'"]/g, '');
+      args.push('--header', `Referer:${safeReferer}`);
+    }
+    if (headers?.origin) {
+      const safeOrigin = headers.origin.replace(/[\n\r'"]/g, '');
+      args.push('--header', `Origin:${safeOrigin}`);
+    }
 
     onProgress({ percent: 0, speed: null, message: '启动 N_m3u8DL-RE 下载...' });
 
@@ -153,11 +165,18 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
 // ── ffmpeg 回退下载 ─────────────────────────────
 function downloadWithFFmpeg(m3u8Url, headers, outputPath, taskId, onProgress) {
   return new Promise((resolve, reject) => {
+    // 安全校验：m3u8Url 必须是合法 URL，防止参数注入
+    if (!isValidUrl(m3u8Url)) {
+      reject(new Error(`非法的 m3u8 URL: ${m3u8Url.slice(0, 100)}`));
+      return;
+    }
+
     const args = [];
 
-    // 安全构建 -headers 参数，仅在 referer 存在时添加
+    // 安全构建 -headers 参数，仅在 referer 存在时添加（转义特殊字符）
     if (headers?.referer) {
-      args.push('-headers', `Referer: ${headers.referer}`);
+      const safeReferer = headers.referer.replace(/[\n\r'"]/g, '');
+      args.push('-headers', `Referer: ${safeReferer}`);
     }
 
     args.push(
@@ -230,7 +249,32 @@ export function cancelDownload(taskId) {
  * @param {string} cmd - 命令名
  * @returns {string|false} 返回完整路径（可用作 spawn 的第一个参数），找不到返回 false
  */
+/**
+ * 校验是否为合法的 HTTP/HTTPS/m3u8 URL，防止参数注入
+ * @param {string} url
+ * @returns {boolean}
+ */
+function isValidUrl(url) {
+  if (typeof url !== 'string' || url.length === 0) return false;
+  try {
+    const parsed = new URL(url);
+    // 仅允许 http、https 协议（m3u8 是 HTTP 协议的子集，无独立 scheme）
+    return ['http:', 'https:'].includes(parsed.protocol);
+  } catch {
+    return false;
+  }
+}
+
+// 白名单：仅允许查找这两个已知安全的命令
+const ALLOWED_CMDS = new Set(['N_m3u8DL-RE', 'ffmpeg']);
+
 function which(cmd) {
+  // 安全校验：白名单拦截，防止命令注入
+  if (!ALLOWED_CMDS.has(cmd)) {
+    console.error(`[Security] which() 拒绝查找未授权命令: ${cmd}`);
+    return false;
+  }
+
   // 方式1：标准 PATH 检查
   try {
     const output = execSync(`which ${cmd}`, { stdio: ['ignore', 'pipe', 'ignore'] });

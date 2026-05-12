@@ -3,6 +3,10 @@
  * POST /api/download  → 创建下载任务
  * GET  /api/task/:id  → 查询任务状态
  * GET  /api/tasks     → 列出所有任务
+ * POST /api/task/:id/retry → 重试单个失败任务
+ * POST /api/tasks/retry-batch → 批量重试失败任务
+ * DELETE /api/task/:id → 删除单个任务
+ * POST /api/tasks/delete-batch → 批量删除任务
  * WebSocket           → 实时进度推送
  */
 
@@ -12,7 +16,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
 import taskManager, { TaskStatus } from './task-manager.js';
 import { captureM3u8 } from './m3u8-interceptor.js';
-import { startDownload } from './downloader.js';
+import { startDownload, cancelDownload } from './downloader.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -62,6 +66,14 @@ taskManager.on('task-created', (task) => {
   io.emit('task-list-update', taskManager.listAll());
 });
 
+taskManager.on('task-retry', (task) => {
+  io.emit('task-list-update', taskManager.listAll());
+});
+
+taskManager.on('task-removed', (taskId) => {
+  io.emit('task-list-update', taskManager.listAll());
+});
+
 // ─── REST API ───────────────────────────────────────
 
 /**
@@ -101,7 +113,7 @@ app.get('/api/tasks', (_req, res) => {
 });
 
 /**
- * DELETE /api/task/:id — 取消任务
+ * DELETE /api/task/:id — 取消任务（仅取消正在运行的任务）
  */
 app.delete('/api/task/:id', (req, res) => {
   const task = taskManager.get(req.params.id);
@@ -109,14 +121,99 @@ app.delete('/api/task/:id', (req, res) => {
   if (task.status === TaskStatus.DONE) {
     return res.status(400).json({ error: '任务已完成，无法取消' });
   }
+  // 如果任务正在下载，杀掉进程
+  cancelDownload(req.params.id);
   taskManager.markFailed(req.params.id, '用户取消');
   res.json({ ok: true });
+});
+
+/**
+ * POST /api/task/:id/retry — 重试单个失败任务
+ * 仅对状态为 failed 的任务生效
+ */
+app.post('/api/task/:id/retry', async (req, res) => {
+  const task = taskManager.get(req.params.id);
+  if (!task) return res.status(404).json({ error: '任务不存在' });
+  if (task.status !== TaskStatus.FAILED) {
+    return res.status(400).json({ error: '仅失败状态的任务可以重试' });
+  }
+
+  const ok = taskManager.retry(req.params.id);
+  if (!ok) return res.status(500).json({ error: '重试失败' });
+
+  // 异步重新执行
+  processTask(req.params.id).catch((err) => {
+    console.error(`[Retry ${req.params.id}] 执行异常:`, err.message);
+  });
+
+  res.json({ ok: true, taskId: req.params.id, status: TaskStatus.PENDING });
+});
+
+/**
+ * POST /api/tasks/retry-batch — 批量重试失败任务
+ * Body: { taskIds: string[] }
+ */
+app.post('/api/tasks/retry-batch', async (req, res) => {
+  const { taskIds } = req.body;
+  if (!Array.isArray(taskIds) || taskIds.length === 0) {
+    return res.status(400).json({ error: '缺少 taskIds 参数或为空' });
+  }
+
+  const result = taskManager.retryBatch(taskIds);
+
+  // 异步重新执行所有重试成功的任务
+  for (const id of taskIds) {
+    const task = taskManager.get(id);
+    if (task && task.status === TaskStatus.PENDING) {
+      processTask(id).catch((err) => {
+        console.error(`[BatchRetry ${id}] 执行异常:`, err.message);
+      });
+    }
+  }
+
+  res.json({ ok: true, ...result });
+});
+
+/**
+ * DELETE /api/task/:id/remove — 删除单个任务（彻底移除）
+ */
+app.delete('/api/task/:id/remove', (req, res) => {
+  const task = taskManager.get(req.params.id);
+  if (!task) return res.status(404).json({ error: '任务不存在' });
+
+  // 如果任务正在运行，先杀掉进程
+  cancelDownload(req.params.id);
+
+  const ok = taskManager.remove(req.params.id);
+  if (!ok) return res.status(500).json({ error: '删除失败' });
+
+  res.json({ ok: true });
+});
+
+/**
+ * POST /api/tasks/delete-batch — 批量删除任务
+ * Body: { taskIds: string[] }
+ */
+app.post('/api/tasks/delete-batch', (req, res) => {
+  const { taskIds } = req.body;
+  if (!Array.isArray(taskIds) || taskIds.length === 0) {
+    return res.status(400).json({ error: '缺少 taskIds 参数或为空' });
+  }
+
+  // 先杀掉所有正在运行的任务进程
+  for (const id of taskIds) {
+    cancelDownload(id);
+  }
+
+  const result = taskManager.removeBatch(taskIds);
+  res.json({ ok: true, ...result });
 });
 
 // ─── 核心流程：拦截 m3u8 → 下载 ────────────────────
 
 /**
  * 完整任务处理流水线
+ * 任务完成后自动尝试出队下一个待执行任务（实现并发控制）
  */
 async function processTask(taskId) {
   const task = taskManager.get(taskId);
@@ -124,7 +221,6 @@ async function processTask(taskId) {
 
   try {
     // ── 回合 1: 准备工作（解析/拦截 m3u8）────────────────
-    // 阶段内进度独立显示，0%~100%
     taskManager.update(taskId, { status: TaskStatus.CAPTURING, phase: 'preparing' });
     const captureResult = await captureM3u8(task.url, {
       onProgress: ({ stage, message }) => {
@@ -163,7 +259,6 @@ async function processTask(taskId) {
       captureResult.headers || {},
       taskId,
       ({ percent, speed, message }) => {
-        // 下载进度直接使用实际值，不再映射
         taskManager.update(taskId, { progress: percent, speed, message, phase: 'downloading' });
       }
     );
@@ -171,6 +266,22 @@ async function processTask(taskId) {
     taskManager.markDone(taskId, outputFile);
   } catch (err) {
     taskManager.markFailed(taskId, err.message);
+  } finally {
+    // 任务结束（成功或失败）后，尝试启动队列中的下一个任务
+    tryDequeueNext();
+  }
+}
+
+/**
+ * 从队列中取出下一个待执行任务并启动（实现并发控制）
+ */
+function tryDequeueNext() {
+  const next = taskManager.dequeue();
+  if (next) {
+    console.log(`[Queue] 启动下一个任务: ${next.id}`);
+    processTask(next.id).catch((err) => {
+      console.error(`[Task ${next.id}] 执行异常:`, err.message);
+    });
   }
 }
 
