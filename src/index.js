@@ -1,13 +1,18 @@
 /**
  * 主服务入口 — Express + Socket.io
- * POST /api/download  → 创建下载任务
- * GET  /api/task/:id  → 查询任务状态
- * GET  /api/tasks     → 列出所有任务
- * POST /api/task/:id/retry → 重试单个失败任务
- * POST /api/tasks/retry-batch → 批量重试失败任务
- * DELETE /api/task/:id → 删除单个任务
- * POST /api/tasks/delete-batch → 批量删除任务
- * WebSocket           → 实时进度推送
+ *
+ * REST API：
+ *   POST   /api/download          → 创建下载任务（状态：created）
+ *   GET    /api/tasks              → 列出所有任务（按创建时间倒序）
+ *   GET    /api/task/:id           → 查询单个任务
+ *   POST   /api/task/:id/retry     → 手动续跑（仅 failed 状态）
+ *   POST   /api/tasks/retry-batch  → 批量续跑
+ *   DELETE /api/task/:id           → 删除单个任务
+ *   POST   /api/tasks/delete-batch → 批量删除任务
+ *
+ * WebSocket 实时推送：
+ *   subscribe/unsubscribe → task-status（单任务状态）
+ *   task-list-update      → 列表变更通知
  */
 
 import express from 'express';
@@ -56,7 +61,7 @@ io.on('connection', (socket) => {
   });
 });
 
-// 监听 taskManager 事件 → 广播到 WebSocket
+// ─── taskManager 事件 → WebSocket 广播 ────────────
 taskManager.on('task-updated', (task) => {
   io.to(`task:${task.id}`).emit('task-status', task);
   io.emit('task-list-update', taskManager.listAll());
@@ -70,8 +75,23 @@ taskManager.on('task-retry', (task) => {
   io.emit('task-list-update', taskManager.listAll());
 });
 
+taskManager.on('task-completed', (task) => {
+  io.emit('task-list-update', taskManager.listAll());
+});
+
+taskManager.on('task-failed', (task) => {
+  io.emit('task-list-update', taskManager.listAll());
+});
+
 taskManager.on('task-removed', (taskId) => {
   io.emit('task-list-update', taskManager.listAll());
+});
+
+// 重试就绪事件 → 自动执行
+taskManager.on('task-retry-ready', (taskId) => {
+  processTask(taskId).catch((err) => {
+    console.error(`[Retry ${taskId}] 执行异常:`, err.message);
+  });
 });
 
 // ─── REST API ───────────────────────────────────────
@@ -79,7 +99,7 @@ taskManager.on('task-removed', (taskId) => {
 /**
  * POST /api/download
  * Body: { url: string }
- * 创建下载任务并立即开始执行
+ * 创建下载任务，状态为 created，异步开始执行
  */
 app.post('/api/download', async (req, res) => {
   const { url } = req.body;
@@ -88,16 +108,23 @@ app.post('/api/download', async (req, res) => {
   }
 
   const taskId = taskManager.create(url);
-  // 异步启动任务，不阻塞响应
+  // 异步启动任务
   processTask(taskId).catch((err) => {
     console.error(`[Task ${taskId}] 执行异常:`, err.message);
   });
 
-  res.json({ taskId, status: TaskStatus.PENDING });
+  res.json({ taskId, status: TaskStatus.CREATED });
 });
 
 /**
- * GET /api/task/:id — 查询单个任务状态
+ * GET /api/tasks — 列出所有任务（按创建时间倒序）
+ */
+app.get('/api/tasks', (_req, res) => {
+  res.json(taskManager.listAll());
+});
+
+/**
+ * GET /api/task/:id — 查询单个任务
  */
 app.get('/api/task/:id', (req, res) => {
   const task = taskManager.get(req.params.id);
@@ -106,51 +133,45 @@ app.get('/api/task/:id', (req, res) => {
 });
 
 /**
- * GET /api/tasks — 列出所有任务
- */
-app.get('/api/tasks', (_req, res) => {
-  res.json(taskManager.listAll());
-});
-
-/**
- * DELETE /api/task/:id — 取消任务（仅取消正在运行的任务）
+ * DELETE /api/task/:id — 删除任务（彻底移除记录）
  */
 app.delete('/api/task/:id', (req, res) => {
   const task = taskManager.get(req.params.id);
   if (!task) return res.status(404).json({ error: '任务不存在' });
-  if (task.status === TaskStatus.DONE) {
-    return res.status(400).json({ error: '任务已完成，无法取消' });
-  }
-  // 如果任务正在下载，杀掉进程
+
+  // 如果正在运行，先杀掉进程
   cancelDownload(req.params.id);
-  taskManager.markFailed(req.params.id, '用户取消');
+
+  const ok = taskManager.remove(req.params.id);
+  if (!ok) return res.status(500).json({ error: '删除失败' });
+
   res.json({ ok: true });
 });
 
 /**
- * POST /api/task/:id/retry — 重试单个失败任务
+ * POST /api/task/:id/retry — 手动续跑单个失败任务
  * 仅对状态为 failed 的任务生效
  */
 app.post('/api/task/:id/retry', async (req, res) => {
   const task = taskManager.get(req.params.id);
   if (!task) return res.status(404).json({ error: '任务不存在' });
   if (task.status !== TaskStatus.FAILED) {
-    return res.status(400).json({ error: '仅失败状态的任务可以重试' });
+    return res.status(400).json({ error: '仅失败状态的任务可以续跑' });
   }
 
   const ok = taskManager.retry(req.params.id);
-  if (!ok) return res.status(500).json({ error: '重试失败' });
+  if (!ok) return res.status(500).json({ error: '续跑失败' });
 
   // 异步重新执行
   processTask(req.params.id).catch((err) => {
     console.error(`[Retry ${req.params.id}] 执行异常:`, err.message);
   });
 
-  res.json({ ok: true, taskId: req.params.id, status: TaskStatus.PENDING });
+  res.json({ ok: true, taskId: req.params.id, status: TaskStatus.CREATED });
 });
 
 /**
- * POST /api/tasks/retry-batch — 批量重试失败任务
+ * POST /api/tasks/retry-batch — 批量续跑失败任务
  * Body: { taskIds: string[] }
  */
 app.post('/api/tasks/retry-batch', async (req, res) => {
@@ -161,10 +182,10 @@ app.post('/api/tasks/retry-batch', async (req, res) => {
 
   const result = taskManager.retryBatch(taskIds);
 
-  // 异步重新执行所有重试成功的任务
+  // 异步执行所有续跑成功的任务
   for (const id of taskIds) {
     const task = taskManager.get(id);
-    if (task && task.status === TaskStatus.PENDING) {
+    if (task && task.status === TaskStatus.CREATED) {
       processTask(id).catch((err) => {
         console.error(`[BatchRetry ${id}] 执行异常:`, err.message);
       });
@@ -172,22 +193,6 @@ app.post('/api/tasks/retry-batch', async (req, res) => {
   }
 
   res.json({ ok: true, ...result });
-});
-
-/**
- * DELETE /api/task/:id/remove — 删除单个任务（彻底移除）
- */
-app.delete('/api/task/:id/remove', (req, res) => {
-  const task = taskManager.get(req.params.id);
-  if (!task) return res.status(404).json({ error: '任务不存在' });
-
-  // 如果任务正在运行，先杀掉进程
-  cancelDownload(req.params.id);
-
-  const ok = taskManager.remove(req.params.id);
-  if (!ok) return res.status(500).json({ error: '删除失败' });
-
-  res.json({ ok: true });
 });
 
 /**
@@ -213,22 +218,32 @@ app.post('/api/tasks/delete-batch', (req, res) => {
 
 /**
  * 完整任务处理流水线
- * 任务完成后自动尝试出队下一个待执行任务（实现并发控制）
+ * 1. 标记为 running
+ * 2. 拦截 m3u8
+ * 3. 下载视频
+ * 4. 完成 / 失败（失败时 taskManager.markFailed 自动处理重试）
+ * 5. 无论成功失败，尝试出队下一个任务
  */
 async function processTask(taskId) {
   const task = taskManager.get(taskId);
   if (!task) return;
 
   try {
-    // ── 回合 1: 准备工作（解析/拦截 m3u8）────────────────
-    taskManager.update(taskId, { status: TaskStatus.CAPTURING, phase: 'preparing' });
+    // ── 标记为运行中 ────────────────────────────
+    taskManager.markRunning(taskId);
+
+    // ── 回合 1: 拦截 m3u8 ──────────────────────
+    taskManager.update(taskId, {
+      phase: 'preparing',
+      message: '正在拦截 m3u8 地址...',
+    });
+
     const captureResult = await captureM3u8(task.url, {
       onProgress: ({ stage, message }) => {
         const stageMap = { launching: 10, navigating: 40, waiting: 70, captured: 100 };
         taskManager.update(taskId, {
           progress: stageMap[stage] || 20,
           message,
-          status: TaskStatus.CAPTURING,
           phase: 'preparing',
         });
       },
@@ -242,15 +257,13 @@ async function processTask(taskId) {
       m3u8Url: captureResult.m3u8Url,
       message: `捕获到: ${captureResult.m3u8Url.slice(0, 80)}...`,
       progress: 100,
-      status: TaskStatus.DOWNLOADING,
       phase: 'preparing_done',
     });
 
-    // ── 回合 2: 下载（按实际下载进度 0~100 更新）────────
+    // ── 回合 2: 下载 ───────────────────────────
     taskManager.update(taskId, {
       message: '开始下载...',
       progress: 0,
-      status: TaskStatus.DOWNLOADING,
       phase: 'downloading',
     });
 
@@ -263,17 +276,23 @@ async function processTask(taskId) {
       }
     );
 
-    taskManager.markDone(taskId, outputFile);
+    taskManager.markCompleted(taskId, outputFile);
   } catch (err) {
-    taskManager.markFailed(taskId, err.message);
+    // markFailed 内部自动处理重试逻辑（指数退避）
+    const autoRetried = taskManager.markFailed(taskId, err.message);
+    if (autoRetried) {
+      console.log(`[Task ${taskId}] 已自动加入重试队列`);
+    } else {
+      console.error(`[Task ${taskId}] 执行失败（已耗尽重试次数）:`, err.message);
+    }
   } finally {
-    // 任务结束（成功或失败）后，尝试启动队列中的下一个任务
+    // 任务结束后，尝试启动下一个任务
     tryDequeueNext();
   }
 }
 
 /**
- * 从队列中取出下一个待执行任务并启动（实现并发控制）
+ * 从队列中取出下一个待执行任务并启动
  */
 function tryDequeueNext() {
   const next = taskManager.dequeue();
@@ -290,4 +309,5 @@ httpServer.listen(PORT, () => {
   console.log(`🚀 视频下载服务已启动: http://0.0.0.0:${PORT}`);
   console.log(`📡 WebSocket: ws://0.0.0.0:${PORT}`);
   console.log(`📋 API: POST http://0.0.0.0:${PORT}/api/download`);
+  console.log(`📦 持久化: data/tasks.json`);
 });
