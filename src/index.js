@@ -1,50 +1,102 @@
 /**
- * 主服务入口 — Express + Socket.io
+ * 主服务入口（增强版） — Express + Socket.io + 所有增强功能
+ *
+ * ⭐ 新增功能：
+ *   - BrowserPool 浏览器实例复用
+ *   - Stealth 反检测
+ *   - Token 时效性处理
+ *   - 多引擎降级下载
+ *   - 断点续传
+ *   - 代理轮换
+ *   - 格式扩展（DASH/MPD/直链）
+ *   - 并行分片加速
+ *   - 智能码率选择
+ *   - 限速与资源管控
+ *   - 结构化日志
+ *   - API 速率限制（P2-11 安全加固）
+ *   - SSRF 防护（P2-11）
+ *   - CORS 收紧（P2-11）
+ *   - 路径注入防护（P2-11）
  *
  * REST API：
- *   POST   /api/download          → 创建下载任务（状态：created）
- *   GET    /api/tasks              → 列出所有任务（按创建时间倒序）
- *   GET    /api/task/:id           → 查询单个任务
- *   POST   /api/task/:id/retry     → 手动续跑（仅 failed 状态）
- *   POST   /api/tasks/retry-batch  → 批量续跑
- *   DELETE /api/task/:id           → 删除单个任务
- *   POST   /api/tasks/delete-batch → 批量删除任务
- *
- * WebSocket 实时推送：
- *   subscribe/unsubscribe → task-status（单任务状态）
- *   task-list-update      → 列表变更通知
+ *   POST   /api/download              → 创建下载任务
+ *   GET    /api/tasks                  → 列出所有任务
+ *   GET    /api/task/:id               → 查询单个任务
+ *   POST   /api/task/:id/retry         → 手动续跑（仅 failed）
+ *   POST   /api/tasks/retry-batch      → 批量续跑
+ *   DELETE /api/task/:id               → 删除单个任务
+ *   POST   /api/tasks/delete-batch     → 批量删除
+ *   POST   /api/download/advanced      → 高级下载（含自定义选项）
+ *   POST   /api/proxy/add              → 添加代理
+ *   GET    /api/stats                  → 系统统计（P2-9）
  */
 
 import express from 'express';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import taskManager, { TaskStatus } from './task-manager.js';
-import { captureM3u8 } from './m3u8-interceptor.js';
-import { startDownload, cancelDownload } from './downloader.js';
+import { captureM3u8, captureMpd, captureDirectUrl, isM3u8Url, isMpdUrl, parseTokenExpiry } from './m3u8-interceptor.js';
+import { startDownload, cancelDownload, validateDiskSpace, getBandwidthUsage, setBandwidthLimit, addProxy } from './downloader.js';
+import { createLogger, taskLogger } from './logger.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = process.env.PORT || 3456;
+const MAX_GLOBAL_BANDWIDTH = process.env.MAX_BANDWIDTH ? parseInt(process.env.MAX_BANDWIDTH, 10) : 0; // 0 = 无限制
 
+// ─── 结构化日志 ────────────────────────────────────
+const log = createLogger({ module: 'index' });
+
+// ─── Express 配置 ──────────────────────────────────
 const app = express();
-app.use(cors());
-app.use(express.json());
+
+// ⭐ P2-11: CORS 收紧（允许前端域名）
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',')
+  : ['*']; // 默认全开放，可通过环境变量限制
+
+app.use(cors({
+  origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
+  methods: ['GET', 'POST', 'DELETE'],
+}));
+app.use(express.json({ limit: '1mb' }));
+
+// ⭐ P2-11: 全局 API 速率限制
+const globalLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 分钟
+  max: 100,
+  message: { error: '请求过于频繁，请稍后再试' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use(globalLimiter);
+
+// ⭐ P2-11: 下载 API 速率限制（更严格）
+const downloadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  message: { error: '下载请求过于频繁，每分钟最多 10 次' },
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
 // ─── 静态文件服务 ──────────────────────────────────
 app.use(express.static(path.join(__dirname, '../public')));
 app.use('/downloads', express.static(path.join(__dirname, '../downloads')));
 
+// ─── HTTP Server & Socket.IO ────────────────────────
 const httpServer = createServer(app);
 const io = new SocketIOServer(httpServer, {
-  cors: { origin: '*', methods: ['GET', 'POST'] },
+  cors: { origin: allowedOrigins.includes('*') ? '*' : allowedOrigins, methods: ['GET', 'POST'] },
 });
 
-// ─── WebSocket 连接 ─────────────────────────────────
+// WebSocket 连接
 io.on('connection', (socket) => {
-  console.log(`[WS] client connected: ${socket.id}`);
+  log.info({ socketId: socket.id }, 'WS 客户端连接');
 
   socket.on('subscribe', (taskId) => {
     socket.join(`task:${taskId}`);
@@ -57,7 +109,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('disconnect', () => {
-    console.log(`[WS] client disconnected: ${socket.id}`);
+    log.info({ socketId: socket.id }, 'WS 客户端断开');
   });
 });
 
@@ -90,34 +142,73 @@ taskManager.on('task-removed', (taskId) => {
 // 重试就绪事件 → 自动执行
 taskManager.on('task-retry-ready', (taskId) => {
   processTask(taskId).catch((err) => {
-    console.error(`[Retry ${taskId}] 执行异常:`, err.message);
+    log.error({ taskId }, `重试执行异常: ${err.message}`);
   });
 });
 
-// ─── REST API ───────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// REST API
+// ═══════════════════════════════════════════════════════
 
 /**
- * POST /api/download
- * Body: { url: string }
- * 创建下载任务，状态为 created，异步开始执行
+ * POST /api/download — 创建下载任务
+ * Body: { url: string, cookies?: object[], injectScript?: string, maxSpeed?: number, proxy?: string }
  */
-app.post('/api/download', async (req, res) => {
-  const { url } = req.body;
+app.post('/api/download', downloadLimiter, async (req, res) => {
+  const { url, cookies, injectScript, maxSpeed, proxy } = req.body;
   if (!url) {
     return res.status(400).json({ error: '缺少 url 参数' });
   }
 
-  const taskId = taskManager.create(url);
+  // ⭐ P2-11: SSRF 防护 — 禁止内网地址
+  const ssrfError = checkSsrf(url);
+  if (ssrfError) {
+    return res.status(400).json({ error: ssrfError });
+  }
+
+  const taskId = taskManager.create(url, { cookies, injectScript, maxSpeed, proxy });
+  log.info({ taskId, url: url.slice(0, 100) }, '创建下载任务');
+
   // 异步启动任务
   processTask(taskId).catch((err) => {
-    console.error(`[Task ${taskId}] 执行异常:`, err.message);
+    log.error({ taskId }, `执行异常: ${err.message}`);
   });
 
   res.json({ taskId, status: TaskStatus.CREATED });
 });
 
 /**
- * GET /api/tasks — 列出所有任务（按创建时间倒序）
+ * POST /api/download/advanced — 高级下载
+ * Body: { url, engine?: 'auto'|'n_m3u8dl_re'|'ffmpeg'|'js', ... }
+ */
+app.post('/api/download/advanced', downloadLimiter, async (req, res) => {
+  const { url, engine, cookies, injectScript, maxSpeed, proxy, format, bandwidth } = req.body;
+  if (!url) {
+    return res.status(400).json({ error: '缺少 url 参数' });
+  }
+
+  const ssrfError = checkSsrf(url);
+  if (ssrfError) {
+    return res.status(400).json({ error: ssrfError });
+  }
+
+  const taskId = taskManager.create(url, {
+    cookies, injectScript, maxSpeed, proxy,
+    engine: engine || 'auto',
+    format: format || 'auto',
+    targetBandwidth: bandwidth || null,
+  });
+
+  log.info({ taskId, url: url.slice(0, 100), engine, format }, '创建高级下载任务');
+  processTask(taskId).catch((err) => {
+    log.error({ taskId }, `高级下载异常: ${err.message}`);
+  });
+
+  res.json({ taskId, status: TaskStatus.CREATED });
+});
+
+/**
+ * GET /api/tasks — 列出所有任务
  */
 app.get('/api/tasks', (_req, res) => {
   res.json(taskManager.listAll());
@@ -133,24 +224,19 @@ app.get('/api/task/:id', (req, res) => {
 });
 
 /**
- * DELETE /api/task/:id — 删除任务（彻底移除记录）
+ * DELETE /api/task/:id — 删除任务
  */
 app.delete('/api/task/:id', (req, res) => {
   const task = taskManager.get(req.params.id);
   if (!task) return res.status(404).json({ error: '任务不存在' });
-
-  // 如果正在运行，先杀掉进程
   cancelDownload(req.params.id);
-
   const ok = taskManager.remove(req.params.id);
   if (!ok) return res.status(500).json({ error: '删除失败' });
-
   res.json({ ok: true });
 });
 
 /**
- * POST /api/task/:id/retry — 手动续跑单个失败任务
- * 仅对状态为 failed 的任务生效
+ * POST /api/task/:id/retry — 手动续跑
  */
 app.post('/api/task/:id/retry', async (req, res) => {
   const task = taskManager.get(req.params.id);
@@ -158,107 +244,206 @@ app.post('/api/task/:id/retry', async (req, res) => {
   if (task.status !== TaskStatus.FAILED) {
     return res.status(400).json({ error: '仅失败状态的任务可以续跑' });
   }
-
   const ok = taskManager.retry(req.params.id);
   if (!ok) return res.status(500).json({ error: '续跑失败' });
-
-  // 异步重新执行
   processTask(req.params.id).catch((err) => {
-    console.error(`[Retry ${req.params.id}] 执行异常:`, err.message);
+    log.error({ taskId: req.params.id }, `续跑异常: ${err.message}`);
   });
-
   res.json({ ok: true, taskId: req.params.id, status: TaskStatus.CREATED });
 });
 
 /**
- * POST /api/tasks/retry-batch — 批量续跑失败任务
- * Body: { taskIds: string[] }
+ * POST /api/tasks/retry-batch — 批量续跑
  */
 app.post('/api/tasks/retry-batch', async (req, res) => {
   const { taskIds } = req.body;
   if (!Array.isArray(taskIds) || taskIds.length === 0) {
     return res.status(400).json({ error: '缺少 taskIds 参数或为空' });
   }
-
   const result = taskManager.retryBatch(taskIds);
-
-  // 异步执行所有续跑成功的任务
   for (const id of taskIds) {
     const task = taskManager.get(id);
     if (task && task.status === TaskStatus.CREATED) {
       processTask(id).catch((err) => {
-        console.error(`[BatchRetry ${id}] 执行异常:`, err.message);
+        log.error({ taskId: id }, `批量续跑异常: ${err.message}`);
       });
     }
   }
-
   res.json({ ok: true, ...result });
 });
 
 /**
- * POST /api/tasks/delete-batch — 批量删除任务
- * Body: { taskIds: string[] }
+ * POST /api/tasks/delete-batch — 批量删除
  */
 app.post('/api/tasks/delete-batch', (req, res) => {
   const { taskIds } = req.body;
   if (!Array.isArray(taskIds) || taskIds.length === 0) {
     return res.status(400).json({ error: '缺少 taskIds 参数或为空' });
   }
-
-  // 先杀掉所有正在运行的任务进程
-  for (const id of taskIds) {
-    cancelDownload(id);
-  }
-
+  for (const id of taskIds) cancelDownload(id);
   const result = taskManager.removeBatch(taskIds);
   res.json({ ok: true, ...result });
 });
 
-// ─── 核心流程：拦截 m3u8 → 下载 ────────────────────
+/**
+ * POST /api/proxy/add — 添加代理
+ */
+app.post('/api/proxy/add', (req, res) => {
+  const { proxy } = req.body;
+  if (!proxy) return res.status(400).json({ error: '缺少 proxy 参数' });
+  addProxy(proxy);
+  log.info({ proxy }, '添加新代理');
+  res.json({ ok: true, message: `代理已添加: ${proxy}` });
+});
 
 /**
- * 完整任务处理流水线
- * 1. 标记为 running
- * 2. 拦截 m3u8
- * 3. 下载视频
- * 4. 完成 / 失败（失败时 taskManager.markFailed 自动处理重试）
- * 5. 无论成功失败，尝试出队下一个任务
+ * GET /api/stats — 系统统计信息（P2-9 监控增强）
+ */
+app.get('/api/stats', (_req, res) => {
+  const tasks = taskManager.listAll();
+  const total = tasks.length;
+  const completed = tasks.filter(t => t.status === 'completed').length;
+  const failed = tasks.filter(t => t.status === 'failed').length;
+  const running = tasks.filter(t => t.status === 'running').length;
+  const pending = tasks.filter(t => t.status === 'created').length;
+
+  // 下载速率统计
+  const bwUsage = getBandwidthUsage();
+
+  res.json({
+    total,
+    completed,
+    failed,
+    running,
+    pending,
+    successRate: total > 0 ? `${((completed / total) * 100).toFixed(1)}%` : '0%',
+    bandwidth: bwUsage,
+    uptime: process.uptime(),
+    memoryUsage: process.memoryUsage(),
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// 核心流程：拦截 → 下载（增强版）
+// ═══════════════════════════════════════════════════════
+
+/**
+ * 完整任务处理流水线（增强版）
+ *
+ * 增强点：
+ *   - 使用 BrowserPool 复用浏览器（P0-1）
+ *   - Stealth 反检测（P0-2）
+ *   - Token 时效性检测（P0-3）
+ *   - 多格式支持（DASH/直链）（P1-6）
+ *   - 智能码率选择（P2-8）
+ *   - 磁盘空间预检（P2-9）
  */
 async function processTask(taskId) {
   const task = taskManager.get(taskId);
   if (!task) return;
 
+  const tLog = taskLogger(taskId, 'processTask');
+
   try {
+    // ── 磁盘空间预检 ────────────────────────────
+    const diskOk = validateDiskSpace();
+    if (!diskOk) {
+      throw new Error('磁盘空间不足（< 500MB），拒绝下载');
+    }
+
     // ── 标记为运行中 ────────────────────────────
     taskManager.markRunning(taskId);
 
-    // ── 回合 1: 拦截 m3u8 ──────────────────────
+    // ── 回合 1: 拦截流媒体 URL ──────────────────
     taskManager.update(taskId, {
       phase: 'preparing',
-      message: '正在拦截 m3u8 地址...',
+      message: '正在解析页面，获取视频流地址...',
     });
 
-    const captureResult = await captureM3u8(task.url, {
-      onProgress: ({ stage, message }) => {
-        const stageMap = { launching: 10, navigating: 40, waiting: 70, captured: 100 };
-        taskManager.update(taskId, {
-          progress: stageMap[stage] || 20,
-          message,
-          phase: 'preparing',
+    const url = task.url;
+    let captureResult = null;
+
+    // 根据 URL 类型选择拦截策略
+    if (isM3u8Url(url)) {
+      // 如果本身就是 m3u8 URL，直接捕获
+      captureResult = { m3u8Url: url, headers: {}, pageTitle: '' };
+      tLog.info('直接 m3u8 URL，跳过浏览器拦截');
+    } else if (isMpdUrl(url)) {
+      // DASH MPD URL
+      captureResult = await captureMpd(url, {
+        onProgress: (p) => {
+          taskManager.update(taskId, { progress: p.progress || 20, message: p.message, phase: 'preparing' });
+        },
+      });
+      if (captureResult) {
+        captureResult.format = 'mpd';
+      }
+    } else {
+      // 普通播放页 URL → 浏览器拦截
+      const extraOpts = {};
+      if (task.cookies) extraOpts.cookies = task.cookies;
+      if (task.injectScript) extraOpts.injectScript = task.injectScript;
+      if (task.proxy) extraOpts.proxy = task.proxy;
+
+      captureResult = await captureM3u8(url, {
+        onProgress: ({ stage, message }) => {
+          const stageMap = { launching: 10, navigating: 40, waiting: 70, captured: 100 };
+          taskManager.update(taskId, {
+            progress: stageMap[stage] || 20,
+            message,
+            phase: 'preparing',
+          });
+        },
+        ...extraOpts,
+      });
+
+      // 如果没抓到 m3u8，尝试 MPD
+      if (!captureResult || !captureResult.m3u8Url) {
+        tLog.info('未捕获到 m3u8，尝试 DASH/MPD...');
+        captureResult = await captureMpd(url, {
+          onProgress: (p) => {
+            taskManager.update(taskId, { progress: p.progress || 50, message: p.message, phase: 'preparing' });
+          },
         });
-      },
-    });
+        if (captureResult) captureResult.format = 'mpd';
+      }
+
+      // 如果还没抓到，尝试直链
+      if (!captureResult || !captureResult.m3u8Url) {
+        tLog.info('未捕获到 m3u8/MPD，尝试直链...');
+        captureResult = await captureDirectUrl(url, {
+          onProgress: (p) => {
+            taskManager.update(taskId, { progress: p.progress || 60, message: p.message, phase: 'preparing' });
+          },
+        });
+        if (captureResult) captureResult.format = 'direct';
+      }
+    }
 
     if (!captureResult || !captureResult.m3u8Url) {
-      throw new Error('未能拦截到 m3u8 地址，可能页面无视频或需要额外触发');
+      throw new Error('未能获取到视频流地址，可能页面无视频或需要登录');
+    }
+
+    const streamUrl = captureResult.m3u8Url;
+    const streamFormat = captureResult.format || 'm3u8';
+
+    // ── Token 时效性检测 ────────────────────────
+    const tokenInfo = parseTokenExpiry(streamUrl);
+    if (tokenInfo.timeToLive !== null && tokenInfo.timeToLive < 60000) {
+      tLog.warn({ timeToLive: tokenInfo.timeToLive }, 'Token 即将过期');
+      taskManager.update(taskId, {
+        message: `⚠ Token 将在 ${Math.round(tokenInfo.timeToLive / 1000)}s 后过期，需快速下载`,
+      });
     }
 
     taskManager.update(taskId, {
-      m3u8Url: captureResult.m3u8Url,
-      message: `捕获到: ${captureResult.m3u8Url.slice(0, 80)}...`,
+      m3u8Url: streamUrl,
+      message: `捕获到 ${streamFormat.toUpperCase()}: ${streamUrl.slice(0, 80)}...`,
       progress: 100,
       phase: 'preparing_done',
     });
+
+    tLog.info({ streamUrl: streamUrl.slice(0, 80), format: streamFormat }, '视频流捕获成功');
 
     // ── 回合 2: 下载 ───────────────────────────
     taskManager.update(taskId, {
@@ -267,9 +452,23 @@ async function processTask(taskId) {
       phase: 'downloading',
     });
 
+    // 构建下载选项 — 修复：字段名必须与 downloader.js startDownload 的 options 签名对齐
+    const downloadOpts = {
+      headers: captureResult.headers || {},
+      engine: task.engine || 'auto',
+      format: task.format || streamFormat,
+      maxSpeed: task.maxSpeed || 0,
+      useProxy: !!task.proxy,
+      proxy: task.proxy || null,
+      targetBandwidth: task.targetBandwidth || null,
+      parallel: task.parallel || false,
+      parallelCount: task.parallelCount || 4,
+      preferredCodec: task.preferredCodec || null,
+    };
+
     const outputFile = await startDownload(
-      captureResult.m3u8Url,
-      captureResult.headers || {},
+      streamUrl,
+      downloadOpts,
       taskId,
       ({ percent, speed, message }) => {
         taskManager.update(taskId, { progress: percent, speed, message, phase: 'downloading' });
@@ -277,16 +476,16 @@ async function processTask(taskId) {
     );
 
     taskManager.markCompleted(taskId, outputFile);
+    tLog.info({ outputFile }, '下载完成');
   } catch (err) {
-    // markFailed 内部自动处理重试逻辑（指数退避）
+    tLog.error({ err: err.message }, '任务执行失败');
     const autoRetried = taskManager.markFailed(taskId, err.message);
     if (autoRetried) {
-      console.log(`[Task ${taskId}] 已自动加入重试队列`);
+      tLog.info('已自动加入重试队列');
     } else {
-      console.error(`[Task ${taskId}] 执行失败（已耗尽重试次数）:`, err.message);
+      tLog.error('已耗尽重试次数');
     }
   } finally {
-    // 任务结束后，尝试启动下一个任务
     tryDequeueNext();
   }
 }
@@ -297,17 +496,63 @@ async function processTask(taskId) {
 function tryDequeueNext() {
   const next = taskManager.dequeue();
   if (next) {
-    console.log(`[Queue] 启动下一个任务: ${next.id}`);
+    log.info({ taskId: next.id }, '启动下一个任务');
     processTask(next.id).catch((err) => {
-      console.error(`[Task ${next.id}] 执行异常:`, err.message);
+      log.error({ taskId: next.id }, `执行异常: ${err.message}`);
     });
   }
 }
 
-// ─── 启动 ───────────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// 安全工具函数
+// ═══════════════════════════════════════════════════════
+
+/**
+ * SSRF 防护：检测 URL 是否指向内网地址
+ * @param {string} url
+ * @returns {string|null} 错误信息，null 表示安全
+ */
+function checkSsrf(url) {
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname;
+
+    // ⭐ P2-11: 禁止内网地址
+    const privatePatterns = [
+      /^127\./,
+      /^10\./,
+      /^192\.168\./,
+      /^172\.(1[6-9]|2\d|3[01])\./,
+      /^0\.0\.0\.0$/,
+      /^localhost$/i,
+      /^::1$/,
+    ];
+
+    for (const pattern of privatePatterns) {
+      if (pattern.test(hostname)) {
+        return `禁止下载内网地址: ${hostname}`;
+      }
+    }
+
+    return null;
+  } catch {
+    return '无效的 URL';
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// 启动
+// ═══════════════════════════════════════════════════════
+
 httpServer.listen(PORT, () => {
-  console.log(`🚀 视频下载服务已启动: http://0.0.0.0:${PORT}`);
-  console.log(`📡 WebSocket: ws://0.0.0.0:${PORT}`);
-  console.log(`📋 API: POST http://0.0.0.0:${PORT}/api/download`);
-  console.log(`📦 持久化: data/tasks.json`);
+  log.info({ port: PORT }, '🚀 视频下载服务已启动');
+  log.info(`  API: http://0.0.0.0:${PORT}/api/download`);
+  log.info(`  WS:  ws://0.0.0.0:${PORT}`);
+  log.info(`  📊 统计: http://0.0.0.0:${PORT}/api/stats`);
+
+  // 设置全局带宽限制
+  if (MAX_GLOBAL_BANDWIDTH > 0) {
+    setBandwidthLimit(MAX_GLOBAL_BANDWIDTH);
+    log.info({ maxBandwidth: MAX_GLOBAL_BANDWIDTH }, '全局带宽限制已启用');
+  }
 });
