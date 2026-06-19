@@ -129,10 +129,14 @@ taskManager.on('task-retry', (task) => {
 
 taskManager.on('task-completed', (task) => {
   io.emit('task-list-update', taskManager.listAll());
+  // ⭐ Socket.IO 房间清理：通知客户端退订已完成任务
+  io.to(`task:${task.id}`).emit('task-finalized', { taskId: task.id });
 });
 
 taskManager.on('task-failed', (task) => {
   io.emit('task-list-update', taskManager.listAll());
+  // ⭐ Socket.IO 房间清理：通知客户端退订失败任务
+  io.to(`task:${task.id}`).emit('task-finalized', { taskId: task.id });
 });
 
 taskManager.on('task-removed', (taskId) => {
@@ -149,6 +153,17 @@ taskManager.on('task-retry-ready', (taskId) => {
 // ═══════════════════════════════════════════════════════
 // REST API
 // ═══════════════════════════════════════════════════════
+
+/**
+ * GET /api/health — 健康检查（供负载均衡/监控使用）
+ */
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+  });
+});
 
 /**
  * POST /api/download — 创建下载任务
@@ -452,9 +467,8 @@ async function processTask(taskId) {
       phase: 'downloading',
     });
 
-    // 构建下载选项 — 修复：字段名必须与 downloader.js startDownload 的 options 签名对齐
+    // 构建下载选项（headers 通过 startDownload 第2参数单独传入，不放在 options 里）
     const downloadOpts = {
-      headers: captureResult.headers || {},
       engine: task.engine || 'auto',
       format: task.format || streamFormat,
       maxSpeed: task.maxSpeed || 0,
@@ -466,13 +480,15 @@ async function processTask(taskId) {
       preferredCodec: task.preferredCodec || null,
     };
 
+    // ⭐ 修复：参数顺序必须匹配 startDownload(m3u8Url, headers, taskId, onProgress, options)
     const outputFile = await startDownload(
       streamUrl,
-      downloadOpts,
-      taskId,
+      captureResult.headers || {},     // 第2参数：headers（包含 Referer/Origin/Cookie 等防盗链头）
+      taskId,                           // 第3参数：taskId
       ({ percent, speed, message }) => {
         taskManager.update(taskId, { progress: percent, speed, message, phase: 'downloading' });
-      }
+      },
+      downloadOpts                      // 第5参数：options（engine/maxSpeed/parallel/format 等）
     );
 
     taskManager.markCompleted(taskId, outputFile);
@@ -544,11 +560,16 @@ function checkSsrf(url) {
 // 启动
 // ═══════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════
+// 启动 & 优雅关闭
+// ═══════════════════════════════════════════════════════
+
 httpServer.listen(PORT, () => {
   log.info({ port: PORT }, '🚀 视频下载服务已启动');
   log.info(`  API: http://0.0.0.0:${PORT}/api/download`);
   log.info(`  WS:  ws://0.0.0.0:${PORT}`);
   log.info(`  📊 统计: http://0.0.0.0:${PORT}/api/stats`);
+  log.info(`  ❤️ 健康检查: http://0.0.0.0:${PORT}/api/health`);
 
   // 设置全局带宽限制
   if (MAX_GLOBAL_BANDWIDTH > 0) {
@@ -556,3 +577,34 @@ httpServer.listen(PORT, () => {
     log.info({ maxBandwidth: MAX_GLOBAL_BANDWIDTH }, '全局带宽限制已启用');
   }
 });
+
+// ⭐ 优雅关闭：释放 BrowserPool，清理子进程，防止僵尸 Chromium
+let isShuttingDown = false;
+async function gracefulShutdown(signal) {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+  log.warn({ signal }, `收到 ${signal} 信号，开始优雅关闭...`);
+
+  // 1. 停止接收新 HTTP 请求
+  httpServer.close(() => log.info('HTTP 服务器已关闭'));
+
+  // 2. 取消所有活跃下载
+  for (const task of taskManager.listAll()) {
+    if (task.status === 'running' || task.status === 'created') {
+      cancelDownload(task.id);
+    }
+  }
+
+  // 3. 销毁浏览器池（强制关闭所有 Chromium 进程）
+  try {
+    const { default: browserPool } = await import('./browser-pool.js');
+    await browserPool.destroy();
+    log.info('BrowserPool 已销毁');
+  } catch (err) {
+    log.error({ err: err.message }, 'BrowserPool 销毁异常');
+  }
+
+  process.exit(0);
+}
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));

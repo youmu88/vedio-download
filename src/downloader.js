@@ -29,6 +29,7 @@ const log = logger.child({ module: 'downloader' });
 
 const DOWNLOADS_DIR = path.resolve(process.cwd(), 'downloads');
 const PROXY_LIST_PATH = path.resolve(process.cwd(), 'config', 'proxies.txt');
+const DOWNLOAD_TIMEOUT_MS = 1800_000; // ⭐ 全局下载超时：30分钟
 
 // 确保目录存在
 if (!fs.existsSync(DOWNLOADS_DIR)) {
@@ -281,7 +282,18 @@ export function startDownload(m3u8Url, headers, taskId, onProgress, options = {}
         downloadPromise = downloadWithEngine(m3u8Url, extraArgs);
     }
 
-    downloadPromise
+    // ⭐ 全局下载超时保护（30分钟），防止任务永久卡死占用槽位
+    const timeoutPromise = new Promise((_, timeoutReject) => {
+      const timeoutMs = DOWNLOAD_TIMEOUT_MS;
+      const timeoutId = setTimeout(() => {
+        cancelDownload(taskId);
+        timeoutReject(new Error(`下载超时（${Math.round(timeoutMs / 60000)}分钟），已自动取消`));
+      }, timeoutMs);
+      // 存储 timeoutId 便于清理
+      downloadPromise.finally(() => clearTimeout(timeoutId));
+    });
+
+    Promise.race([downloadPromise, timeoutPromise])
       .then((result) => {
         bandwidthLimiter.unregister(taskId);
 
@@ -396,12 +408,16 @@ async function downloadWithEngine(m3u8Url, extra) {
       headers,
       onProgress,
       maxConcurrency: parallelCount,
+      maxSpeed,                               // ⭐ 补充：JS 分片下载也支持限速
       proxy,
     });
   } else {
     const outputDir = path.dirname(outputPath);
     const baseName = path.basename(outputPath);
-    return await downloadWithJs(m3u8Url, headers, outputDir, baseName, onProgress, { proxy });
+    return await downloadWithJs(m3u8Url, headers, outputDir, baseName, onProgress, {
+      maxSpeed,                               // ⭐ 补充：JS 单线程下载也支持限速
+      proxy,
+    });
   }
 }
 
@@ -409,7 +425,7 @@ async function downloadWithEngine(m3u8Url, extra) {
  * 下载直链 mp4/mkv
  */
 async function downloadDirectLink(url, extra) {
-  const { outputPath, onProgress, proxy } = extra;
+  const { outputPath, onProgress, proxy, taskId } = extra;  // ⭐ 修复：添加 taskId 用于 cancelDownload
 
   // 使用 ffmpeg 或 curl
   if (which('ffmpeg')) {
@@ -462,17 +478,20 @@ async function downloadDirectLink(url, extra) {
     });
   }
 
-  // 兜底：使用 fetch + 流式写入
+  // 兜底：使用 fetch + 流式写入（⭐ 修复：移除 async Promise executor 反模式 + 注册 taskId 用于取消）
   const { default: fetch } = await import('node-fetch');
   const { createWriteStream } = await import('fs');
 
-  return new Promise(async (resolve, reject) => {
-    try {
-      const response = await fetch(url);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const contentLength = response.headers.get('content-length');
-      const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
-      const fileStream = createWriteStream(`${outputPath}.mp4`);
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const contentLength = response.headers.get('content-length');
+    const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
+    const fileStream = createWriteStream(`${outputPath}.mp4`);
+
+    return new Promise((resolve, reject) => {
+      // ⭐ 注册到活跃进程表，支持 cancelDownload
+      activeProcesses.set(taskId, { kill: () => { fileStream.destroy(); } });
 
       let downloadedBytes = 0;
       response.body.on('data', (chunk) => {
@@ -488,14 +507,18 @@ async function downloadDirectLink(url, extra) {
 
       response.body.pipe(fileStream);
       fileStream.on('finish', () => {
+        activeProcesses.delete(taskId);
         onProgress({ percent: 100, speed: null, message: '下载完成！' });
         resolve(`${outputPath}.mp4`);
       });
-      fileStream.on('error', reject);
-    } catch (err) {
-      reject(new Error(`直链下载失败: ${err.message}`));
-    }
-  });
+      fileStream.on('error', (err) => {
+        activeProcesses.delete(taskId);
+        reject(err);
+      });
+    });
+  } catch (err) {
+    throw new Error(`直链下载失败: ${err.message}`);
+  }
 }
 
 // ─── N_m3u8DL-RE 下载（增强版） ──────────────────
@@ -831,10 +854,11 @@ export function addProxy(proxyUrl) {
  * @returns {{ currentUsage: number, limit: number, activeTasks: number }}
  */
 export function getBandwidthUsage() {
+  // ⭐ 修复：对齐 BandwidthLimiter 实际属性名
   return {
-    currentUsage: bandwidthLimiter.currentUsage || 0,
-    limit: bandwidthLimiter.maxBandwidth,
-    activeTasks: bandwidthLimiter.activeTasks?.size || 0,
+    currentUsage: 0,                          // 当前未实现实时字节统计
+    limit: bandwidthLimiter.maxBytesPerSecond || 0,
+    activeTasks: bandwidthLimiter.activeDownloads?.size || 0,
   };
 }
 
@@ -854,7 +878,7 @@ export function setBandwidthLimit(bytesPerSecond) {
  */
 export function validateDiskSpace(requiredBytes = 1024 * 1024 * 1024) {
   try {
-    const { execSync } = require('child_process');
+    // ⭐ 修复：require() 在 ESM 模块中不可用，改用顶层已导入的 execSync
     let freeBytes = 0;
 
     // 尝试用 df 获取可用空间

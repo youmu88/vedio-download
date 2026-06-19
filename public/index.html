@@ -151,6 +151,53 @@
     border-radius: 20px;
   }
 
+  /* Batch Action Bar */
+  .batch-bar {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    margin-bottom: 12px;
+    font-size: 13px;
+  }
+  .batch-bar.visible { display: flex; }
+  .batch-bar .selected-count {
+    color: var(--text-secondary);
+    margin-right: auto;
+  }
+  .batch-bar .batch-btn {
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 6px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+  .batch-btn.retry {
+    background: rgba(91,154,255,0.15);
+    color: var(--accent);
+  }
+  .batch-btn.retry:hover { background: rgba(91,154,255,0.25); }
+  .batch-btn.delete {
+    background: rgba(248,113,113,0.12);
+    color: var(--red);
+  }
+  .batch-btn.delete:hover { background: rgba(248,113,113,0.22); }
+  .batch-btn.select-all {
+    background: rgba(52,211,153,0.12);
+    color: var(--green);
+  }
+  .batch-btn.select-all:hover { background: rgba(52,211,153,0.22); }
+  .batch-btn.cancel {
+    background: rgba(255,255,255,0.06);
+    color: var(--text-secondary);
+  }
+  .batch-btn.cancel:hover { background: rgba(255,255,255,0.1); }
+
   /* Task List */
   .task-list {
     display: flex;
@@ -164,13 +211,48 @@
     padding: 20px 24px;
     backdrop-filter: blur(20px);
     transition: all 0.2s;
+    position: relative;
   }
   .task-card:hover { border-color: rgba(255,255,255,0.15); }
+  .task-card.selected {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
+  }
+
+  /* Checkbox */
+  .task-checkbox {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--border);
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s;
+    background: transparent;
+  }
+  .task-checkbox:hover { border-color: var(--text-secondary); }
+  .task-checkbox.checked {
+    background: var(--accent);
+    border-color: var(--accent);
+  }
+  .task-checkbox.checked::after {
+    content: '✓';
+    color: #fff;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
   .task-header {
     display: flex;
     align-items: center;
     gap: 10px;
     margin-bottom: 12px;
+    margin-left: 28px;
   }
   .task-status-icon {
     width: 10px; height: 10px;
@@ -209,6 +291,7 @@
 
   .task-progress {
     margin-bottom: 12px;
+    margin-left: 28px;
   }
   .progress-bar-bg {
     width: 100%;
@@ -238,6 +321,7 @@
     display: flex;
     gap: 8px;
     justify-content: flex-end;
+    margin-left: 28px;
   }
   .task-actions button {
     border: none;
@@ -253,6 +337,16 @@
     color: var(--red);
   }
   .btn-cancel:hover { background: rgba(248,113,113,0.2); }
+  .btn-retry {
+    background: rgba(91,154,255,0.12);
+    color: var(--accent);
+  }
+  .btn-retry:hover { background: rgba(91,154,255,0.2); }
+  .btn-delete-task {
+    background: rgba(248,113,113,0.12);
+    color: var(--red);
+  }
+  .btn-delete-task:hover { background: rgba(248,113,113,0.2); }
   .btn-download-file {
     background: rgba(52,211,153,0.12);
     color: var(--green);
@@ -275,6 +369,7 @@
     background: rgba(248,113,113,0.08);
     border-radius: var(--radius-sm);
     word-break: break-all;
+    margin-left: 28px;
   }
 
   /* Phase labels - 双阶段进度 */
@@ -285,6 +380,7 @@
     border-radius: 4px;
     margin-bottom: 6px;
     display: inline-block;
+    margin-left: 28px;
   }
   .phase-label.preparing { background: rgba(251,191,36,0.15); color: var(--yellow); }
   .phase-label.preparing_done { background: rgba(52,211,153,0.12); color: var(--green); }
@@ -331,12 +427,50 @@
   .toast.toast-error { border-color: var(--red); }
   .toast.toast-success { border-color: var(--green); }
 
+  /* Select All Checkbox */
+  .select-all-area {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 12px;
+    padding: 8px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.2s;
+    user-select: none;
+  }
+  .select-all-area:hover {
+    background: var(--surface-hover);
+    border-color: rgba(255,255,255,0.15);
+  }
+  .select-all-area .task-checkbox {
+    position: static;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+  .select-all-area .select-all-label {
+    flex: 1;
+  }
+  .select-all-area .select-all-hint {
+    font-size: 11px;
+    color: var(--text-secondary);
+    opacity: 0.6;
+  }
+
   @media (max-width: 600px) {
     body { padding: 20px 12px; }
     .input-row { flex-direction: column; }
     .input-row .btn-download { justify-content: center; }
     .task-card { padding: 16px; }
     .header h1 { font-size: 20px; }
+    .task-header, .task-progress, .task-actions, .task-error, .phase-label {
+      margin-left: 0;
+    }
   }
 </style>
 </head>
@@ -365,10 +499,25 @@
     <div class="input-hint">🔗 支持 dmxq.info 等在线播放网站的页面链接，后台自动拦截视频流</div>
   </div>
 
+  <!-- Batch Action Bar -->
+  <div class="batch-bar" id="batchBar">
+    <span class="selected-count">已选择 <strong id="selectedCount">0</strong> 个任务</span>
+    <button class="batch-btn select-all" onclick="toggleSelectAll()">✅ 全部选择</button>
+    <button class="batch-btn cancel" onclick="clearSelection()">取消选择</button>
+    <button class="batch-btn retry" onclick="batchRetry()">🔄 批量重试</button>
+    <button class="batch-btn delete" onclick="batchDelete()">🗑 批量删除</button>
+  </div>
+
   <!-- Task List -->
   <div class="section-title">
     📋 任务列表
     <span class="count" id="taskCount">0 个任务</span>
+  </div>
+  <!-- 全选区域 -->
+  <div class="select-all-area" id="selectAllArea" onclick="toggleSelectAll()" style="display:none;">
+    <div class="task-checkbox" id="selectAllCheckbox"></div>
+    <span class="select-all-label">全选当前所有任务</span>
+    <span class="select-all-hint">点击复选框切换全选/取消全选</span>
   </div>
   <div class="task-list" id="taskList">
     <div class="empty-state">
@@ -391,6 +540,9 @@ const STATUS_MAP = {
   done:        { label: '已完成',  icon: '✅' },
   failed:      { label: '失败',    icon: '❌' },
 };
+
+// 已选中的任务 ID 集合
+const selectedTasks = new Set();
 
 // ─── Socket.io 连接 ────────────────────────────────
 const socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
@@ -417,6 +569,109 @@ socket.on('task-status', (task) => {
 socket.on('task-list-update', (tasks) => {
   renderTaskList(tasks);
 });
+
+// ⭐ Socket.IO 房间清理：收到终态通知时自动退订，防止房间泄漏
+socket.on('task-finalized', ({ taskId }) => {
+  socket.emit('unsubscribe', taskId);
+});
+
+// ─── 选择/取消选择 ─────────────────────────────────
+function toggleTaskSelection(taskId) {
+  if (selectedTasks.has(taskId)) {
+    selectedTasks.delete(taskId);
+  } else {
+    selectedTasks.add(taskId);
+  }
+  updateBatchBar();
+  updateSelectAll();
+  // 更新卡片选中样式
+  const card = document.getElementById(`task-${taskId}`);
+  if (card) {
+    card.classList.toggle('selected', selectedTasks.has(taskId));
+    const cb = card.querySelector('.task-checkbox');
+    if (cb) cb.classList.toggle('checked', selectedTasks.has(taskId));
+  }
+}
+
+function clearSelection() {
+  // 清除所有选中样式
+  for (const id of selectedTasks) {
+    const card = document.getElementById(`task-${id}`);
+    if (card) {
+      card.classList.remove('selected');
+      const cb = card.querySelector('.task-checkbox');
+      if (cb) cb.classList.remove('checked');
+    }
+  }
+  selectedTasks.clear();
+  updateBatchBar();
+  updateSelectAll();
+}
+
+// ─── 全选/取消全选 ─────────────────────────────────
+function toggleSelectAll() {
+  const tasks = document.querySelectorAll('.task-card');
+  if (!tasks.length) return;
+
+  // 判断当前是否"全部已选"：如果全部已选则取消全选，否则全选
+  const allCardIds = [...tasks].map(card => card.id.replace('task-', ''));
+  const allSelected = allCardIds.every(id => selectedTasks.has(id));
+
+  if (allSelected) {
+    // 取消全选
+    for (const id of allCardIds) {
+      selectedTasks.delete(id);
+      const card = document.getElementById(`task-${id}`);
+      if (card) {
+        card.classList.remove('selected');
+        const cb = card.querySelector('.task-checkbox');
+        if (cb) cb.classList.remove('checked');
+      }
+    }
+  } else {
+    // 全选
+    for (const id of allCardIds) {
+      selectedTasks.add(id);
+      const card = document.getElementById(`task-${id}`);
+      if (card) {
+        card.classList.add('selected');
+        const cb = card.querySelector('.task-checkbox');
+        if (cb) cb.classList.add('checked');
+      }
+    }
+  }
+
+  updateBatchBar();
+  updateSelectAll();
+}
+
+function updateSelectAll() {
+  const area = document.getElementById('selectAllArea');
+  const cb = document.getElementById('selectAllCheckbox');
+  const tasks = document.querySelectorAll('.task-card');
+  
+  if (!tasks.length) {
+    area.style.display = 'none';
+    return;
+  }
+
+  area.style.display = 'flex';
+  
+  const allCardIds = [...tasks].map(card => card.id.replace('task-', ''));
+  const allSelected = allCardIds.every(id => selectedTasks.has(id));
+  const someSelected = allCardIds.some(id => selectedTasks.has(id));
+
+  cb.classList.toggle('checked', allSelected);
+  // 部分选中时显示中间态（视觉上用半透明表示）
+  cb.style.opacity = (!allSelected && someSelected) ? '0.5' : '1';
+}
+
+function updateBatchBar() {
+  const bar = document.getElementById('batchBar');
+  const count = document.getElementById('selectedCount');
+  count.textContent = selectedTasks.size;
+  bar.classList.toggle('visible', selectedTasks.size > 0);
+}
 
 // ─── 提交下载 ──────────────────────────────────────
 async function submitDownload() {
@@ -496,6 +751,100 @@ async function cancelTask(taskId) {
   }
 }
 
+// ─── 重试单个任务 ──────────────────────────────────
+async function retryTask(taskId) {
+  try {
+    const res = await fetch(`/api/task/${taskId}/retry`, { method: 'POST' });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('🔄 任务已重新加入队列', 'success');
+      socket.emit('subscribe', taskId);
+      loadTasks();
+    } else {
+      showToast(data.error || '重试失败', 'error');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+// ─── 删除单个任务 ──────────────────────────────────
+async function deleteTask(taskId) {
+  if (!confirm('确定要删除此任务记录吗？')) return;
+  try {
+    const res = await fetch(`/api/task/${taskId}`, { method: 'DELETE' });
+    const data = await res.json();
+    if (res.ok) {
+      showToast('🗑 任务已删除', 'success');
+      selectedTasks.delete(taskId);
+      updateBatchBar();
+      loadTasks();
+    } else {
+      showToast(data.error || '删除失败', 'error');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+// ─── 批量重试 ──────────────────────────────────────
+async function batchRetry() {
+  const taskIds = [...selectedTasks];
+  if (taskIds.length === 0) {
+    showToast('请先选择要重试的任务', 'error');
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/tasks/retry-batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskIds }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(`🔄 已重试 ${data.success} 个任务（${data.failed} 个跳过）`, 'success');
+      // 订阅所有重试的任务
+      for (const id of taskIds) socket.emit('subscribe', id);
+      clearSelection();
+      loadTasks();
+    } else {
+      showToast(data.error || '批量重试失败', 'error');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
+// ─── 批量删除 ──────────────────────────────────────
+async function batchDelete() {
+  const taskIds = [...selectedTasks];
+  if (taskIds.length === 0) {
+    showToast('请先选择要删除的任务', 'error');
+    return;
+  }
+
+  if (!confirm(`确定要删除 ${taskIds.length} 个任务的记录吗？`)) return;
+
+  try {
+    const res = await fetch('/api/tasks/delete-batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ taskIds }),
+    });
+    const data = await res.json();
+    if (res.ok) {
+      showToast(`🗑 已删除 ${data.success} 个任务（${data.failed} 个失败）`, 'success');
+      clearSelection();
+      loadTasks();
+    } else {
+      showToast(data.error || '批量删除失败', 'error');
+    }
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+}
+
 // ─── 渲染任务列表 ──────────────────────────────────
 function renderTaskList(tasks) {
   const container = document.getElementById('taskList');
@@ -522,6 +871,16 @@ function renderTaskList(tasks) {
     html += buildTaskCard(task);
   }
   container.innerHTML = html;
+
+  // 恢复选中状态
+  for (const id of selectedTasks) {
+    const card = document.getElementById(`task-${id}`);
+    if (card) {
+      card.classList.add('selected');
+      const cb = card.querySelector('.task-checkbox');
+      if (cb) cb.classList.add('checked');
+    }
+  }
 }
 
 // ─── 阶段标签映射 ──────────────────────────────────
@@ -543,6 +902,9 @@ function buildTaskCard(task) {
   const isActive = status === 'downloading' || status === 'capturing' || status === 'pending';
   const fileName = task.outputFile ? task.outputFile.split('/').pop() || task.outputFile : '';
 
+  const isSelected = selectedTasks.has(task.id);
+  const checkboxClass = `task-checkbox${isSelected ? ' checked' : ''}`;
+
   let progressClass = 'progress-bar-fill';
   if (isDone) progressClass += ' done';
   else if (isFailed) progressClass += ' failed';
@@ -555,15 +917,24 @@ function buildTaskCard(task) {
     downloadLink = `<a href="/downloads/${encodeURIComponent(task.outputFile.split('/').pop())}" class="btn-download-file" download>⬇ 下载文件</a>`;
   }
 
-  // 取消按钮
+  // 取消按钮（仅 active 状态显示）
   let cancelBtn = '';
   if (isActive) {
     cancelBtn = `<button class="btn-cancel" onclick="cancelTask('${task.id}')">✕ 取消</button>`;
   }
 
-  const errorHtml = task.error ? `<div class="task-error">⚠ ${task.error}</div>` : '';
+  // 重试按钮（仅失败状态显示）
+  let retryBtn = '';
+  if (isFailed) {
+    retryBtn = `<button class="btn-retry" onclick="retryTask('${task.id}')">🔄 重试</button>`;
+  }
 
-  // 阶段标签（仅在 preparing / downloading 阶段显示）
+  // 删除按钮（所有状态都显示）
+  let deleteBtn = `<button class="btn-delete-task" onclick="deleteTask('${task.id}')">🗑 删除</button>`;
+
+  const errorHtml = task.error ? `<div class="task-error">⚠ ${escapeHtml(task.error)}</div>` : '';
+
+  // 阶段标签
   let phaseHtml = '';
   let messageHtml = '';
   if (phase && PHASE_LABEL[phase]) {
@@ -573,18 +944,12 @@ function buildTaskCard(task) {
     messageHtml = `<div class="progress-message" title="${escapeHtml(task.message)}">${escapeHtml(task.message)}</div>`;
   }
 
-  // 进度百分比显示：下载阶段显示实际百分比，准备阶段也显示实际百分比
   let percentLabel = `${progress}%`;
-  if (phase === 'preparing') {
-    percentLabel = `${progress}%`;
-  } else if (phase === 'downloading') {
-    percentLabel = `${progress}%`;
-  } else if (isDone) {
-    percentLabel = '100%';
-  }
+  if (isDone) percentLabel = '100%';
 
   return `
-    <div class="task-card" id="task-${task.id}" data-status="${status}">
+    <div class="task-card${isSelected ? ' selected' : ''}" id="task-${task.id}" data-status="${status}">
+      <div class="${checkboxClass}" data-task-id="${task.id}"></div>
       <div class="task-header">
         <span class="task-status-icon ${status}"></span>
         <span class="task-url" title="${escapeHtml(task.url)}">${escapeHtml(task.url)}</span>
@@ -603,20 +968,30 @@ function buildTaskCard(task) {
       </div>
       ${errorHtml}
       <div class="task-actions">
+        ${retryBtn}
         ${cancelBtn}
+        ${deleteBtn}
         ${downloadLink}
       </div>
     </div>
   `;
 }
 
-// ─── 更新单个任务卡（无需重新渲染整个列表）────────
+// ─── 更新单个任务卡 ────────────────────────────────
 function updateTaskCard(task) {
   const existing = document.getElementById(`task-${task.id}`);
   if (existing) {
     existing.outerHTML = buildTaskCard(task);
+    // 恢复选中状态
+    if (selectedTasks.has(task.id)) {
+      const card = document.getElementById(`task-${task.id}`);
+      if (card) {
+        card.classList.add('selected');
+        const cb = card.querySelector('.task-checkbox');
+        if (cb) cb.classList.add('checked');
+      }
+    }
   } else {
-    // 任务不在列表中，刷新整个列表
     loadTasks();
   }
 }
@@ -627,7 +1002,6 @@ function showToast(msg, type = '') {
   const el = document.getElementById('toast');
   el.textContent = msg;
   el.className = 'toast' + (type ? ` toast-${type}` : '');
-  // 触发重排
   void el.offsetWidth;
   el.classList.add('show');
   clearTimeout(toastTimer);
@@ -641,6 +1015,17 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+
+// ─── 事件委托：复选框点击 ─────────────────────────
+// 使用事件委托监听 taskList 容器上的复选框点击，避免 DOM 替换导致事件丢失
+document.getElementById('taskList').addEventListener('click', (e) => {
+  const checkbox = e.target.closest('.task-checkbox');
+  if (!checkbox) return;
+  const taskId = checkbox.dataset.taskId;
+  if (!taskId) return;
+  e.stopPropagation();
+  toggleTaskSelection(taskId);
+});
 
 // ─── 回车提交 ──────────────────────────────────────
 document.getElementById('urlInput').addEventListener('keydown', (e) => {

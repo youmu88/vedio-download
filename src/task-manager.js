@@ -55,9 +55,10 @@ class TaskManager extends EventEmitter {
   /**
    * 创建新任务（初始状态：created）
    * @param {string} url - 目标视频播放页 URL
+   * @param {object} [opts] - 可选配置 { cookies, injectScript, maxSpeed, proxy, engine, ... }
    * @returns {string} taskId
    */
-  create(url) {
+  create(url, opts = {}) {
     const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
     const task = {
       id: taskId,
@@ -72,6 +73,17 @@ class TaskManager extends EventEmitter {
       maxRetries: DEFAULT_MAX_RETRIES,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      // ⭐ 修复：存储 API 传入的额外配置（之前被静默丢弃）
+      cookies: opts.cookies || null,
+      injectScript: opts.injectScript || null,
+      maxSpeed: opts.maxSpeed || 0,
+      proxy: opts.proxy || null,
+      engine: opts.engine || 'auto',
+      format: opts.format || 'auto',
+      targetBandwidth: opts.targetBandwidth || null,
+      parallel: opts.parallel || false,
+      parallelCount: opts.parallelCount || 4,
+      preferredCodec: opts.preferredCodec || null,
     };
     this.tasks.set(taskId, task);
     this.queue.push(taskId);
@@ -134,11 +146,16 @@ class TaskManager extends EventEmitter {
 
   /**
    * 标记为运行中（created → running）
+   * ⭐ 清除旧的 error 和 message，避免前端显示上一次失败的错误信息
    */
   markRunning(taskId) {
     const task = this.tasks.get(taskId);
     if (!task || task.status !== TaskStatus.CREATED) return;
-    this.update(taskId, { status: TaskStatus.RUNNING });
+    this.update(taskId, {
+      status: TaskStatus.RUNNING,
+      error: null,          // ⭐ 清除旧错误信息
+      message: '任务开始执行...', // ⭐ 重置为正向消息
+    });
   }
 
   /**
@@ -308,15 +325,47 @@ class TaskManager extends EventEmitter {
 
   /**
    * 从磁盘加载任务数据
+   * ⭐ P1-5 增强：损坏自动从 .bak 恢复
    */
   _loadFromDisk() {
     try {
       if (!fs.existsSync(TASKS_FILE)) {
-        console.log('[Persistence] 无持久化文件，从空状态启动');
-        return;
+        // 尝试从备份恢复
+        if (fs.existsSync(`${TASKS_FILE}.bak`)) {
+          console.log('[Persistence] 主文件不存在，从 .bak 恢复');
+          fs.copyFileSync(`${TASKS_FILE}.bak`, TASKS_FILE);
+        } else {
+          console.log('[Persistence] 无持久化文件，从空状态启动');
+          return;
+        }
       }
-      const raw = fs.readFileSync(TASKS_FILE, 'utf-8');
-      const tasksArray = JSON.parse(raw);
+      let raw = fs.readFileSync(TASKS_FILE, 'utf-8');
+      // ⭐ 空文件保护：防止 JSON.parse('') 报错
+      if (!raw || raw.trim().length === 0) {
+        console.warn('[Persistence] 主文件为空，尝试从 .bak 恢复');
+        if (fs.existsSync(`${TASKS_FILE}.bak`)) {
+          fs.copyFileSync(`${TASKS_FILE}.bak`, TASKS_FILE);
+          raw = fs.readFileSync(TASKS_FILE, 'utf-8');
+        } else {
+          console.log('[Persistence] 无备份可恢复，从空状态启动');
+          return;
+        }
+      }
+      let tasksArray;
+      try {
+        tasksArray = JSON.parse(raw);
+      } catch (parseErr) {
+        // JSON 损坏，尝试从 .bak 恢复
+        console.error(`[Persistence] JSON 损坏: ${parseErr.message}`);
+        if (fs.existsSync(`${TASKS_FILE}.bak`)) {
+          console.log('[Persistence] 从 .bak 恢复');
+          fs.copyFileSync(`${TASKS_FILE}.bak`, TASKS_FILE);
+          raw = fs.readFileSync(TASKS_FILE, 'utf-8');
+          tasksArray = JSON.parse(raw);
+        } else {
+          throw parseErr;
+        }
+      }
       if (!Array.isArray(tasksArray)) return;
 
       for (const task of tasksArray) {
@@ -344,12 +393,22 @@ class TaskManager extends EventEmitter {
   }
 
   /**
-   * 将当前所有任务写入磁盘
+   * 将当前所有任务写入磁盘（原子写入：先写临时文件 → rename）
+   * ⭐ P1-5 增强：原子写入 + 自动备份
    */
   _saveToDisk() {
     try {
       const tasksArray = [...this.tasks.values()];
-      fs.writeFileSync(TASKS_FILE, JSON.stringify(tasksArray, null, 2), 'utf-8');
+      const tmpFile = `${TASKS_FILE}.tmp`;
+      fs.writeFileSync(tmpFile, JSON.stringify(tasksArray, null, 2), 'utf-8');
+      fs.renameSync(tmpFile, TASKS_FILE);
+      this._writeCounter = (this._writeCounter || 0) + 1;
+      // 每 50 次操作自动备份
+      if (this._writeCounter % 50 === 0) {
+        const bakFile = `${TASKS_FILE}.bak`;
+        fs.copyFileSync(TASKS_FILE, bakFile);
+        console.log(`[Persistence] 自动备份: ${bakFile}`);
+      }
     } catch (err) {
       console.error('[Persistence] 写入失败:', err.message);
     }
