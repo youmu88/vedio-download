@@ -1718,24 +1718,43 @@ function openBatchOps() {
 }
 // ── 加入列表 ────────────────────────────────────
 function openAddToList(isPrivate = false) {
-  // 私密列表未解锁时：自动引导设置/验证密码，解锁后继续加入流程
-  if (isPrivate && !getPrivateToken()) {
-    pendingPrivateAction = () => openAddToList(true);
-    openPrivateEntry();
+  // 私密列表：统一走解锁门控，token 有效才加载并打开列表（过期时自动引导重新验证并续接）
+  if (isPrivate) {
+    ensurePrivateUnlock(async () => {
+      await loadPrivateLists();
+      openPrivateListPicker();
+    });
     return;
   }
-  const listArr = isPrivate ? myPrivateLists : myLists;
-  if (!listArr.length) { showToast(isPrivate ? '暂无私密列表，请先创建' : '暂无列表，请先创建', true); return; }
+  const listArr = myLists;
+  if (!listArr.length) { showToast('暂无列表，请先创建', true); return; }
   const items = listArr.map(l => `
-    <div class="list-tile" onclick="addSelectedTo('${l.id}', ${isPrivate})">
-      <span class="list-tile-icon ${isPrivate ? 'private' : ''}">${isPrivate ? '🔒' : '📁'}</span>
+    <div class="list-tile" onclick="addSelectedTo('${l.id}', false)">
+      <span class="list-tile-icon">📁</span>
       <span class="list-tile-main">
         <span class="list-tile-name">${escapeHtml(l.name)}</span>
         <span class="list-tile-meta">${l.items.length} 项</span>
       </span>
     </div>`).join('');
   openModal(`
-    <div class="modal-head"><span class="modal-title">加入${isPrivate ? '私密' : ''}列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><span class="modal-title">加入列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">${items || '<div class="empty">暂无列表</div>'}</div>`);
+}
+
+/** 打开私密列表面板（仅当 token 已验证通过时由 ensurePrivateUnlock 调用） */
+function openPrivateListPicker() {
+  const listArr = myPrivateLists;
+  if (!listArr.length) { showToast('暂无私密列表，请先创建', true); return; }
+  const items = listArr.map(l => `
+    <div class="list-tile" onclick="addSelectedTo('${l.id}', true)">
+      <span class="list-tile-icon private">🔒</span>
+      <span class="list-tile-main">
+        <span class="list-tile-name">${escapeHtml(l.name)}</span>
+        <span class="list-tile-meta">${l.items.length} 项</span>
+      </span>
+    </div>`).join('');
+  openModal(`
+    <div class="modal-head"><span class="modal-title">加入私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">${items || '<div class="empty">暂无列表</div>'}</div>`);
 }
 async function addSelectedTo(listId, isPrivate) {
@@ -1743,7 +1762,22 @@ async function addSelectedTo(listId, isPrivate) {
   if (!names.length) { showToast('请先选择视频', true); return; }
   try {
     const headers = { 'Content-Type': 'application/json' };
-    if (isPrivate) headers['X-Private-Token'] = getPrivateToken();
+    if (isPrivate) {
+      const res = await privateFetch(`/api/lists/${listId}/items`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ names }),
+      }, () => addSelectedTo(listId, true));
+      if (res === null) return; // 已转入重新解锁流程
+      const data2 = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data2.error || '加入失败');
+      showToast(`已加入 ${names.length} 项`);
+      closeModal();
+      exitSelectionMode();
+      loadLists();
+      loadLibrary(); // 加入列表后浏览页隐藏该视频
+      return;
+    }
     const res = await fetch(`/api/lists/${listId}/items`, {
       method: 'POST', headers, body: JSON.stringify({ names }),
     });
@@ -1776,10 +1810,18 @@ async function submitCreateList(isPrivate) {
   if (!name) { showToast('请输入列表名称', true); return; }
   try {
     const headers = { 'Content-Type': 'application/json' };
-    if (isPrivate) headers['X-Private-Token'] = getPrivateToken();
-    const res = await fetch('/api/lists', {
-      method: 'POST', headers, body: JSON.stringify({ name, private: isPrivate }),
-    });
+    let res;
+    if (isPrivate) {
+      // 创建私密列表：统一走 token 门控，过期时自动引导重新解锁并续接
+      res = await privateFetch('/api/lists', {
+        method: 'POST', headers, body: JSON.stringify({ name, private: true }),
+      }, () => submitCreateList(true));
+      if (res === null) return; // 已转入重新解锁流程
+    } else {
+      res = await fetch('/api/lists', {
+        method: 'POST', headers, body: JSON.stringify({ name, private: false }),
+      });
+    }
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || '创建失败');
     showToast(`列表「${data.list.name}」已创建`);
@@ -1962,6 +2004,45 @@ async function openPrivateEntry() {
   } catch { showToast('无法获取私密状态', true); }
 }
 
+/**
+ * 私密操作统一门控：token 有效才执行 action；无 token / 过期时自动引导设置或验证密码，
+ * 解锁成功后通过 pendingPrivateAction 续接原动作（不再出现"私密验证已过期"的冷报错）
+ */
+async function ensurePrivateUnlock(action) {
+  const token = getPrivateToken();
+  if (!token) {
+    pendingPrivateAction = action;
+    openPrivateEntry();
+    return;
+  }
+  try {
+    const res = await fetch('/api/private/status', { headers: { 'X-Private-Token': token } });
+    const st = await res.json().catch(() => ({}));
+    if (res.ok && st.tokenValid) { action(); return; }
+  } catch {}
+  // token 过期/无效：清除并引导重新解锁，解锁后自动续接原动作
+  setPrivateToken('');
+  pendingPrivateAction = action;
+  openPrivateEntry();
+}
+
+/**
+ * 私密请求包装：自动附带 token；401（token 过期）时清除本地 token 并自动引导重新解锁，
+ * 解锁成功后重放原请求动作（由调用方传入 reauthAction）
+ * @returns {object|null} fetch Response；null 表示已转入重新解锁流程（调用方应停止后续处理）
+ */
+async function privateFetch(url, opts = {}, reauthAction = null) {
+  const headers = { ...(opts.headers || {}), 'X-Private-Token': getPrivateToken() };
+  const res = await fetch(url, { ...opts, headers });
+  if (res.status === 401) {
+    setPrivateToken('');
+    pendingPrivateAction = reauthAction;
+    openPrivateEntry();
+    return null;
+  }
+  return res;
+}
+
 // ── 首次设置密码（设置成功即自动解锁进入） ─────
 function openPrivateSetup() {
   const savedLen = parseInt(localStorage.getItem(PIN_LEN_KEY) || '4', 10);
@@ -2023,26 +2104,30 @@ function openPrivateVerify() {
 // ── 私密列表管理（进入后 privateCtx=true，退出自动锁定） ──
 async function openPrivateManage() {
   privateCtx = true;
-  await loadPrivateLists();
-  const rows = myPrivateLists.map(l => `
-    <div class="list-tile" onclick="openPrivateDetail('${l.id}')">
-      <span class="list-tile-icon private">🔒</span>
-      <span class="list-tile-main">
-        <span class="list-tile-name">${escapeHtml(l.name)}</span>
-        <span class="list-tile-meta">${l.items.length} 项 · ${formatDate(l.createdAt)}</span>
-      </span>
-      <button class="list-item-del" onclick="event.stopPropagation();removePrivateList('${l.id}')">删除</button>
-    </div>`).join('') || '<div class="empty"><div class="big">🔒</div>暂无私有列表</div>';
-  openModal(`
-    <div class="modal-head"><span class="modal-title">🔒 私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">
-      ${rows}
-      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="openCreateList(true)">＋ 新建私密列表</button>
-      <div style="text-align:center;margin-top:14px;">
-        <button class="btn-secondary" onclick="openChangePin()">修改密码</button>
-        <button class="btn-secondary danger" onclick="setPrivateToken('');closeModal();showToast('已锁定')">退出锁定</button>
-      </div>
-    </div>`);
+  // 进入私密列表管理前统一校验 token，过期时自动引导重新解锁
+  ensurePrivateUnlock(() => {
+    loadPrivateLists().then(() => {
+      const rows = myPrivateLists.map(l => `
+        <div class="list-tile" onclick="openPrivateDetail('${l.id}')">
+          <span class="list-tile-icon private">🔒</span>
+          <span class="list-tile-main">
+            <span class="list-tile-name">${escapeHtml(l.name)}</span>
+            <span class="list-tile-meta">${l.items.length} 项 · ${formatDate(l.createdAt)}</span>
+          </span>
+          <button class="list-item-del" onclick="event.stopPropagation();removePrivateList('${l.id}')">删除</button>
+        </div>`).join('') || '<div class="empty"><div class="big">🔒</div>暂无私有列表</div>';
+      openModal(`
+        <div class="modal-head"><span class="modal-title">🔒 私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+        <div class="modal-body">
+          ${rows}
+          <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="openCreateList(true)">＋ 新建私密列表</button>
+          <div style="text-align:center;margin-top:14px;">
+            <button class="btn-secondary" onclick="openChangePin()">修改密码</button>
+            <button class="btn-secondary danger" onclick="setPrivateToken('');closeModal();showToast('已锁定')">退出锁定</button>
+          </div>
+        </div>`);
+    });
+  });
 }
 async function removePrivateList(listId) {
   showActionSheet({
@@ -2051,7 +2136,10 @@ async function removePrivateList(listId) {
     confirmText: '删除',
     onConfirm: async () => {
       try {
-        const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE', headers: { 'X-Private-Token': getPrivateToken() } });
+        const res = await privateFetch(`/api/lists/${listId}`, {
+          method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        }, () => removePrivateList(listId));
+        if (res === null) return; // 已转入重新解锁流程
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || '删除失败');
         showToast('私密列表已删除');
@@ -2091,11 +2179,12 @@ function playPrivateVideo(name) {
 }
 async function removePrivateItem(listId, name) {
   try {
-    const res = await fetch(`/api/lists/${listId}/items`, {
+    const res = await privateFetch(`/api/lists/${listId}/items`, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json', 'X-Private-Token': getPrivateToken() },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ names: [name] }),
-    });
+    }, () => removePrivateItem(listId, name));
+    if (res === null) return; // 已转入重新解锁流程
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || '移除失败');
     showToast('已移除');
@@ -2118,11 +2207,12 @@ function openChangePin() {
             onDone: async (newP2) => {
               if (newP2 !== newP) { showToast('两次输入不一致，请重新设置', true); openChangePin(); return; }
               try {
-                const res = await fetch('/api/private/change', {
+                const res = await privateFetch('/api/private/change', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json', 'X-Private-Token': getPrivateToken() },
+                  headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({ oldPassword: oldP, newPassword: newP }),
-                });
+                }, () => openChangePin());
+                if (res === null) return; // 已转入重新解锁流程
                 const data = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(data.error || '修改失败');
                 localStorage.setItem(PIN_LEN_KEY, String(newP.length));

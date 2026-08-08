@@ -188,7 +188,7 @@ try {
   }
 
   // ── 4.6 回归验证：批量动态菜单 + 加入私密列表自动引导解锁 ──
-  // 模拟未解锁状态（清除本地 token）
+  // 场景A：无 token（首次）→ 自动引导设置/验证
   await page.evaluate(() => localStorage.removeItem('vd.private.token'));
   await page.click('.dock-icon[data-app="browse"]');
   await page.waitForTimeout(400);
@@ -214,6 +214,30 @@ try {
   const pinClosed = await page.$eval('#modalCard .pin-screen', el => !el).catch(() => true);
   check('解锁后自动继续加入流程（PIN 界面关闭）', pinClosed);
   // 退出选择模式，清理状态
+  await page.click('#batchCancelBtn').catch(() => {});
+  await page.waitForTimeout(200);
+
+  // ── 4.6b 回归验证：token 过期场景（模拟服务重启后本地残留过期 token）──
+  // 写入一个伪造的过期 token（服务端不认），再触发加入私密列表 → 应自动引导重新解锁而非报"私密验证已过期"
+  await page.evaluate(() => localStorage.setItem('vd.private.token', 'expired-fake-token-1234567890'));
+  await page.click('.dock-icon[data-app="browse"]');
+  await page.waitForTimeout(400);
+  const selBtnTextB = await page.$eval('#selectModeBtn', el => el.textContent).catch(() => '');
+  if (selBtnTextB !== '取消') await page.click('#selectModeBtn');
+  await page.waitForTimeout(200);
+  await page.click('#batchSelectAllBtn');
+  await page.waitForTimeout(200);
+  await page.click('#batchOpsBtn');
+  await page.waitForTimeout(400);
+  await page.click('#modalCard .as-btn:has-text("加入私密列表")');
+  await page.waitForTimeout(600);
+  const pinShownB = await page.$eval('#modalCard .pin-screen', el => !!el).catch(() => false);
+  check('过期 token 触发加入私密列表时自动引导重新解锁（而非报错）', pinShownB);
+  // 输入正确密码完成重验 → 自动续接加入流程
+  for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(800);
+  const pinClosedB = await page.$eval('#modalCard .pin-screen', el => !el).catch(() => true);
+  check('重新解锁后自动续接加入私密列表流程', pinClosedB);
   await page.click('#batchCancelBtn').catch(() => {});
   await page.waitForTimeout(200);
 

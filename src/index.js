@@ -592,8 +592,17 @@ app.post('/api/tasks/clean-completed', (req, res) => {
 /**
  * GET /api/private/status — 私密密码状态（是否已设置 / 是否存在私密列表）
  */
-app.get('/api/private/status', (_req, res) => {
-  res.json({ hasPassword: listStore.hasPassword(), hasPrivate: listStore.hasPrivateList() });
+app.get('/api/private/status', (req, res) => {
+  const token = privateToken(req);
+  let tokenValid = false;
+  if (token) {
+    try { listStore.verifyToken(token); tokenValid = true; } catch (_) {}
+  }
+  res.json({
+    hasPassword: listStore.hasPassword(),
+    hasPrivate: listStore.hasPrivateList(),
+    tokenValid, // token 是否有效（前端据此决定是否引导重新解锁）
+  });
 });
 
 /**
