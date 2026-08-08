@@ -1684,7 +1684,12 @@ async function batchDeleteSelected() {
 
 // ── 加入列表 ────────────────────────────────────
 function openAddToList(isPrivate = false) {
-  if (isPrivate && !getPrivateToken()) { showToast('请先在「设置 → 私密列表」解锁', true); return; }
+  // 私密列表未解锁时：自动引导设置/验证密码，解锁后继续加入流程
+  if (isPrivate && !getPrivateToken()) {
+    pendingPrivateAction = () => openAddToList(true);
+    openPrivateEntry();
+    return;
+  }
   const listArr = isPrivate ? myPrivateLists : myLists;
   if (!listArr.length) { showToast(isPrivate ? '暂无私密列表，请先创建' : '暂无列表，请先创建', true); return; }
   const items = listArr.map(l => `
@@ -1818,8 +1823,20 @@ async function removeListItem(listId, name) {
 // ═══════════════════════════════════════════════════════
 const PRIVATE_TOKEN_KEY = 'vd.private.token';
 const PIN_LEN_KEY = 'vd.private.pinlen';
+let pendingPrivateAction = null; // 解锁成功后待执行的后续动作（如：加入私密列表）
 function getPrivateToken() { return localStorage.getItem(PRIVATE_TOKEN_KEY) || ''; }
 function setPrivateToken(t) { if (t) localStorage.setItem(PRIVATE_TOKEN_KEY, t); else localStorage.removeItem(PRIVATE_TOKEN_KEY); }
+
+/** 解锁成功后的统一入口：优先执行待办动作，否则进入私密列表管理 */
+function afterPrivateUnlock() {
+  if (pendingPrivateAction) {
+    const cb = pendingPrivateAction;
+    pendingPrivateAction = null;
+    cb();
+  } else {
+    openPrivateManage();
+  }
+}
 
 // ── iOS PIN 弹窗（圆点 + 数字键盘） ────────────
 let pinState = null;
@@ -1921,7 +1938,7 @@ function openPrivateSetup() {
             if (vres.ok && vdata.token) setPrivateToken(vdata.token);
             showToast('私密密码已设置');
             closeModal();
-            openPrivateManage();
+            afterPrivateUnlock();
           } catch (e) {
             pinSetError(e.message);
           }
@@ -1945,7 +1962,7 @@ function openPrivateVerify() {
         setPrivateToken(data.token);
         showToast('解锁成功');
         closeModal();
-        openPrivateManage();
+        afterPrivateUnlock();
       } catch (e) {
         pinSetError(e.message + '，请重试');
       }

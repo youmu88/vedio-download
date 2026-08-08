@@ -169,8 +169,16 @@ class ListStore {
 
   hasPassword() {
     try {
-      return fs.existsSync(PASS_FILE);
-    } catch {
+      if (!fs.existsSync(PASS_FILE)) return false;
+      const { salt, hash } = JSON.parse(fs.readFileSync(PASS_FILE, 'utf-8'));
+      // 文件存在但内容无效（空/损坏/缺字段）时视为未设置，避免进入验证分支后永远报密码错误
+      if (!salt || !hash || typeof salt !== 'string' || typeof hash !== 'string' || hash.length < 64) {
+        console.error('[ListStore] 密码文件损坏，视为未设置密码:', PASS_FILE);
+        return false;
+      }
+      return true;
+    } catch (err) {
+      console.error('[ListStore] 密码文件解析失败，视为未设置密码:', err.message);
       return false;
     }
   }

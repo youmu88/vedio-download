@@ -159,6 +159,31 @@ try {
     check('删除视频弹出 iOS Action Sheet', false, '无删除按钮可测');
   }
 
+  // ── 4.6 回归验证：批量加入私密列表自动引导解锁（修复"请激活"提示） ──
+  // 模拟未解锁状态（清除本地 token）
+  await page.evaluate(() => localStorage.removeItem('vd.private.token'));
+  await page.click('.dock-icon[data-app="browse"]');
+  await page.waitForTimeout(400);
+  // 确保进入选择模式
+  const selBtnText = await page.$eval('#selectModeBtn', el => el.textContent).catch(() => '');
+  if (selBtnText !== '取消') await page.click('#selectModeBtn');
+  await page.waitForTimeout(200);
+  await page.click('#batchSelectAllBtn');
+  await page.waitForTimeout(200);
+  // 点击"私密列表"批量按钮 → 应自动弹出 PIN 解锁界面（而非仅 toast 提示）
+  await page.click('#batchPrivateBtn');
+  await page.waitForTimeout(500);
+  const pinShown = await page.$eval('#modalCard .pin-screen', el => !!el).catch(() => false);
+  check('批量加入私密列表自动弹出 PIN 解锁界面', pinShown);
+  // 输入正确密码解锁 → 自动继续加入流程（PIN 界面关闭）
+  for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(800);
+  const pinClosed = await page.$eval('#modalCard .pin-screen', el => !el).catch(() => true);
+  check('解锁后自动继续加入流程（PIN 界面关闭）', pinClosed);
+  // 退出选择模式，清理状态
+  await page.click('#batchCancelBtn').catch(() => {});
+  await page.waitForTimeout(200);
+
   // ── 5. API 层冒烟（走 HTTP 直接验证） ──
   const api = await fetch(`${BASE}/api/private/status`).then(r => r.json());
   check('API: private/status 返回 hasPassword=true', api.hasPassword === true, JSON.stringify(api));
