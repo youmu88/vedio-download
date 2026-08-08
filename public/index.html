@@ -416,6 +416,7 @@
     transition: transform 0.12s ease, filter 0.12s ease;
   }
   .inline-player-close:hover { transform: scale(1.08); filter: brightness(1.06); }
+  .title-btn.cached { color: var(--green); opacity: 0.7; }
 
   /* ── 壁纸选择器 ──────────────────────────────── */
   .wallpaper-picker { display: flex; gap: 10px; flex-shrink: 0; }
@@ -737,6 +738,7 @@
         <div class="inline-player" id="inlinePlayer" hidden>
           <div class="inline-player-bar">
             <span class="inline-player-title" id="inlinePlayerTitle"></span>
+            <button class="title-btn" id="cacheBtn" title="缓存到本地，下次播放优先本地">缓存</button>
             <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放">×</button>
           </div>
           <video id="inlinePlayerVideo" controls playsinline></video>
@@ -886,6 +888,7 @@
         <div class="inline-player" id="privateInlinePlayer" hidden>
           <div class="inline-player-bar">
             <span class="inline-player-title" id="privateInlinePlayerTitle"></span>
+            <button class="title-btn" id="privateCacheBtn" title="缓存到本地，下次播放优先本地">缓存</button>
             <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放">×</button>
           </div>
           <video id="privateInlinePlayerVideo" controls playsinline></video>
@@ -1702,6 +1705,8 @@ function openPlayer(title, src, id, target = 'browse') {
   ensureOpen(target === 'private' ? 'private' : 'browse');
   titleEl.textContent = title;
   box.hidden = false;
+  userPaused = false; // ⭐ 重置手动暂停标志（修复空格暂停后被 loadedmetadata 自动恢复）
+  updateCacheBtnState(target, src);
   if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
   currentPlay = null;
   currentPlay = { id, title, src, time: 0, duration: 0, updatedAt: Date.now() };
@@ -1724,7 +1729,7 @@ function openPlayer(title, src, id, target = 'browse') {
       }
     });
   } else {
-    video.src = src;
+    playFromCacheOrStream(video, src, target);
   }
 
   const prev = history.find(h => h.id === id);
@@ -1734,7 +1739,8 @@ function openPlayer(title, src, id, target = 'browse') {
     if (prev && prev.time > 3 && prev.time < (video.duration || Infinity) - 5) {
       video.currentTime = prev.time;
     }
-    video.play().catch(() => {});
+    // ⭐ 仅当用户未手动暂停时才自动播放（修复空格抢占：暂停后不再被自动恢复）
+    if (!userPaused) video.play().catch(() => {});
   };
   video.ontimeupdate = () => {
     if (!currentPlay) return;
@@ -2602,9 +2608,61 @@ $('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submit
 $('playUrlBtn').addEventListener('click', playUrl);
 $('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
 $('inlinePlayerClose').addEventListener('click', closePlayer);
+$('cacheBtn').addEventListener('click', () => { if (currentPlay) cacheVideo(currentPlay.src, 'browse'); });
+$('privateCacheBtn').addEventListener('click', () => { if (currentPlay) cacheVideo(currentPlay.src, 'private'); });
 $('refreshHealth').addEventListener('click', loadHealth);
 $('parallelDownloadsInput').addEventListener('change', saveServerSettings);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('inlinePlayer').hidden) closePlayer(); });
+
+// ═══════════════════════════════════════════════════════
+// 视频缓存（Cache API）：播放优先本地缓存，无缓存走 server 流
+// ═══════════════════════════════════════════════════════
+let userPaused = false; // 用户手动暂停标志（修复空格抢占）
+const VIDEO_CACHE = 'vd-media-cache';
+
+async function cacheVideo(src, target = 'browse') {
+  try {
+    const cache = await caches.open(VIDEO_CACHE);
+    const hit = await cache.match(src);
+    if (hit) { showToast('已缓存，播放将优先使用本地副本'); updateCacheBtnState(target, src); return; }
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`缓存失败 (${res.status})`);
+    await cache.put(src, res);
+    showToast('视频已缓存到本地');
+    updateCacheBtnState(target, src);
+  } catch (err) {
+    showToast('缓存失败：' + err.message, true);
+  }
+}
+
+/** 播放时优先使用本地缓存（blob），未命中则走 server 流 */
+async function playFromCacheOrStream(video, src, target = 'browse') {
+  try {
+    const cache = await caches.open(VIDEO_CACHE);
+    const hit = await cache.match(src);
+    if (hit) {
+      const blob = await hit.blob();
+      const url = URL.createObjectURL(blob);
+      video.src = url;
+      updateCacheBtnState(target, src);
+      return;
+    }
+  } catch (_) {}
+  video.src = src;
+  updateCacheBtnState(target, src);
+}
+
+/** 更新缓存按钮状态（已缓存→禁用态文案） */
+async function updateCacheBtnState(target, src) {
+  const btn = $(target === 'private' ? 'privateCacheBtn' : 'cacheBtn');
+  if (!btn) return;
+  try {
+    const cache = await caches.open(VIDEO_CACHE);
+    const hit = await cache.match(src);
+    if (hit) { btn.textContent = '已缓存'; btn.classList.add('cached'); btn.disabled = true; }
+    else { btn.textContent = '缓存'; btn.classList.remove('cached'); btn.disabled = false; }
+  } catch (_) {}
+}
 
 // ── 播放器快捷键：空格=暂停/继续，←/→=后退/前进 30 秒 ──
 document.addEventListener('keydown', (e) => {
@@ -2621,9 +2679,10 @@ document.addEventListener('keydown', (e) => {
 
   if (e.code === 'Space') {
     e.preventDefault();
-    if (video.paused) video.play().catch(() => {});
-    else video.pause();
-    // 保存进度（与本轮需求3一致：关闭/暂停时写入 history）
+    e.stopPropagation();
+    if (video.paused) { userPaused = false; video.play().catch(() => {}); }
+    else { userPaused = true; video.pause(); }
+    // 保存进度（与本轮需求一致：关闭/暂停时写入 history）
     if (currentPlay) upsertHistory({ ...currentPlay, time: video.currentTime || 0, duration: video.duration || 0, updatedAt: Date.now() });
   } else if (e.key === 'ArrowLeft') {
     e.preventDefault();
