@@ -1611,49 +1611,8 @@ function libraryProgress(name) {
 }
 
 function renderLibrary(files) {
-  const grid = $('libraryGrid');
-  const view = settings.libraryView || 'grid';
-  grid.className = (view === 'list' ? 'library-list' : 'library-grid') + (selectionMode ? ' selecting' : '');
-  $('libraryCount').textContent = files.length ? `(${files.length})` : '';
-  document.querySelectorAll('#libraryViewToggle button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
-  if (!files.length) {
-    grid.innerHTML = '<div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>';
-    return;
-  }
-  grid.innerHTML = files.map((f) => {
-    const pct = libraryProgress(f.name);
-    const progressHtml = pct === null
-      ? ''
-      : view === 'list'
-        ? `<div class="video-progress">${pct}%<span class="bar" style="width:${pct}%"></span></div>`
-        : `<span class="video-progress">${pct}%</span>`;
-    const sel = selectionMode ? `<span class="sel-check">${selectedSet.has(f.name) ? '✓' : ''}</span>` : '';
-    const selCls = selectionMode && selectedSet.has(f.name) ? ' selected' : '';
-    if (view === 'list') {
-      return `
-      <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}">
-        ${sel}
-        <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span></div>
-        <div class="video-info">
-          <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
-          <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
-          ${progressHtml}
-        </div>
-        <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" title="删除视频">${icon('trash', 15)}</button>
-      </div>`;
-    }
-    return `
-    <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}">
-      ${sel}
-      <div class="video-thumb">
-        <span class="play-badge">${icon('play', 20)}</span>
-        ${progressHtml}
-        <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" title="删除视频">${icon('trash', 14)}</button>
-      </div>
-      <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
-      <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
-    </div>`;
-  }).join('');
+  // ⭐ 统一走 renderBrowse 文件夹导航（选择模式 / 视图切换共用入口）
+  renderBrowse();
 }
 
 async function deleteVideo(name) {
