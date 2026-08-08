@@ -25,7 +25,9 @@
     --text2: rgba(60, 60, 67, 0.6);
     --text3: rgba(60, 60, 67, 0.32);
     --toolbar: rgba(246, 246, 250, 0.78);
+    --desktop-bg: linear-gradient(180deg, #F4F4F6 0%, #DEDEE4 100%);
     --shadow: 0 1px 2px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08);
+    --window-shadow: 0 18px 60px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.12);
     --radius: 12px;
   }
   [data-theme="dark"] {
@@ -38,11 +40,12 @@
     --text2: rgba(235, 235, 245, 0.6);
     --text3: rgba(235, 235, 245, 0.3);
     --toolbar: rgba(18, 18, 20, 0.78);
-    --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.5);
+    --desktop-bg: linear-gradient(180deg, #1C1C20 0%, #0A0A0C 100%);
+    --window-shadow: 0 18px 60px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  html, body { height: 100%; }
+  html, body { height: 100%; overflow: hidden; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
     background: var(--bg);
@@ -54,49 +57,115 @@
   input, select { font-family: inherit; }
   ::placeholder { color: var(--text3); }
 
-  .app { max-width: 920px; margin: 0 auto; padding: 0 18px 90px; }
+  /* ── 桌面舞台 ─────────────────────────────────── */
+  .desktop { position: fixed; inset: 0; background: var(--desktop-bg); overflow: hidden; }
+  .windows-layer { position: absolute; inset: 0; z-index: 1; }
 
-  /* ── 顶部工具栏（macOS 风格） ─────────────────── */
-  .toolbar {
-    position: sticky; top: 0; z-index: 50;
-    display: flex; align-items: center; gap: 16px;
-    padding: 14px 4px 12px;
+  /* ── App 窗口 ────────────────────────────────── */
+  .window {
+    position: absolute;
+    display: flex; flex-direction: column;
+    min-width: 300px; min-height: 220px;
+    background: var(--bg);
+    border: 0.5px solid var(--separator);
+    border-radius: 12px;
+    box-shadow: var(--window-shadow);
+    overflow: hidden;
+  }
+  .window.closed { display: none; }
+  .window.maximized { border-radius: 0; box-shadow: none; }
+  .window.fullscreen {
+    inset: 0 !important; width: auto !important; height: auto !important;
+    border-radius: 0; box-shadow: none; z-index: 999;
+  }
+
+  .titlebar {
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 14px;
     background: var(--toolbar);
     backdrop-filter: blur(24px) saturate(180%);
     -webkit-backdrop-filter: blur(24px) saturate(180%);
     border-bottom: 0.5px solid var(--separator);
-    margin-bottom: 20px;
+    user-select: none; cursor: default;
   }
-  .toolbar-title { font-size: 17px; font-weight: 700; letter-spacing: -0.2px; }
-  .toolbar-spacer { flex: 1; }
-  .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray); box-shadow: 0 0 0 3px var(--fill); }
+  .traffic { display: flex; gap: 8px; flex-shrink: 0; }
+  .tl {
+    width: 12px; height: 12px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 9px; font-weight: 700; line-height: 1; color: transparent;
+    transition: color 0.12s ease;
+  }
+  .tl.red { background: #FF5F57; }
+  .tl.yellow { background: #FEBC2E; }
+  .tl.green { background: #28C840; }
+  .titlebar:hover .tl { color: rgba(0,0,0,0.55); }
+  .tl.green.active { color: rgba(0,0,0,0.55); }
+  .win-title {
+    flex: 1; text-align: center;
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .win-conn { flex-shrink: 0; }
+  .win-content { flex: 1; overflow-y: auto; padding: 6px 18px 24px; overscroll-behavior: contain; }
+
+  /* ── Dock ────────────────────────────────────── */
+  .dock {
+    position: absolute; left: 0; right: 0; bottom: 0; z-index: 800;
+    display: flex; justify-content: center;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+    pointer-events: none;
+    transition: opacity 0.22s ease, transform 0.22s ease;
+  }
+  body.no-dock .dock { opacity: 0; transform: translateY(18px); pointer-events: none; }
+  .dock-inner {
+    pointer-events: auto;
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 14px;
+    background: var(--toolbar);
+    backdrop-filter: blur(30px) saturate(180%);
+    -webkit-backdrop-filter: blur(30px) saturate(180%);
+    border: 0.5px solid var(--separator);
+    border-radius: 20px;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+  }
+  .dock-icon {
+    position: relative;
+    width: 54px; height: 54px; border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.22);
+    transition: transform 0.18s cubic-bezier(0.3, 1.4, 0.5, 1);
+  }
+  .dock-icon:hover { transform: translateY(-6px) scale(1.1); }
+  .dock-icon.active::after {
+    content: ''; position: absolute; bottom: -8px; left: 50%;
+    transform: translateX(-50%);
+    width: 5px; height: 5px; border-radius: 50%; background: var(--text2);
+  }
+  .dock-icon .label {
+    position: absolute; bottom: calc(100% + 8px); left: 50%;
+    transform: translateX(-50%);
+    background: rgba(28,28,30,0.92); color: #fff;
+    font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 8px;
+    opacity: 0; pointer-events: none; transition: opacity 0.15s ease;
+    white-space: nowrap;
+  }
+  .dock-icon:hover .label { opacity: 1; }
+  .dock-icon.app-downloads { background: linear-gradient(145deg, #5AC8FA, #007AFF); }
+  .dock-icon.app-browse { background: linear-gradient(145deg, #30D158, #0B9D4C); }
+  .dock-icon.app-settings { background: linear-gradient(145deg, #98989D, #5E5E63); }
+  .dock-sep { width: 1px; height: 38px; background: var(--separator); margin: 0 4px; flex-shrink: 0; }
+  .dock-conn { padding: 0 6px; flex-shrink: 0; }
+
+  .conn-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--gray); box-shadow: 0 0 0 3px var(--fill); }
   .conn-dot.on { background: var(--green); }
   .conn-dot.off { background: var(--red); }
-
-  .segmented {
-    display: flex; gap: 2px; padding: 2px;
-    background: var(--fill); border-radius: 9px;
-  }
-  .segmented button {
-    padding: 6px 16px; border-radius: 7px;
-    font-size: 13px; font-weight: 600; color: var(--text2);
-    transition: all 0.18s ease;
-  }
-  .segmented button.active {
-    background: var(--card); color: var(--text);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-  }
-
-  /* ── 页面切换 ────────────────────────────────── */
-  .page { display: none; animation: pageIn 0.22s ease; }
-  .page.active { display: block; }
-  @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
   /* ── 分组列表（iOS grouped list） ────────────── */
   .group-title {
     font-size: 13px; font-weight: 600; color: var(--text2);
     text-transform: uppercase; letter-spacing: 0.4px;
-    margin: 22px 16px 6px;
+    margin: 20px 16px 6px;
   }
   .group { background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
   .row {
@@ -107,7 +176,6 @@
   .row:last-child { border-bottom: none; }
   .row-label { flex: 1; font-size: 15px; }
   .row-hint { font-size: 13px; color: var(--text2); }
-  .row-chevron { color: var(--text3); font-size: 14px; }
 
   .form-row { display: flex; gap: 10px; padding: 14px; }
   .text-input {
@@ -160,7 +228,7 @@
     font-size: 14px; font-weight: 600; color: var(--text);
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .task-meta { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12px; color: var(--text2); }
+  .task-meta { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 12px; color: var(--text2); flex-wrap: wrap; }
   .task-message { margin-top: 5px; font-size: 12px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .task-progress { height: 5px; border-radius: 3px; background: var(--fill); margin-top: 8px; overflow: hidden; }
   .task-progress > i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.25s ease; }
@@ -207,10 +275,10 @@
   .video-meta { font-size: 12px; color: var(--text2); margin-top: 2px; }
 
   .empty {
-    text-align: center; color: var(--text3); padding: 48px 20px;
+    text-align: center; color: var(--text3); padding: 42px 20px;
     font-size: 14px; line-height: 1.7;
   }
-  .empty .big { font-size: 44px; margin-bottom: 8px; }
+  .empty .big { font-size: 42px; margin-bottom: 8px; }
 
   /* ── 设置页 ──────────────────────────────────── */
   .setting-row { min-height: 52px; }
@@ -241,11 +309,11 @@
   .status-dot.no { background: var(--red); }
   .status-dot.mid { background: var(--orange); }
 
-  .footer-note { text-align: center; font-size: 12px; color: var(--text3); margin-top: 28px; }
+  .footer-note { text-align: center; font-size: 12px; color: var(--text3); margin-top: 26px; }
 
   /* ── 播放器 ──────────────────────────────────── */
   .player {
-    position: fixed; inset: 0; z-index: 100;
+    position: fixed; inset: 0; z-index: 1000;
     background: rgba(0,0,0,0.92);
     backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
     display: flex; flex-direction: column;
@@ -270,157 +338,175 @@
   }
   .player-error { color: #FF6B6B; font-size: 14px; text-align: center; padding: 20px; }
 
-  /* ── 移动端底部 TabBar（iOS 风格） ───────────── */
-  .tabbar {
-    display: none;
-    position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
-    background: var(--toolbar);
-    backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
-    border-top: 0.5px solid var(--separator);
-    padding: 6px 10px calc(8px + env(safe-area-inset-bottom));
-  }
-  .tabbar-inner { display: flex; max-width: 480px; margin: 0 auto; }
-  .tabbar button {
-    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
-    padding: 6px 0; border-radius: 10px; color: var(--gray); font-size: 10px; font-weight: 600;
-    transition: color 0.15s ease;
-  }
-  .tabbar button.active { color: var(--accent); }
-
+  /* ── 移动端适配 ──────────────────────────────── */
   @media (max-width: 700px) {
-    .app { padding: 0 14px 100px; }
-    .segmented-top { display: none; }
-    .tabbar { display: block; }
-    .toolbar { padding-top: max(12px, env(safe-area-inset-top)); }
+    .dock { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
+    .dock-inner { gap: 8px; padding: 8px 12px; border-radius: 18px; }
+    .dock-icon { width: 46px; height: 46px; border-radius: 12px; }
+    .dock-icon .label { display: none; }
+    .win-content { padding: 4px 12px 18px; }
   }
 </style>
 </head>
 <body>
-<div class="app">
+<div class="desktop">
+  <div class="windows-layer">
 
-  <!-- 顶部工具栏 -->
-  <header class="toolbar">
-    <div class="toolbar-title">视频下载器</div>
-    <div class="segmented segmented-top" id="segTop">
-      <button data-page="downloads" class="active">下载</button>
-      <button data-page="browse">浏览</button>
-      <button data-page="settings">设置</button>
-    </div>
-    <div class="toolbar-spacer"></div>
-    <span class="conn-dot off" id="connDot" title="连接状态"></span>
-  </header>
-
-  <main>
-    <!-- ═══════ 下载页 ═══════ -->
-    <section class="page active" id="page-downloads">
-      <div class="group">
-        <div class="form-row">
-          <input class="text-input" id="urlInput" type="url" placeholder="粘贴视频播放页 URL 或 m3u8/mp4 直链" autocomplete="url" spellcheck="false">
-          <button class="btn-primary" id="downloadBtn">下载</button>
+    <!-- ═══════ App：下载 ═══════ -->
+    <section class="window" id="win-downloads" data-app="downloads">
+      <div class="titlebar">
+        <div class="traffic">
+          <button class="tl red" data-act="close" title="关闭">×</button>
+          <button class="tl yellow" data-act="min" title="最小化">−</button>
+          <button class="tl green" data-act="full" title="全屏">⤢</button>
         </div>
+        <div class="win-title">下载</div>
+        <span class="win-conn conn-dot off" title="连接状态"></span>
       </div>
-      <div class="group-title">任务列表 <span id="taskCount" style="text-transform:none;"></span></div>
-      <div class="group" id="taskList">
-        <div class="empty"><div class="big">📥</div>还没有下载任务</div>
-      </div>
-    </section>
-
-    <!-- ═══════ 浏览页 ═══════ -->
-    <section class="page" id="page-browse">
-      <div class="group-title">继续观看</div>
-      <div class="group" id="historyList">
-        <div class="empty"><div class="big">▶️</div>暂无播放记录</div>
-      </div>
-
-      <div class="group-title">在线播放</div>
-      <div class="group">
-        <div class="form-row">
-          <input class="text-input" id="playUrlInput" type="url" placeholder="粘贴 m3u8 / mp4 链接直接播放" spellcheck="false">
-          <button class="btn-primary" id="playUrlBtn">播放</button>
-        </div>
-      </div>
-
-      <div class="group-title">视频库 <span id="libraryCount" style="text-transform:none;"></span></div>
-      <div class="library-grid" id="libraryGrid">
-        <div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>
-      </div>
-    </section>
-
-    <!-- ═══════ 设置页 ═══════ -->
-    <section class="page" id="page-settings">
-      <div class="group-title">外观</div>
-      <div class="group">
-        <div class="row setting-row">
-          <div class="row-label">主题<small>跟随系统 / 浅色 / 深色</small></div>
-          <div class="segmented" id="themeSeg">
-            <button data-theme="auto">自动</button>
-            <button data-theme="light">浅色</button>
-            <button data-theme="dark">深色</button>
+      <div class="win-content">
+        <div class="group" style="margin-top:12px;">
+          <div class="form-row">
+            <input class="text-input" id="urlInput" type="url" placeholder="粘贴视频播放页 URL 或 m3u8/mp4 直链" autocomplete="url" spellcheck="false">
+            <button class="btn-primary" id="downloadBtn">下载</button>
           </div>
         </div>
-      </div>
-
-      <div class="group-title">下载默认设置</div>
-      <div class="group">
-        <div class="row setting-row">
-          <div class="row-label">下载引擎<small>N_m3u8DL-RE → ffmpeg → JS</small></div>
-          <select class="text-input" id="engineSelect" style="width:130px;">
-            <option value="auto">自动选择</option>
-            <option value="n_m3u8dl_re">N_m3u8DL-RE</option>
-            <option value="ffmpeg">ffmpeg</option>
-            <option value="js">JS 原生</option>
-          </select>
-        </div>
-        <div class="row setting-row">
-          <div class="row-label">输出格式</div>
-          <select class="text-input" id="formatSelect" style="width:110px;">
-            <option value="auto">自动</option>
-            <option value="mp4">MP4</option>
-            <option value="ts">TS</option>
-            <option value="mkv">MKV</option>
-          </select>
-        </div>
-        <div class="row setting-row">
-          <div class="row-label">并行分片下载<small>HLS 分片并发加速</small></div>
-          <label class="switch"><input type="checkbox" id="parallelSwitch"><span class="track"></span><span class="thumb"></span></label>
-        </div>
-        <div class="row setting-row">
-          <div class="row-label">分片并发数</div>
-          <input class="num-input" id="parallelCountInput" type="number" min="1" max="16" value="4">
-        </div>
-        <div class="row setting-row">
-          <div class="row-label">单任务限速<small>MB/s，0 表示不限速</small></div>
-          <input class="num-input" id="maxSpeedInput" type="number" min="0" step="0.5" value="0">
-        </div>
-        <div class="row setting-row">
-          <div class="row-label">下载超时<small>分钟</small></div>
-          <input class="num-input" id="timeoutInput" type="number" min="1" max="600" value="30">
+        <div class="group-title">任务列表 <span id="taskCount" style="text-transform:none;"></span></div>
+        <div class="group" id="taskList">
+          <div class="empty"><div class="big">📥</div>还没有下载任务</div>
         </div>
       </div>
-
-      <div class="group-title">服务状态</div>
-      <div class="group" id="healthGroup">
-        <div class="row status-row"><span class="row-label">运行时间</span><span class="status-value" id="healthUptime">—</span></div>
-        <div class="row status-row"><span class="row-label">队列 / 运行中</span><span class="status-value" id="healthQueue">—</span></div>
-        <div class="row status-row"><span class="row-label">ffmpeg / ffprobe</span><span class="status-value" id="healthEngines">—</span></div>
-        <div class="row status-row"><span class="row-label">N_m3u8DL-RE</span><span class="status-value" id="healthNre">—</span></div>
-        <div class="row status-row"><span class="row-label">磁盘空间</span><span class="status-value" id="healthDisk">—</span></div>
-        <div class="row"><button class="row-label" id="refreshHealth" style="color:var(--accent);text-align:left;">刷新状态</button></div>
-      </div>
-
-      <div class="footer-note">视频下载器 v2.0 · Playwright 流拦截 + 多引擎下载</div>
     </section>
-  </main>
-</div>
 
-<!-- 移动端底部 TabBar -->
-<nav class="tabbar">
-  <div class="tabbar-inner">
-    <button data-page="downloads" class="active" id="tabDownloads"></button>
-    <button data-page="browse" id="tabBrowse"></button>
-    <button data-page="settings" id="tabSettings"></button>
+    <!-- ═══════ App：浏览 ═══════ -->
+    <section class="window closed" id="win-browse" data-app="browse">
+      <div class="titlebar">
+        <div class="traffic">
+          <button class="tl red" data-act="close" title="关闭">×</button>
+          <button class="tl yellow" data-act="min" title="最小化">−</button>
+          <button class="tl green" data-act="full" title="全屏">⤢</button>
+        </div>
+        <div class="win-title">浏览</div>
+        <span class="win-conn conn-dot off" title="连接状态"></span>
+      </div>
+      <div class="win-content">
+        <div class="group-title" style="margin-top:12px;">继续观看</div>
+        <div class="group" id="historyList">
+          <div class="empty"><div class="big">▶️</div>暂无播放记录</div>
+        </div>
+
+        <div class="group-title">在线播放</div>
+        <div class="group">
+          <div class="form-row">
+            <input class="text-input" id="playUrlInput" type="url" placeholder="粘贴 m3u8 / mp4 链接直接播放" spellcheck="false">
+            <button class="btn-primary" id="playUrlBtn">播放</button>
+          </div>
+        </div>
+
+        <div class="group-title">视频库 <span id="libraryCount" style="text-transform:none;"></span></div>
+        <div class="library-grid" id="libraryGrid">
+          <div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════ App：设置 ═══════ -->
+    <section class="window closed" id="win-settings" data-app="settings">
+      <div class="titlebar">
+        <div class="traffic">
+          <button class="tl red" data-act="close" title="关闭">×</button>
+          <button class="tl yellow" data-act="min" title="最小化">−</button>
+          <button class="tl green" data-act="full" title="全屏">⤢</button>
+        </div>
+        <div class="win-title">设置</div>
+        <span class="win-conn conn-dot off" title="连接状态"></span>
+      </div>
+      <div class="win-content">
+        <div class="group-title" style="margin-top:12px;">外观</div>
+        <div class="group">
+          <div class="row setting-row">
+            <div class="row-label">主题<small>自动跟随系统 / 浅色 / 深色</small></div>
+            <div class="segmented" id="themeSeg">
+              <button data-theme="auto">自动</button>
+              <button data-theme="light">浅色</button>
+              <button data-theme="dark">深色</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="group-title">下载默认设置</div>
+        <div class="group">
+          <div class="row setting-row">
+            <div class="row-label">并行下载数<small>同时下载的任务数量（1～10）</small></div>
+            <input class="num-input" id="parallelDownloadsInput" type="number" min="1" max="10" value="3">
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">下载引擎<small>N_m3u8DL-RE → ffmpeg → JS</small></div>
+            <select class="text-input" id="engineSelect" style="width:130px;">
+              <option value="auto">自动选择</option>
+              <option value="n_m3u8dl_re">N_m3u8DL-RE</option>
+              <option value="ffmpeg">ffmpeg</option>
+              <option value="js">JS 原生</option>
+            </select>
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">输出格式</div>
+            <select class="text-input" id="formatSelect" style="width:110px;">
+              <option value="auto">自动</option>
+              <option value="mp4">MP4</option>
+              <option value="ts">TS</option>
+              <option value="mkv">MKV</option>
+            </select>
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">并行分片下载<small>HLS 分片并发加速</small></div>
+            <label class="switch"><input type="checkbox" id="parallelSwitch"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">分片并发数</div>
+            <input class="num-input" id="parallelCountInput" type="number" min="1" max="16" value="4">
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">单任务限速<small>MB/s，0 表示不限速</small></div>
+            <input class="num-input" id="maxSpeedInput" type="number" min="0" step="0.5" value="0">
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">下载超时<small>分钟</small></div>
+            <input class="num-input" id="timeoutInput" type="number" min="1" max="600" value="30">
+          </div>
+        </div>
+
+        <div class="group-title">服务状态</div>
+        <div class="group" id="healthGroup">
+          <div class="row status-row"><span class="row-label">运行时间</span><span class="status-value" id="healthUptime">—</span></div>
+          <div class="row status-row"><span class="row-label">队列 / 运行中</span><span class="status-value" id="healthQueue">—</span></div>
+          <div class="row status-row"><span class="row-label">ffmpeg / ffprobe</span><span class="status-value" id="healthEngines">—</span></div>
+          <div class="row status-row"><span class="row-label">N_m3u8DL-RE</span><span class="status-value" id="healthNre">—</span></div>
+          <div class="row status-row"><span class="row-label">磁盘空间</span><span class="status-value" id="healthDisk">—</span></div>
+          <div class="row"><button class="row-label" id="refreshHealth" style="color:var(--accent);text-align:left;">刷新状态</button></div>
+        </div>
+
+        <div class="footer-note">视频下载器 v2.1 · Playwright 流拦截 + 多引擎下载</div>
+      </div>
+    </section>
   </div>
-</nav>
+
+  <!-- Dock -->
+  <div class="dock" id="dock">
+    <div class="dock-inner">
+      <button class="dock-icon app-downloads active" data-app="downloads" title="下载">
+        <span class="label">下载</span>
+      </button>
+      <button class="dock-icon app-browse" data-app="browse" title="浏览">
+        <span class="label">浏览</span>
+      </button>
+      <button class="dock-icon app-settings" data-app="settings" title="设置">
+        <span class="label">设置</span>
+      </button>
+      <span class="dock-sep"></span>
+      <span class="dock-conn conn-dot off" id="connDot" title="连接状态"></span>
+    </div>
+  </div>
+</div>
 
 <!-- 播放器 -->
 <div class="player" id="player" hidden>
@@ -461,8 +547,7 @@ function formatTime(sec) {
 }
 function formatDate(ts) {
   const d = new Date(ts);
-  const now = new Date();
-  const diff = now - d;
+  const diff = Date.now() - d;
   if (diff < 60 * 1000) return '刚刚';
   if (diff < 3600 * 1000) return `${Math.floor(diff / 60000)} 分钟前`;
   if (diff < 24 * 3600 * 1000) return `${Math.floor(diff / 3600000)} 小时前`;
@@ -488,7 +573,195 @@ function icon(name, size = 18) {
 }
 
 // ═══════════════════════════════════════════════════════
-// 设置持久化
+// 窗口管理器（macOS 风格 Dock + 多窗口）
+// ═══════════════════════════════════════════════════════
+const APP_ORDER = ['downloads', 'browse', 'settings'];
+const winState = {};
+let activeApp = 'downloads';
+let zTop = 20;
+
+APP_ORDER.forEach((name) => { winState[name] = { open: false, minimized: false, maximized: false, fullscreen: false, rect: null, prevFull: null }; });
+
+function dockTop() { return $('dock').getBoundingClientRect().top; }
+
+function computeDefaultRect(name, idx) {
+  const maxH = Math.max(320, dockTop() - 40);
+  if (window.innerWidth <= 700) {
+    return { x: 8, y: 8, w: window.innerWidth - 16, h: maxH - 16 };
+  }
+  const w = Math.min(680, window.innerWidth - 80);
+  const h = Math.min(620, maxH);
+  const x = Math.max(24, (window.innerWidth - w) / 2 - 140 + idx * 48);
+  const y = Math.max(20, (maxH - h) / 2 - 20 + idx * 30);
+  return { x, y, w, h };
+}
+
+function applyRect(win, r) {
+  win.style.left = `${r.x}px`; win.style.top = `${r.y}px`;
+  win.style.width = `${r.w}px`; win.style.height = `${r.h}px`;
+  win.style.right = 'auto'; win.style.bottom = 'auto';
+}
+
+function currentRect(win) {
+  const r = win.getBoundingClientRect();
+  return { x: r.left, y: r.top, w: r.width, h: r.height };
+}
+
+function updateDock() {
+  document.querySelectorAll('.dock-icon').forEach((b) => b.classList.toggle('active', b.dataset.app === activeApp));
+}
+
+function focusApp(name) {
+  const win = $('win-' + name);
+  win.classList.remove('closed');
+  winState[name].open = true;
+  winState[name].minimized = false;
+  win.style.zIndex = winState[name].fullscreen ? 999 : ++zTop;
+  activeApp = name;
+  updateDock();
+  if (name === 'browse') { renderHistory(); loadLibrary(); }
+  if (name === 'settings') { loadServerSettings(); loadHealth(); }
+}
+
+function ensureOpen(name) {
+  if (winState[name].open && !winState[name].minimized) { focusApp(name); return; }
+  if (!winState[name].rect) {
+    winState[name].rect = computeDefaultRect(name, APP_ORDER.indexOf(name));
+    applyRect($('win-' + name), winState[name].rect);
+  }
+  focusApp(name);
+}
+
+function closeApp(name) {
+  winState[name].open = false;
+  winState[name].minimized = false;
+  $('win-' + name).classList.add('closed');
+  if (activeApp === name) activeApp = null;
+  updateDock();
+}
+
+function minimizeApp(name) {
+  winState[name].minimized = true;
+  $('win-' + name).classList.add('closed');
+  if (activeApp === name) activeApp = null;
+  updateDock();
+}
+
+function maximizeApp(name) {
+  const st = winState[name];
+  const win = $('win-' + name);
+  if (st.fullscreen) { exitFullscreen(name); return; }
+  if (st.maximized) {
+    st.maximized = false;
+    win.classList.remove('maximized');
+    applyRect(win, st.rect || computeDefaultRect(name, APP_ORDER.indexOf(name)));
+  } else {
+    st.rect = currentRect(win);
+    st.maximized = true;
+    win.classList.add('maximized');
+    win.style.left = '0'; win.style.top = '0'; win.style.right = '0';
+    // 下沿紧贴 Dock 顶部
+    win.style.bottom = `${Math.max(0, window.innerHeight - dockTop())}px`;
+    win.style.width = 'auto'; win.style.height = 'auto';
+  }
+}
+
+function toggleFullscreen(name) {
+  const st = winState[name];
+  const win = $('win-' + name);
+  if (st.fullscreen) { exitFullscreen(name); return; }
+  st.prevFull = { maximized: st.maximized, rect: currentRect(win) };
+  st.fullscreen = true;
+  st.maximized = false;
+  document.body.classList.add('no-dock');
+  win.classList.add('fullscreen');
+  win.classList.remove('maximized');
+  win.style.inset = '0';
+  win.style.width = 'auto'; win.style.height = 'auto';
+  win.style.zIndex = 999;
+  win.querySelector('.tl.green').classList.add('active');
+  activeApp = name;
+  updateDock();
+}
+
+function exitFullscreen(name) {
+  const st = winState[name];
+  const win = $('win-' + name);
+  st.fullscreen = false;
+  document.body.classList.remove('no-dock');
+  win.classList.remove('fullscreen');
+  win.querySelector('.tl.green').classList.remove('active');
+  win.style.zIndex = ++zTop;
+  if (st.prevFull?.maximized) {
+    st.maximized = true;
+    win.classList.add('maximized');
+    win.style.left = '0'; win.style.top = '0'; win.style.right = '0';
+    win.style.bottom = `${Math.max(0, window.innerHeight - dockTop())}px`;
+    win.style.width = 'auto'; win.style.height = 'auto';
+  } else {
+    applyRect(win, st.prevFull?.rect || st.rect || computeDefaultRect(name, APP_ORDER.indexOf(name)));
+  }
+}
+
+// 窗口事件（拖动 / 双击最大化 / 红黄绿按钮）
+APP_ORDER.forEach((name) => {
+  const win = $('win-' + name);
+  const bar = win.querySelector('.titlebar');
+
+  bar.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.traffic')) return;
+    const st = winState[name];
+    if (st.maximized || st.fullscreen) return;
+    const r = win.getBoundingClientRect();
+    const dx = e.clientX - r.left;
+    const dy = e.clientY - r.top;
+    const move = (ev) => {
+      const x = Math.min(window.innerWidth - 40, Math.max(0, ev.clientX - dx));
+      const y = Math.min(Math.max(0, dockTop() - 40), Math.max(0, ev.clientY - dy));
+      win.style.left = `${x}px`; win.style.top = `${y}px`;
+      win.style.right = 'auto'; win.style.bottom = 'auto';
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
+
+  bar.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.traffic')) return;
+    maximizeApp(name);
+  });
+
+  win.querySelectorAll('.traffic .tl').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if (act === 'close') closeApp(name);
+      else if (act === 'min') minimizeApp(name);
+      else toggleFullscreen(name);
+    });
+  });
+});
+
+// Dock 图标点击
+document.querySelectorAll('.dock-icon').forEach((btn) => {
+  btn.addEventListener('click', () => ensureOpen(btn.dataset.app));
+});
+
+// 视口变化时刷新最大化窗口的 Dock 间距
+window.addEventListener('resize', () => {
+  APP_ORDER.forEach((name) => {
+    const st = winState[name];
+    if (st.maximized && !st.fullscreen && winState[name].open) {
+      const win = $('win-' + name);
+      win.style.bottom = `${Math.max(0, window.innerHeight - dockTop())}px`;
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════
+// 设置持久化（本地 + 服务端并行下载数）
 // ═══════════════════════════════════════════════════════
 const SETTINGS_KEY = 'vd.settings.v2';
 const defaultSettings = {
@@ -534,12 +807,42 @@ function bindSettingsForm() {
   $('timeoutInput').addEventListener('change', (e) => { settings.timeoutMin = Math.min(600, Math.max(1, parseInt(e.target.value, 10) || 30)); e.target.value = settings.timeoutMin; saveSettings(); });
 }
 
+// 服务端并行下载数（持久化在 data/settings.json，立即生效）
+async function loadServerSettings() {
+  try {
+    const res = await fetch('/api/settings');
+    if (res.ok) {
+      const data = await res.json();
+      $('parallelDownloadsInput').value = data.maxConcurrent ?? 3;
+    }
+  } catch {}
+}
+async function saveServerSettings() {
+  const value = Math.min(10, Math.max(1, parseInt($('parallelDownloadsInput').value, 10) || 3));
+  $('parallelDownloadsInput').value = value;
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxConcurrent: value }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error || '保存失败', true);
+      return;
+    }
+    showToast(`并行下载数已设为 ${value}`);
+  } catch (err) {
+    showToast(err.message, true);
+  }
+}
+
 // ═══════════════════════════════════════════════════════
 // 播放记录
 // ═══════════════════════════════════════════════════════
 const HISTORY_KEY = 'vd.history.v2';
 function loadHistory() {
-  try { return Array.isArray(JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')) ? JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]') : []; }
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
   catch { return []; }
 }
 let history = loadHistory();
@@ -559,21 +862,14 @@ function removeHistory(id) {
 }
 
 // ═══════════════════════════════════════════════════════
-// 页面切换
-// ═══════════════════════════════════════════════════════
-function switchPage(name) {
-  document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === `page-${name}`));
-  document.querySelectorAll('[data-page]').forEach(b => b.classList.toggle('active', b.dataset.page === name));
-  if (name === 'browse') { renderHistory(); loadLibrary(); }
-  if (name === 'settings') loadHealth();
-}
-
-// ═══════════════════════════════════════════════════════
 // Socket.IO 连接
 // ═══════════════════════════════════════════════════════
 const socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
-socket.on('connect', () => { $('connDot').className = 'conn-dot on'; loadTasks(); });
-socket.on('disconnect', () => { $('connDot').className = 'conn-dot off'; });
+socket.on('connect', () => {
+  document.querySelectorAll('.conn-dot').forEach(d => d.className = d.id === 'player' ? d.className : 'conn-dot on');
+  loadTasks();
+});
+socket.on('disconnect', () => document.querySelectorAll('.conn-dot').forEach(d => d.className = d.id === 'player' ? d.className : 'conn-dot off'));
 socket.on('task-status', (task) => updateTaskCard(task));
 socket.on('task-list-update', (tasks) => renderTasks(tasks));
 socket.on('task-finalized', ({ taskId }) => socket.emit('unsubscribe', taskId));
@@ -661,7 +957,7 @@ function buildTaskRow(task) {
   actions.push(`<button class="icon-btn danger" title="删除" onclick="actionTask('${task.id}','delete')">${icon('trash', 17)}</button>`);
   if (status === 'completed' && task.outputFile) {
     const name = task.outputFile.split('/').pop();
-    actions.push(`<button class="icon-btn green" title="下载文件" onclick="playLibrary('${name.replace(/'/g, "\\'")}')">${icon('dlFile', 17)}</button>`);
+    actions.push(`<button class="icon-btn green" title="播放文件" onclick="playLibrary('${name.replace(/'/g, "\\'")}')">${icon('play', 17)}</button>`);
   }
   const metaParts = [];
   metaParts.push(`<span class="task-status ${cls}">${statusText}</span>`);
@@ -714,8 +1010,7 @@ async function loadLibrary() {
   try {
     const res = await fetch('/api/library');
     if (!res.ok) throw new Error();
-    const files = await res.json();
-    renderLibrary(files);
+    renderLibrary(await res.json());
   } catch {
     $('libraryGrid').innerHTML = '<div class="empty"><div class="big">⚠️</div>视频库读取失败</div>';
   }
@@ -728,7 +1023,7 @@ function renderLibrary(files) {
     grid.innerHTML = '<div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>';
     return;
   }
-  grid.innerHTML = files.map((f, i) => `
+  grid.innerHTML = files.map((f) => `
     <div class="video-card" data-name="${escapeHtml(f.name)}" onclick="playLibrary(this.dataset.name)">
       <div class="video-thumb"><span class="play-badge">${icon('play', 20)}</span></div>
       <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
@@ -767,7 +1062,6 @@ function openPlayer(title, src, id) {
   const video = $('playerVideo');
   $('playerTitle').textContent = title;
   overlay.hidden = false;
-  // 先落盘上一次播放进度，再切到新视频
   if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
   currentPlay = null;
   currentPlay = { id, title, src, time: 0, duration: 0, updatedAt: Date.now() };
@@ -793,7 +1087,6 @@ function openPlayer(title, src, id) {
     video.src = src;
   }
 
-  // 续播
   const prev = history.find(h => h.id === id);
   video.onloadedmetadata = () => {
     if (!currentPlay) return;
@@ -858,7 +1151,7 @@ async function loadHealth() {
     if (!res.ok) throw new Error();
     const h = await res.json();
     $('healthUptime').textContent = `${Math.floor(h.uptime / 60)} 分钟`;
-    $('healthQueue').textContent = `${h.tasks.queued} / ${h.tasks.running}`;
+    $('healthQueue').textContent = `${h.tasks.queued} / ${h.tasks.running}（上限 ${h.tasks.maxConcurrent}）`;
     const eng = h.engines || {};
     $('healthEngines').innerHTML = `${dot(eng.ffmpeg)} ffmpeg ${dot(eng.ffprobe)} ffprobe`;
     $('healthNre').innerHTML = dot(eng.nM3u8DLRe) + (eng.nM3u8DLRe ? ' 可用' : ' 未安装');
@@ -890,21 +1183,16 @@ function showToast(msg, isError = false) {
 // ═══════════════════════════════════════════════════════
 // 初始化
 // ═══════════════════════════════════════════════════════
-function initTabs() {
-  document.querySelectorAll('[data-page]').forEach(btn => {
-    btn.addEventListener('click', () => switchPage(btn.dataset.page));
-  });
-}
-
 $('downloadBtn').addEventListener('click', submitDownload);
 $('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitDownload(); });
 $('playUrlBtn').addEventListener('click', playUrl);
 $('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
 $('playerBack').addEventListener('click', closePlayer);
 $('refreshHealth').addEventListener('click', loadHealth);
+$('parallelDownloadsInput').addEventListener('change', saveServerSettings);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('player').hidden) closePlayer(); });
 
-// 播放记录事件委托（避免内联 onclick 的引号转义问题）
+// 播放记录事件委托
 $('historyList').addEventListener('click', (e) => {
   const main = e.target.closest('.history-main');
   if (main && main.dataset.historyId) {
@@ -915,30 +1203,43 @@ $('historyList').addEventListener('click', (e) => {
   if (del) removeHistory(del.dataset.removeId);
 });
 
-// 移动端 TabBar 图标
-$('tabDownloads').innerHTML = `${icon('download', 22)}<span>下载</span>`;
-$('tabBrowse').innerHTML = `${icon('playRect', 22)}<span>浏览</span>`;
-$('tabSettings').innerHTML = `${icon('gear', 22)}<span>设置</span>`;
+// Dock 图标
+document.querySelector('.dock-icon[data-app="downloads"]').innerHTML = `${icon('download', 24)}<span class="label">下载</span>`;
+document.querySelector('.dock-icon[data-app="browse"]').innerHTML = `${icon('playRect', 24)}<span class="label">浏览</span>`;
+document.querySelector('.dock-icon[data-app="settings"]').innerHTML = `${icon('gear', 24)}<span class="label">设置</span>`;
 
 applyTheme();
 renderSettingsForm();
 bindSettingsForm();
-initTabs();
+ensureOpen('downloads');
 loadTasks();
 
-// toast 样式（避免与页面样式混在一起）
+// toast 样式
 const style = document.createElement('style');
 style.textContent = `
   .toast {
-    position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%) translateY(16px);
+    position: fixed; left: 50%; bottom: 96px; transform: translateX(-50%) translateY(16px);
     background: rgba(28,28,30,0.92); color: #fff; font-size: 14px; font-weight: 500;
     padding: 11px 20px; border-radius: 24px; opacity: 0; pointer-events: none;
-    transition: all 0.25s ease; z-index: 200; max-width: 86vw; text-align: center;
+    transition: all 0.25s ease; z-index: 1200; max-width: 86vw; text-align: center;
     backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
     box-shadow: 0 8px 32px rgba(0,0,0,0.35);
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.error { background: rgba(255,59,48,0.95); }
+  .segmented {
+    display: flex; gap: 2px; padding: 2px;
+    background: var(--fill); border-radius: 9px;
+  }
+  .segmented button {
+    padding: 6px 12px; border-radius: 7px;
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    transition: all 0.18s ease;
+  }
+  .segmented button.active {
+    background: var(--card); color: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+  }
 `;
 document.head.appendChild(style);
 </script>

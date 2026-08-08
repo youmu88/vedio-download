@@ -20,6 +20,7 @@ import { isPermanentError } from './errors.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../data');
 const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 // 确保 data 目录存在
 if (!fs.existsSync(DATA_DIR)) {
@@ -40,12 +41,12 @@ const DEFAULT_MAX_RETRIES = 3;
 const BACKOFF_BASE_MS = 1000; // 退避基数 1 秒
 
 class TaskManager extends EventEmitter {
-  constructor(maxConcurrent = 2) {
+  constructor(maxConcurrent = null) {
     super();
     this.tasks = new Map();          // taskId → task 对象
     this.queue = [];                 // 等待队列（created 状态的任务 ID）
     this.running = new Set();        // 正在执行的任务 ID 集合
-    this.maxConcurrent = maxConcurrent;
+    this.maxConcurrent = maxConcurrent || this._loadSettings().maxConcurrent || 3; // 默认并行下载 3
     this._saveTimer = null;          // 持久化防抖定时器
 
     // 启动时从持久化文件恢复
@@ -117,6 +118,49 @@ class TaskManager extends EventEmitter {
     return [...this.tasks.values()].sort(
       (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
     );
+  }
+
+  // ═══════════════════════════════════════════════════
+  // 服务端设置（并行下载数）
+  // ═══════════════════════════════════════════════════
+
+  /**
+   * 获取当前并行下载数
+   */
+  getMaxConcurrent() {
+    return this.maxConcurrent;
+  }
+
+  /**
+   * 设置并行下载数（1～10），持久化并立即生效
+   * @returns {number} 生效后的值
+   */
+  setMaxConcurrent(n) {
+    const value = Math.min(10, Math.max(1, parseInt(n, 10) || 3));
+    this.maxConcurrent = value;
+    this._saveSettings();
+    return value;
+  }
+
+  _loadSettings() {
+    try {
+      if (!fs.existsSync(SETTINGS_FILE)) return {};
+      const raw = fs.readFileSync(SETTINGS_FILE, 'utf-8');
+      const data = JSON.parse(raw);
+      return data && typeof data === 'object' ? data : {};
+    } catch {
+      return {};
+    }
+  }
+
+  _saveSettings() {
+    try {
+      const tmpFile = `${SETTINGS_FILE}.tmp`;
+      fs.writeFileSync(tmpFile, JSON.stringify({ maxConcurrent: this.maxConcurrent }, null, 2), 'utf-8');
+      fs.renameSync(tmpFile, SETTINGS_FILE);
+    } catch (err) {
+      console.error('[Persistence] 设置写入失败:', err.message);
+    }
   }
 
   /**

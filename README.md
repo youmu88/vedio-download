@@ -12,9 +12,13 @@
 - 全局/单任务限速、真实带宽统计、磁盘空间预检
 - 断点续跑：停止任务后重试，已下载分片自动跳过
 - 浏览器池复用（cookie/代理按任务注入）、SSRF 全链路防护、可选 API Token
-- iOS/macOS 风格三页界面（下载 / 浏览 / 设置），浅色深色主题自动跟随
+- macOS 风格桌面界面：底部 Dock + 下载/浏览/设置三个 App 窗口
+  - 红黄绿交通灯（关闭/最小化/全屏）、双击标题栏最大化、窗口可拖动
+  - 最大化时窗口下沿紧贴 Dock；全屏时隐藏 Dock
+  - 移动端自动切换为全屏窗口布局
 - 浏览页：本地视频库、在线 m3u8/mp4 播放（hls.js）、播放记录与自动续播
 - 前端资源全部本地化（socket.io / hls.js，无 CDN 依赖）、下载默认参数可在设置页配置
+- 并行下载数（1～10，默认 3）服务端持久化，设置后立即生效
 
 ## 快速开始
 
@@ -42,6 +46,8 @@ npm start
 | `LOG_LEVEL` | `info` | pino 日志级别 |
 | `AUTO_START_QUEUE` | `1` | `0` 时进入待命模式：启动后不自动处理任务队列（维护/调试用） |
 
+服务端设置持久化在 `data/settings.json`（当前为并行下载数）。
+
 ## API 摘要
 
 - `POST /api/download` — 创建任务 `{ url, cookies?, injectScript?, maxSpeed?, proxy? }`
@@ -54,6 +60,7 @@ npm start
 - `GET /api/health` — 健康检查（含队列/浏览器池/引擎/磁盘）
 - `GET /api/stats` — 统计
 - `GET /api/library` — 已下载视频库（文件列表，供浏览页播放）
+- `GET/POST /api/settings` — 读取/更新服务端设置（并行下载数 1～10）
 
 ## 部署
 

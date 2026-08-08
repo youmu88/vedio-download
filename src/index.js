@@ -193,6 +193,7 @@ app.get('/api/health', (_req, res) => {
     tasks: {
       total: tasks.length,
       queued: taskManager.queue.length,
+      maxConcurrent: taskManager.getMaxConcurrent(),
       running: tasks.filter(t => t.status === TaskStatus.RUNNING).length,
       completed: tasks.filter(t => t.status === TaskStatus.COMPLETED).length,
       failed: tasks.filter(t => t.status === TaskStatus.FAILED).length,
@@ -311,6 +312,27 @@ app.get('/api/library', (_req, res) => {
     return res.status(500).json({ error: `读取视频库失败: ${err.message}` });
   }
   res.json(files);
+});
+
+/**
+ * GET /api/settings — 读取服务端设置
+ */
+app.get('/api/settings', (_req, res) => {
+  res.json({ maxConcurrent: taskManager.getMaxConcurrent() });
+});
+
+/**
+ * POST /api/settings — 更新服务端设置（并行下载数 1～10）
+ */
+app.post('/api/settings', (req, res) => {
+  const { maxConcurrent } = req.body || {};
+  const value = parseInt(maxConcurrent, 10);
+  if (isNaN(value) || value < 1 || value > 10) {
+    return res.status(400).json({ error: '并行下载数需在 1～10 之间' });
+  }
+  const applied = taskManager.setMaxConcurrent(value);
+  log.info({ maxConcurrent: applied }, '更新并行下载数');
+  res.json({ ok: true, maxConcurrent: applied });
 });
 
 /**
