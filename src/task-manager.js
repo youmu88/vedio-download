@@ -18,7 +18,8 @@ import { fileURLToPath } from 'url';
 import { isPermanentError } from './errors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA_DIR = path.resolve(__dirname, '../data');
+// ⭐ 数据目录支持环境变量覆盖：测试/隔离环境可用 VD_DATA_DIR 指向独立目录，避免污染真实数据
+const DATA_DIR = process.env.VD_DATA_DIR ? path.resolve(process.env.VD_DATA_DIR) : path.resolve(__dirname, '../data');
 const TASKS_FILE = path.join(DATA_DIR, 'tasks.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 

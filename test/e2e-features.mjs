@@ -1,10 +1,17 @@
 /**
- * 行为级验证脚本 — Playwright 驱动真实浏览器验证 4 项新功能
+ * 行为级验证脚本 — Playwright 驱动真实浏览器验证功能
+ * ⭐ 自启隔离实例：独立端口 + 独立数据目录（VD_DATA_DIR），绝不污染真实 data/
  * 运行：node test/e2e-features.mjs
  */
 import { chromium } from 'playwright';
+import { spawn } from 'child_process';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
-const BASE = 'http://localhost:3456';
+const TEST_PORT = 3499;
+const TEST_DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'vd-e2e-'));
+const BASE = `http://localhost:${TEST_PORT}`;
 let passed = 0, failed = 0;
 const results = [];
 
@@ -14,12 +21,33 @@ function check(name, ok, detail = '') {
   results.push({ name, ok, detail });
 }
 
+// ── 启动隔离测试实例（独立数据目录 + 独立端口） ──
+const server = spawn('node', ['src/index.js'], {
+  cwd: path.resolve(process.cwd()),
+  env: { ...process.env, PORT: String(TEST_PORT), VD_DATA_DIR: TEST_DATA_DIR },
+  stdio: 'pipe',
+});
+server.stdout.on('data', () => {});
+server.stderr.on('data', () => {});
+async function waitForServer() {
+  for (let i = 0; i < 40; i++) {
+    try {
+      const r = await fetch(`${BASE}/api/health`);
+      if (r.ok) return true;
+    } catch {}
+    await new Promise(r => setTimeout(r, 300));
+  }
+  return false;
+}
+
 const browser = await chromium.launch({ headless: true });
 const page = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 page.on('pageerror', (e) => { console.log('  ⚠️ 页面JS错误:', e.message); });
 page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('favicon')) console.log('  ⚠️ console.error:', m.text()); });
 
 try {
+  if (!await waitForServer()) { throw new Error('隔离测试实例启动失败'); }
+  console.log(`  🔌 隔离实例已启动: :${TEST_PORT} 数据目录=${TEST_DATA_DIR}`);
   await page.goto(BASE, { waitUntil: 'networkidle', timeout: 15000 });
   await page.waitForTimeout(800);
 
@@ -240,6 +268,9 @@ try {
   failed++;
 } finally {
   await browser.close();
+  // 关闭隔离测试实例并清理临时数据目录（不污染真实 data/）
+  try { server.kill('SIGTERM'); } catch {}
+  try { fs.rmSync(TEST_DATA_DIR, { recursive: true, force: true }); } catch {}
 }
 
 console.log(`\n════ 结果: ${passed} 通过 / ${failed} 失败 ════`);
