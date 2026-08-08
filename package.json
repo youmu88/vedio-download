@@ -9,18 +9,25 @@
     "dev": "node --watch src/index.js",
     "test": "node --check src/index.js && node --check src/m3u8-interceptor.js && node --check src/downloader.js && node --check src/task-manager.js && node --check src/js-downloader.js && node --check src/browser-pool.js && node --check src/security.js && node --test test/*.test.js && echo '✅ 全部检查通过'"
   },
-  "keywords": ["video", "download", "m3u8", "playwright", "automation"],
+  "keywords": [
+    "video",
+    "download",
+    "m3u8",
+    "playwright",
+    "automation"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "cors": "^2.8.6",
     "express": "^5.2.1",
-    "playwright": "^1.59.1",
-    "socket.io": "^4.8.3",
-    "uuid": "^14.0.0",
+    "express-rate-limit": "^7.5.0",
+    "hls.js": "^1.6.17",
+    "node-fetch": "^3.3.2",
     "pino": "^9.6.0",
     "pino-pretty": "^13.0.0",
-    "express-rate-limit": "^7.5.0",
-    "node-fetch": "^3.3.2"
+    "playwright": "^1.59.1",
+    "socket.io": "^4.8.3",
+    "uuid": "^14.0.0"
   }
 }

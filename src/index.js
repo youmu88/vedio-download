@@ -102,6 +102,7 @@ const downloadLimiter = rateLimit({
 // ─── 静态文件服务 ──────────────────────────────────
 // 前端资源本地化（socket.io client 从 node_modules 提供，避免 CDN 依赖）
 app.use('/vendor/socket.io', express.static(path.join(__dirname, '../node_modules/socket.io/client-dist')));
+app.use('/vendor/hls.js', express.static(path.join(__dirname, '../node_modules/hls.js/dist')));
 app.use(express.static(path.join(__dirname, '../public')));
 
 // 下载文件保护：DOWNLOADS_AUTH=1 + API_TOKEN 时需鉴权
@@ -276,6 +277,40 @@ app.post('/api/download/advanced', downloadLimiter, async (req, res) => {
  */
 app.get('/api/tasks', (_req, res) => {
   res.json(taskManager.listAll());
+});
+
+/**
+ * GET /api/library — 已下载视频库（供“浏览”页播放）
+ */
+app.get('/api/library', (_req, res) => {
+  const dir = path.join(__dirname, '../downloads');
+  const runningIds = new Set(
+    taskManager.listAll()
+      .filter(t => [TaskStatus.CREATED, TaskStatus.RUNNING].includes(t.status))
+      .map(t => t.id)
+  );
+  let files = [];
+  try {
+    files = fs.readdirSync(dir)
+      .filter((name) => {
+        if (name.startsWith('.')) return false;
+        if (name.endsWith('.part')) return false;
+        if (runningIds.has(name) || [...runningIds].some(id => name.startsWith(`${id}.`))) return false;
+        const p = path.join(dir, name);
+        let stat;
+        try { stat = fs.statSync(p); } catch { return false; }
+        return stat.isFile();
+      })
+      .map((name) => {
+        const p = path.join(dir, name);
+        const stat = fs.statSync(p);
+        return { name, size: stat.size, mtime: stat.mtimeMs };
+      })
+      .sort((a, b) => b.mtime - a.mtime);
+  } catch (err) {
+    return res.status(500).json({ error: `读取视频库失败: ${err.message}` });
+  }
+  res.json(files);
 });
 
 /**
@@ -634,7 +669,10 @@ httpServer.listen(PORT, () => {
   }
 
   // 恢复上次未完成任务（重启后 running → created 已重新入队）
-  scheduleNext();
+  // AUTO_START_QUEUE=0 可进入“待命模式”，不自动处理队列（维护/调试用）
+  if (process.env.AUTO_START_QUEUE !== '0') {
+    scheduleNext();
+  }
 });
 
 // ⭐ 优雅关闭：释放 BrowserPool，清理子进程，防止僵尸 Chromium

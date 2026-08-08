@@ -2,1144 +2,945 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>🎬 DMXQ 视频下载器</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#F2F2F7">
+<title>视频下载器</title>
 <script src="/vendor/socket.io/socket.io.min.js"></script>
+<script src="/vendor/hls.js/hls.min.js"></script>
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  /* ── Apple 设计语言基础 ───────────────────────── */
   :root {
-    --bg: #0f0f14;
-    --surface: rgba(255,255,255,0.04);
-    --surface-hover: rgba(255,255,255,0.08);
-    --border: rgba(255,255,255,0.08);
-    --text: #e8e8ed;
-    --text-secondary: #9898a8;
-    --accent: #5b9aff;
-    --accent-hover: #4a7de8;
-    --green: #34d399;
-    --yellow: #fbbf24;
-    --red: #f87171;
+    --accent: #007AFF;
+    --accent-press: #0062CC;
+    --green: #34C759;
+    --red: #FF3B30;
+    --orange: #FF9500;
+    --gray: #8E8E93;
+    --bg: #F2F2F7;
+    --card: #FFFFFF;
+    --fill: rgba(120, 120, 128, 0.12);
+    --fill-strong: rgba(120, 120, 128, 0.22);
+    --separator: rgba(60, 60, 67, 0.16);
+    --text: #000000;
+    --text2: rgba(60, 60, 67, 0.6);
+    --text3: rgba(60, 60, 67, 0.32);
+    --toolbar: rgba(246, 246, 250, 0.78);
+    --shadow: 0 1px 2px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08);
     --radius: 12px;
-    --radius-sm: 8px;
-    --shadow: 0 8px 32px rgba(0,0,0,0.4);
   }
+  [data-theme="dark"] {
+    --bg: #000000;
+    --card: #1C1C1E;
+    --fill: rgba(120, 120, 128, 0.24);
+    --fill-strong: rgba(120, 120, 128, 0.34);
+    --separator: rgba(84, 84, 88, 0.6);
+    --text: #FFFFFF;
+    --text2: rgba(235, 235, 245, 0.6);
+    --text3: rgba(235, 235, 245, 0.3);
+    --toolbar: rgba(18, 18, 20, 0.78);
+    --shadow: 0 1px 2px rgba(0,0,0,0.4), 0 8px 24px rgba(0,0,0,0.5);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; }
   body {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
     background: var(--bg);
     color: var(--text);
-    min-height: 100vh;
-    display: flex;
-    justify-content: center;
-    padding: 40px 20px;
+    -webkit-font-smoothing: antialiased;
+    transition: background 0.25s ease, color 0.25s ease;
   }
-  .container {
-    width: 100%;
-    max-width: 720px;
+  button { font-family: inherit; border: none; background: none; color: inherit; cursor: pointer; }
+  input, select { font-family: inherit; }
+  ::placeholder { color: var(--text3); }
+
+  .app { max-width: 920px; margin: 0 auto; padding: 0 18px 90px; }
+
+  /* ── 顶部工具栏（macOS 风格） ─────────────────── */
+  .toolbar {
+    position: sticky; top: 0; z-index: 50;
+    display: flex; align-items: center; gap: 16px;
+    padding: 14px 4px 12px;
+    background: var(--toolbar);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-bottom: 0.5px solid var(--separator);
+    margin-bottom: 20px;
+  }
+  .toolbar-title { font-size: 17px; font-weight: 700; letter-spacing: -0.2px; }
+  .toolbar-spacer { flex: 1; }
+  .conn-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--gray); box-shadow: 0 0 0 3px var(--fill); }
+  .conn-dot.on { background: var(--green); }
+  .conn-dot.off { background: var(--red); }
+
+  .segmented {
+    display: flex; gap: 2px; padding: 2px;
+    background: var(--fill); border-radius: 9px;
+  }
+  .segmented button {
+    padding: 6px 16px; border-radius: 7px;
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    transition: all 0.18s ease;
+  }
+  .segmented button.active {
+    background: var(--card); color: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
   }
 
-  /* Header */
-  .header {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 32px;
+  /* ── 页面切换 ────────────────────────────────── */
+  .page { display: none; animation: pageIn 0.22s ease; }
+  .page.active { display: block; }
+  @keyframes pageIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+
+  /* ── 分组列表（iOS grouped list） ────────────── */
+  .group-title {
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    text-transform: uppercase; letter-spacing: 0.4px;
+    margin: 22px 16px 6px;
   }
-  .header h1 {
-    font-size: 24px;
-    font-weight: 700;
-    background: linear-gradient(135deg, #5b9aff, #a78bfa);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
+  .group { background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+  .row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; min-height: 50px;
+    border-bottom: 0.5px solid var(--separator);
   }
-  .header .badge {
-    background: rgba(91,154,255,0.15);
-    color: var(--accent);
-    font-size: 11px;
-    padding: 2px 10px;
-    border-radius: 20px;
-    font-weight: 600;
+  .row:last-child { border-bottom: none; }
+  .row-label { flex: 1; font-size: 15px; }
+  .row-hint { font-size: 13px; color: var(--text2); }
+  .row-chevron { color: var(--text3); font-size: 14px; }
+
+  .form-row { display: flex; gap: 10px; padding: 14px; }
+  .text-input {
+    flex: 1; min-width: 0;
+    background: var(--fill); border-radius: 10px;
+    padding: 11px 14px; font-size: 15px; color: var(--text);
+    border: 1px solid transparent; outline: none;
+    transition: border 0.15s ease, background 0.15s ease;
   }
-  .status-dot {
-    display: inline-block;
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    margin-right: 6px;
-  }
-  .status-dot.connected { background: var(--green); box-shadow: 0 0 8px var(--green); }
-  .status-dot.disconnected { background: var(--red); box-shadow: 0 0 8px var(--red); }
-  .connection-status {
-    margin-left: auto;
-    font-size: 12px;
-    color: var(--text-secondary);
-    display: flex;
-    align-items: center;
+  .text-input:focus { border-color: var(--accent); background: var(--card); }
+  select.text-input { appearance: none; -webkit-appearance: none; padding-right: 28px;
+    background-image: linear-gradient(45deg, transparent 50%, var(--text3) 50%), linear-gradient(135deg, var(--text3) 50%, transparent 50%);
+    background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+    background-size: 5px 5px; background-repeat: no-repeat;
   }
 
-  /* Input Area */
-  .input-area {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px 24px;
-    backdrop-filter: blur(20px);
-    margin-bottom: 28px;
-    transition: border-color 0.2s;
+  .btn-primary {
+    display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+    background: var(--accent); color: #fff; font-size: 15px; font-weight: 600;
+    padding: 11px 22px; border-radius: 10px; white-space: nowrap;
+    transition: background 0.15s ease, transform 0.08s ease;
   }
-  .input-area:focus-within {
-    border-color: var(--accent);
-  }
-  .input-row {
-    display: flex;
-    gap: 12px;
-  }
-  .input-row input {
-    flex: 1;
-    background: rgba(0,0,0,0.3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 12px 16px;
-    font-size: 14px;
-    color: var(--text);
-    outline: none;
-    transition: border-color 0.2s;
-  }
-  .input-row input::placeholder { color: var(--text-secondary); }
-  .input-row input:focus { border-color: var(--accent); }
-  .input-row .btn-download {
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    border-radius: var(--radius-sm);
-    padding: 12px 28px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .input-row .btn-download:hover { background: var(--accent-hover); transform: translateY(-1px); }
-  .input-row .btn-download:active { transform: translateY(0); }
-  .input-row .btn-download:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-    transform: none;
-  }
-  .input-hint {
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-top: 10px;
-  }
-  .advanced-options {
-    margin-top: 12px;
-    font-size: 13px;
-    color: var(--text-secondary);
-  }
-  .advanced-options summary {
-    cursor: pointer;
-    user-select: none;
-    color: var(--accent);
-  }
-  .advanced-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-    gap: 10px;
-    margin-top: 12px;
-    padding: 12px;
-    background: rgba(0,0,0,0.2);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-  }
-  .advanced-grid label {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-  }
-  .advanced-grid select,
-  .advanced-grid input[type="number"] {
-    background: rgba(0,0,0,0.3);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 8px;
-    color: var(--text);
-    font-size: 13px;
-  }
-  .advanced-grid .checkbox-label {
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-    align-self: end;
-  }
+  .btn-primary:active { background: var(--accent-press); transform: scale(0.97); }
+  .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  /* Section Title */
-  .section-title {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 15px;
-    font-weight: 600;
-    margin-bottom: 16px;
-    color: var(--text-secondary);
+  .icon-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 32px; height: 32px; border-radius: 8px; color: var(--accent);
+    transition: background 0.15s ease;
   }
-  .section-title .count {
-    margin-left: auto;
-    font-size: 13px;
-    background: var(--surface);
-    padding: 2px 10px;
-    border-radius: 20px;
-  }
+  .icon-btn:hover { background: var(--fill); }
+  .icon-btn.danger { color: var(--red); }
+  .icon-btn.green { color: var(--green); }
 
-  /* Batch Action Bar */
-  .batch-bar {
-    display: none;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 16px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    margin-bottom: 12px;
-    font-size: 13px;
+  /* ── 任务列表 ────────────────────────────────── */
+  .task-row { align-items: flex-start; padding: 14px 16px; }
+  .task-icon {
+    width: 34px; height: 34px; border-radius: 9px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--fill); color: var(--text2); font-size: 16px;
   }
-  .batch-bar.visible { display: flex; }
-  .batch-bar .selected-count {
-    color: var(--text-secondary);
-    margin-right: auto;
-  }
-  .batch-bar .batch-btn {
-    border: none;
-    border-radius: var(--radius-sm);
-    padding: 6px 16px;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .batch-btn.retry {
-    background: rgba(91,154,255,0.15);
-    color: var(--accent);
-  }
-  .batch-btn.retry:hover { background: rgba(91,154,255,0.25); }
-  .batch-btn.delete {
-    background: rgba(248,113,113,0.12);
-    color: var(--red);
-  }
-  .batch-btn.delete:hover { background: rgba(248,113,113,0.22); }
-  .batch-btn.select-all {
-    background: rgba(52,211,153,0.12);
-    color: var(--green);
-  }
-  .batch-btn.select-all:hover { background: rgba(52,211,153,0.22); }
-  .batch-btn.cancel {
-    background: rgba(255,255,255,0.06);
-    color: var(--text-secondary);
-  }
-  .batch-btn.cancel:hover { background: rgba(255,255,255,0.1); }
+  .task-icon.running { background: rgba(0,122,255,0.14); color: var(--accent); animation: pulse 1.2s infinite; }
+  .task-icon.completed { background: rgba(52,199,89,0.14); color: var(--green); }
+  .task-icon.failed { background: rgba(255,59,48,0.14); color: var(--red); }
+  .task-icon.cancelled { background: rgba(255,149,0,0.14); color: var(--orange); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
 
-  /* Task List */
-  .task-list {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .task-card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px 24px;
-    backdrop-filter: blur(20px);
-    transition: all 0.2s;
-    position: relative;
-  }
-  .task-card:hover { border-color: rgba(255,255,255,0.15); }
-  .task-card.selected {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 1px var(--accent);
-  }
-
-  /* Checkbox */
-  .task-checkbox {
-    position: absolute;
-    top: 16px;
-    left: 16px;
-    width: 18px;
-    height: 18px;
-    border: 2px solid var(--border);
-    border-radius: 4px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: all 0.2s;
-    background: transparent;
-  }
-  .task-checkbox:hover { border-color: var(--text-secondary); }
-  .task-checkbox.checked {
-    background: var(--accent);
-    border-color: var(--accent);
-  }
-  .task-checkbox.checked::after {
-    content: '✓';
-    color: #fff;
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  .task-header {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 12px;
-    margin-left: 28px;
-  }
-  .task-status-icon {
-    width: 10px; height: 10px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-  .task-status-icon.pending { background: var(--text-secondary); }
-  .task-status-icon.capturing { background: var(--yellow); animation: pulse 1.2s infinite; }
-  .task-status-icon.downloading { background: var(--accent); animation: pulse 1.2s infinite; }
-  .task-status-icon.done { background: var(--green); }
-  .task-status-icon.failed { background: var(--red); }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-  }
+  .task-main { flex: 1; min-width: 0; }
   .task-url {
-    flex: 1;
-    font-size: 13px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-secondary);
+    font-size: 14px; font-weight: 600; color: var(--text);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
-  .task-status-label {
-    font-size: 12px;
-    font-weight: 600;
-    padding: 2px 10px;
-    border-radius: 20px;
-    background: rgba(255,255,255,0.06);
-  }
-  .task-status-label.pending { color: var(--text-secondary); }
-  .task-status-label.capturing { color: var(--yellow); }
-  .task-status-label.downloading { color: var(--accent); }
-  .task-status-label.done { color: var(--green); }
-  .task-status-label.failed { color: var(--red); }
+  .task-meta { display: flex; align-items: center; gap: 6px; margin-top: 3px; font-size: 12px; color: var(--text2); }
+  .task-message { margin-top: 5px; font-size: 12px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .task-progress { height: 5px; border-radius: 3px; background: var(--fill); margin-top: 8px; overflow: hidden; }
+  .task-progress > i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.25s ease; }
+  .task-progress > i.done { background: var(--green); }
+  .task-progress > i.failed { background: var(--red); }
+  .task-error { margin-top: 8px; font-size: 12px; color: var(--red); background: rgba(255,59,48,0.08); border-radius: 8px; padding: 8px 10px; word-break: break-all; }
+  .task-actions { display: flex; gap: 2px; flex-shrink: 0; }
+  .task-status { font-size: 11px; font-weight: 600; color: var(--text2); }
+  .task-status.running { color: var(--accent); }
+  .task-status.completed { color: var(--green); }
+  .task-status.failed { color: var(--red); }
+  .task-status.cancelled { color: var(--orange); }
 
-  .task-progress {
-    margin-bottom: 12px;
-    margin-left: 28px;
-  }
-  .progress-bar-bg {
-    width: 100%;
-    height: 6px;
-    background: rgba(255,255,255,0.06);
-    border-radius: 3px;
-    overflow: hidden;
-  }
-  .progress-bar-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.3s ease;
-    background: linear-gradient(90deg, var(--accent), #a78bfa);
-  }
-  .progress-bar-fill.done { background: linear-gradient(90deg, var(--green), #34d399); }
-  .progress-bar-fill.failed { background: var(--red); }
-  .progress-info {
-    display: flex;
-    justify-content: space-between;
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-top: 6px;
-  }
-  .progress-info .speed { color: var(--text-secondary); }
+  /* ── 浏览页：继续观看 / 视频库 ───────────────── */
+  .history-row { padding: 13px 16px; }
+  .history-main { flex: 1; min-width: 0; cursor: pointer; }
+  .history-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .history-meta { font-size: 12px; color: var(--text2); margin-top: 4px; }
+  .history-bar { height: 4px; border-radius: 2px; background: var(--fill); margin-top: 8px; overflow: hidden; }
+  .history-bar > i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
 
-  .task-actions {
-    display: flex;
-    gap: 8px;
-    justify-content: flex-end;
-    margin-left: 28px;
+  .library-grid {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    padding: 0 4px;
   }
-  .task-actions button {
-    border: none;
-    border-radius: var(--radius-sm);
-    padding: 6px 16px;
-    font-size: 12px;
-    font-weight: 500;
-    cursor: pointer;
-    transition: all 0.2s;
-  }
-  .btn-cancel {
-    background: rgba(248,113,113,0.12);
-    color: var(--red);
-  }
-  .btn-cancel:hover { background: rgba(248,113,113,0.2); }
-  .btn-retry {
-    background: rgba(91,154,255,0.12);
-    color: var(--accent);
-  }
-  .btn-retry:hover { background: rgba(91,154,255,0.2); }
-  .btn-delete-task {
-    background: rgba(248,113,113,0.12);
-    color: var(--red);
-  }
-  .btn-delete-task:hover { background: rgba(248,113,113,0.2); }
-  .btn-download-file {
-    background: rgba(52,211,153,0.12);
-    color: var(--green);
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-    padding: 6px 16px;
-    border-radius: var(--radius-sm);
-    font-size: 12px;
-    font-weight: 500;
-    transition: all 0.2s;
-  }
-  .btn-download-file:hover { background: rgba(52,211,153,0.2); }
-
-  .task-error {
-    font-size: 12px;
-    color: var(--red);
-    margin-top: 8px;
-    padding: 8px 12px;
-    background: rgba(248,113,113,0.08);
-    border-radius: var(--radius-sm);
-    word-break: break-all;
-    margin-left: 28px;
-  }
-
-  /* Phase labels - 双阶段进度 */
-  .phase-label {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 4px;
-    margin-bottom: 6px;
-    display: inline-block;
-    margin-left: 28px;
-  }
-  .phase-label.preparing { background: rgba(251,191,36,0.15); color: var(--yellow); }
-  .phase-label.preparing_done { background: rgba(52,211,153,0.12); color: var(--green); }
-  .phase-label.downloading { background: rgba(91,154,255,0.15); color: var(--accent); }
-  .phase-label.done { background: rgba(52,211,153,0.12); color: var(--green); }
-  .phase-label.failed { background: rgba(248,113,113,0.12); color: var(--red); }
-
-  /* 进度信息加强 */
-  .progress-message {
-    font-size: 12px;
-    color: var(--text-secondary);
-    margin-top: 4px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .empty-state {
-    text-align: center;
-    padding: 48px 20px;
-    color: var(--text-secondary);
-  }
-  .empty-state .icon { font-size: 48px; margin-bottom: 12px; opacity: 0.5; }
-  .empty-state p { font-size: 14px; }
-
-  /* Toast */
-  .toast {
-    position: fixed;
-    bottom: 30px;
-    left: 50%;
-    transform: translateX(-50%) translateY(100px);
-    background: var(--surface);
-    backdrop-filter: blur(20px);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 12px 24px;
-    font-size: 14px;
-    color: var(--text);
+  .video-card { cursor: pointer; }
+  .video-thumb {
+    position: relative; aspect-ratio: 16/9; border-radius: 12px; overflow: hidden;
+    background: linear-gradient(135deg, #5AC8FA, #007AFF);
+    display: flex; align-items: center; justify-content: center;
     box-shadow: var(--shadow);
-    transition: transform 0.3s ease;
-    z-index: 999;
   }
-  .toast.show { transform: translateX(-50%) translateY(0); }
-  .toast.toast-error { border-color: var(--red); }
-  .toast.toast-success { border-color: var(--green); }
+  .video-thumb .play-badge {
+    width: 46px; height: 46px; border-radius: 50%;
+    background: rgba(255,255,255,0.9); color: var(--accent);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+  }
+  .video-card:nth-child(4n+2) .video-thumb { background: linear-gradient(135deg, #FF9F0A, #FF6482); }
+  .video-card:nth-child(4n+3) .video-thumb { background: linear-gradient(135deg, #32D74B, #30D158); }
+  .video-card:nth-child(4n+4) .video-thumb { background: linear-gradient(135deg, #BF5AF2, #6E5BFF); }
+  .video-name { font-size: 13px; font-weight: 600; margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .video-meta { font-size: 12px; color: var(--text2); margin-top: 2px; }
 
-  /* Select All Checkbox */
-  .select-all-area {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 12px;
-    padding: 8px 16px;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    font-size: 13px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: all 0.2s;
-    user-select: none;
+  .empty {
+    text-align: center; color: var(--text3); padding: 48px 20px;
+    font-size: 14px; line-height: 1.7;
   }
-  .select-all-area:hover {
-    background: var(--surface-hover);
-    border-color: rgba(255,255,255,0.15);
-  }
-  .select-all-area .task-checkbox {
-    position: static;
-    width: 18px;
-    height: 18px;
-    flex-shrink: 0;
-  }
-  .select-all-area .select-all-label {
-    flex: 1;
-  }
-  .select-all-area .select-all-hint {
-    font-size: 11px;
-    color: var(--text-secondary);
-    opacity: 0.6;
-  }
+  .empty .big { font-size: 44px; margin-bottom: 8px; }
 
-  @media (max-width: 600px) {
-    body { padding: 20px 12px; }
-    .input-row { flex-direction: column; }
-    .input-row .btn-download { justify-content: center; }
-    .task-card { padding: 16px; }
-    .header h1 { font-size: 20px; }
-    .task-header, .task-progress, .task-actions, .task-error, .phase-label {
-      margin-left: 0;
-    }
+  /* ── 设置页 ──────────────────────────────────── */
+  .setting-row { min-height: 52px; }
+  .setting-row .row-label small { display: block; font-size: 12px; color: var(--text2); margin-top: 2px; font-weight: 400; }
+  .switch { position: relative; width: 51px; height: 31px; flex-shrink: 0; }
+  .switch input { display: none; }
+  .switch .track {
+    position: absolute; inset: 0; background: var(--fill-strong);
+    border-radius: 16px; transition: background 0.2s ease;
+  }
+  .switch .thumb {
+    position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%;
+    background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+    transition: transform 0.2s cubic-bezier(0.3, 1.2, 0.5, 1);
+  }
+  .switch input:checked + .track { background: var(--green); }
+  .switch input:checked + .track + .thumb { transform: translateX(20px); }
+  .num-input {
+    width: 68px; text-align: center; background: var(--fill); border: none; border-radius: 8px;
+    padding: 7px 4px; font-size: 14px; color: var(--text); outline: none;
+  }
+  .num-input:focus { box-shadow: 0 0 0 3px rgba(0,122,255,0.25); }
+
+  .status-row { justify-content: space-between; }
+  .status-value { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 500; }
+  .status-dot { width: 8px; height: 8px; border-radius: 50%; }
+  .status-dot.ok { background: var(--green); }
+  .status-dot.no { background: var(--red); }
+  .status-dot.mid { background: var(--orange); }
+
+  .footer-note { text-align: center; font-size: 12px; color: var(--text3); margin-top: 28px; }
+
+  /* ── 播放器 ──────────────────────────────────── */
+  .player {
+    position: fixed; inset: 0; z-index: 100;
+    background: rgba(0,0,0,0.92);
+    backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
+    display: flex; flex-direction: column;
+    animation: playerIn 0.25s ease;
+  }
+  .player[hidden] { display: none; }
+  @keyframes playerIn { from { opacity: 0; } to { opacity: 1; } }
+  .player-bar {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 18px; padding-top: max(12px, env(safe-area-inset-top));
+    color: #fff;
+  }
+  .player-back {
+    width: 34px; height: 34px; border-radius: 50%; color: #fff; font-size: 20px;
+    background: rgba(255,255,255,0.12); display: flex; align-items: center; justify-content: center;
+  }
+  .player-title { flex: 1; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .player-video-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 12px; min-height: 0; }
+  .player-video-wrap video {
+    max-width: 100%; max-height: 100%; border-radius: 12px;
+    background: #000; box-shadow: 0 12px 48px rgba(0,0,0,0.6);
+  }
+  .player-error { color: #FF6B6B; font-size: 14px; text-align: center; padding: 20px; }
+
+  /* ── 移动端底部 TabBar（iOS 风格） ───────────── */
+  .tabbar {
+    display: none;
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 60;
+    background: var(--toolbar);
+    backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border-top: 0.5px solid var(--separator);
+    padding: 6px 10px calc(8px + env(safe-area-inset-bottom));
+  }
+  .tabbar-inner { display: flex; max-width: 480px; margin: 0 auto; }
+  .tabbar button {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 3px;
+    padding: 6px 0; border-radius: 10px; color: var(--gray); font-size: 10px; font-weight: 600;
+    transition: color 0.15s ease;
+  }
+  .tabbar button.active { color: var(--accent); }
+
+  @media (max-width: 700px) {
+    .app { padding: 0 14px 100px; }
+    .segmented-top { display: none; }
+    .tabbar { display: block; }
+    .toolbar { padding-top: max(12px, env(safe-area-inset-top)); }
   }
 </style>
 </head>
 <body>
+<div class="app">
 
-<div class="container">
-
-  <!-- Header -->
-  <div class="header">
-    <h1>🎬 视频下载器</h1>
-    <span class="badge">v1.0</span>
-    <div class="connection-status">
-      <span class="status-dot disconnected" id="connDot"></span>
-      <span id="connText">未连接</span>
+  <!-- 顶部工具栏 -->
+  <header class="toolbar">
+    <div class="toolbar-title">视频下载器</div>
+    <div class="segmented segmented-top" id="segTop">
+      <button data-page="downloads" class="active">下载</button>
+      <button data-page="browse">浏览</button>
+      <button data-page="settings">设置</button>
     </div>
-  </div>
+    <div class="toolbar-spacer"></div>
+    <span class="conn-dot off" id="connDot" title="连接状态"></span>
+  </header>
 
-  <!-- Input Area -->
-  <div class="input-area">
-    <div class="input-row">
-      <input type="url" id="urlInput" placeholder="粘贴视频播放页 URL，例如 https://www.dmxq.info/vodplay/xxx.html" autocomplete="url" spellcheck="false">
-      <button class="btn-download" id="downloadBtn" onclick="submitDownload()">
-        <span>⬇</span> 下载
-      </button>
-    </div>
-    <details class="advanced-options" id="advancedOptions">
-      <summary>⚙ 高级选项</summary>
-      <div class="advanced-grid">
-        <label>下载引擎
-          <select id="engineSelect">
-            <option value="auto" selected>自动选择</option>
+  <main>
+    <!-- ═══════ 下载页 ═══════ -->
+    <section class="page active" id="page-downloads">
+      <div class="group">
+        <div class="form-row">
+          <input class="text-input" id="urlInput" type="url" placeholder="粘贴视频播放页 URL 或 m3u8/mp4 直链" autocomplete="url" spellcheck="false">
+          <button class="btn-primary" id="downloadBtn">下载</button>
+        </div>
+      </div>
+      <div class="group-title">任务列表 <span id="taskCount" style="text-transform:none;"></span></div>
+      <div class="group" id="taskList">
+        <div class="empty"><div class="big">📥</div>还没有下载任务</div>
+      </div>
+    </section>
+
+    <!-- ═══════ 浏览页 ═══════ -->
+    <section class="page" id="page-browse">
+      <div class="group-title">继续观看</div>
+      <div class="group" id="historyList">
+        <div class="empty"><div class="big">▶️</div>暂无播放记录</div>
+      </div>
+
+      <div class="group-title">在线播放</div>
+      <div class="group">
+        <div class="form-row">
+          <input class="text-input" id="playUrlInput" type="url" placeholder="粘贴 m3u8 / mp4 链接直接播放" spellcheck="false">
+          <button class="btn-primary" id="playUrlBtn">播放</button>
+        </div>
+      </div>
+
+      <div class="group-title">视频库 <span id="libraryCount" style="text-transform:none;"></span></div>
+      <div class="library-grid" id="libraryGrid">
+        <div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>
+      </div>
+    </section>
+
+    <!-- ═══════ 设置页 ═══════ -->
+    <section class="page" id="page-settings">
+      <div class="group-title">外观</div>
+      <div class="group">
+        <div class="row setting-row">
+          <div class="row-label">主题<small>跟随系统 / 浅色 / 深色</small></div>
+          <div class="segmented" id="themeSeg">
+            <button data-theme="auto">自动</button>
+            <button data-theme="light">浅色</button>
+            <button data-theme="dark">深色</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="group-title">下载默认设置</div>
+      <div class="group">
+        <div class="row setting-row">
+          <div class="row-label">下载引擎<small>N_m3u8DL-RE → ffmpeg → JS</small></div>
+          <select class="text-input" id="engineSelect" style="width:130px;">
+            <option value="auto">自动选择</option>
             <option value="n_m3u8dl_re">N_m3u8DL-RE</option>
             <option value="ffmpeg">ffmpeg</option>
             <option value="js">JS 原生</option>
           </select>
-        </label>
-        <label>输出格式
-          <select id="formatSelect">
-            <option value="auto" selected>自动</option>
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">输出格式</div>
+          <select class="text-input" id="formatSelect" style="width:110px;">
+            <option value="auto">自动</option>
             <option value="mp4">MP4</option>
             <option value="ts">TS</option>
             <option value="mkv">MKV</option>
           </select>
-        </label>
-        <label>并行分片
-          <input type="number" id="parallelCountInput" min="1" max="16" value="4">
-        </label>
-        <label>限速 (MB/s)
-          <input type="number" id="maxSpeedInput" min="0" step="0.5" value="0" placeholder="0=不限速">
-        </label>
-        <label>超时 (分钟)
-          <input type="number" id="timeoutInput" min="1" max="600" value="30">
-        </label>
-        <label class="checkbox-label">
-          <input type="checkbox" id="parallelCheck"> 启用并行分片
-        </label>
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">并行分片下载<small>HLS 分片并发加速</small></div>
+          <label class="switch"><input type="checkbox" id="parallelSwitch"><span class="track"></span><span class="thumb"></span></label>
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">分片并发数</div>
+          <input class="num-input" id="parallelCountInput" type="number" min="1" max="16" value="4">
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">单任务限速<small>MB/s，0 表示不限速</small></div>
+          <input class="num-input" id="maxSpeedInput" type="number" min="0" step="0.5" value="0">
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">下载超时<small>分钟</small></div>
+          <input class="num-input" id="timeoutInput" type="number" min="1" max="600" value="30">
+        </div>
       </div>
-    </details>
-    <div class="input-hint">🔗 支持 dmxq.info 等在线播放网站的页面链接，后台自动拦截视频流</div>
-  </div>
 
-  <!-- Batch Action Bar -->
-  <div class="batch-bar" id="batchBar">
-    <span class="selected-count">已选择 <strong id="selectedCount">0</strong> 个任务</span>
-    <button class="batch-btn select-all" onclick="toggleSelectAll()">✅ 全部选择</button>
-    <button class="batch-btn cancel" onclick="clearSelection()">取消选择</button>
-    <button class="batch-btn retry" onclick="batchRetry()">🔄 批量重试</button>
-    <button class="batch-btn delete" onclick="batchDelete()">🗑 批量删除</button>
-  </div>
+      <div class="group-title">服务状态</div>
+      <div class="group" id="healthGroup">
+        <div class="row status-row"><span class="row-label">运行时间</span><span class="status-value" id="healthUptime">—</span></div>
+        <div class="row status-row"><span class="row-label">队列 / 运行中</span><span class="status-value" id="healthQueue">—</span></div>
+        <div class="row status-row"><span class="row-label">ffmpeg / ffprobe</span><span class="status-value" id="healthEngines">—</span></div>
+        <div class="row status-row"><span class="row-label">N_m3u8DL-RE</span><span class="status-value" id="healthNre">—</span></div>
+        <div class="row status-row"><span class="row-label">磁盘空间</span><span class="status-value" id="healthDisk">—</span></div>
+        <div class="row"><button class="row-label" id="refreshHealth" style="color:var(--accent);text-align:left;">刷新状态</button></div>
+      </div>
 
-  <!-- Task List -->
-  <div class="section-title">
-    📋 任务列表
-    <span class="count" id="taskCount">0 个任务</span>
+      <div class="footer-note">视频下载器 v2.0 · Playwright 流拦截 + 多引擎下载</div>
+    </section>
+  </main>
+</div>
+
+<!-- 移动端底部 TabBar -->
+<nav class="tabbar">
+  <div class="tabbar-inner">
+    <button data-page="downloads" class="active" id="tabDownloads"></button>
+    <button data-page="browse" id="tabBrowse"></button>
+    <button data-page="settings" id="tabSettings"></button>
   </div>
-  <!-- 全选区域 -->
-  <div class="select-all-area" id="selectAllArea" onclick="toggleSelectAll()" style="display:none;">
-    <div class="task-checkbox" id="selectAllCheckbox"></div>
-    <span class="select-all-label">全选当前所有任务</span>
-    <span class="select-all-hint">点击复选框切换全选/取消全选</span>
+</nav>
+
+<!-- 播放器 -->
+<div class="player" id="player" hidden>
+  <div class="player-bar">
+    <button class="player-back" id="playerBack">‹</button>
+    <div class="player-title" id="playerTitle"></div>
+    <span class="conn-dot on"></span>
   </div>
-  <div class="task-list" id="taskList">
-    <div class="empty-state">
-      <div class="icon">📥</div>
-      <p>还没有下载任务</p>
-      <p style="font-size:12px;margin-top:4px;">在上方输入播放页 URL 开始下载</p>
-    </div>
+  <div class="player-video-wrap">
+    <video id="playerVideo" controls playsinline></video>
   </div>
 </div>
 
-<!-- Toast -->
-<div class="toast" id="toast"></div>
-
 <script>
-// ─── 常量 & 状态 ──────────────────────────────────
-const STATUS_MAP = {
-  created:   { label: '等待中',  icon: '⏳' },
-  running:   { label: '执行中',  icon: '🔍' },
-  completed: { label: '已完成',  icon: '✅' },
-  failed:    { label: '失败',    icon: '❌' },
-  cancelled: { label: '已停止',  icon: '⏹' },
+// ═══════════════════════════════════════════════════════
+// 工具函数
+// ═══════════════════════════════════════════════════════
+const $ = (id) => document.getElementById(id);
+const escapeHtml = (s) => {
+  if (!s) return '';
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
 };
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0, v = bytes;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+function formatTime(sec) {
+  if (!isFinite(sec) || sec < 0) return '00:00';
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const mm = String(m).padStart(2, '0'), ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+function formatDate(ts) {
+  const d = new Date(ts);
+  const now = new Date();
+  const diff = now - d;
+  if (diff < 60 * 1000) return '刚刚';
+  if (diff < 3600 * 1000) return `${Math.floor(diff / 60000)} 分钟前`;
+  if (diff < 24 * 3600 * 1000) return `${Math.floor(diff / 3600000)} 小时前`;
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
 
-// 已选中的任务 ID 集合
-const selectedTasks = new Set();
+// ═══════════════════════════════════════════════════════
+// 图标（内联 SVG，Apple 风格）
+// ═══════════════════════════════════════════════════════
+function icon(name, size = 18) {
+  const paths = {
+    download: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 8.5v6m0 0l-2.4-2.4M12 14.5l2.4-2.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    play: '<path d="M8 5.5v13l11-6.5z" fill="currentColor"/>',
+    playRect: '<rect x="3" y="5" width="18" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 9.2v5.6l4.8-2.8z" fill="currentColor"/>',
+    gear: '<circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2.8l1 2.2 2.4-.6 1 2.1 2.3.8-.3 2.4 2 1.2-1.5 1.9 1.5 1.9-2 1.2.3 2.4-2.3.8-1 2.1-2.4-.6-1 2.2-1-2.2-2.4.6-1-2.1-2.3-.8.3-2.4-2-1.2 1.5-1.9L2.3 12l2-1.2-.3-2.4 2.3-.8 1-2.1 2.4.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
+    stop: '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/>',
+    retry: '<path d="M4.5 12a7.5 7.5 0 101.6-4.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M4.8 3.5v4.5h4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+    trash: '<path d="M4.5 6.5h15M9 6.5V4.8a1.3 1.3 0 011.3-1.3h3.4A1.3 1.3 0 0115 4.8v1.7m3 0l-.8 11a1.6 1.6 0 01-1.6 1.5H8.4a1.6 1.6 0 01-1.6-1.5l-.8-11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    dlFile: '<path d="M12 4v10m0 0l-3.4-3.4M12 14l3.4-3.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15.5V18a2 2 0 002 2h12a2 2 0 002-2v-2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+    xmark: '<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  };
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">${paths[name] || paths.play}</svg>`;
+}
 
-// ─── Socket.io 连接 ────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// 设置持久化
+// ═══════════════════════════════════════════════════════
+const SETTINGS_KEY = 'vd.settings.v2';
+const defaultSettings = {
+  theme: 'auto', engine: 'auto', format: 'auto',
+  parallel: false, parallelCount: 4, maxSpeedMB: 0, timeoutMin: 30,
+};
+function loadSettings() {
+  try { return { ...defaultSettings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
+  catch { return { ...defaultSettings }; }
+}
+function saveSettings() {
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+let settings = loadSettings();
+
+function applyTheme() {
+  const dark = settings.theme === 'dark' ||
+    (settings.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', dark ? '#000000' : '#F2F2F7');
+  document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('active', b.dataset.theme === settings.theme));
+}
+function renderSettingsForm() {
+  $('engineSelect').value = settings.engine;
+  $('formatSelect').value = settings.format;
+  $('parallelSwitch').checked = settings.parallel;
+  $('parallelCountInput').value = settings.parallelCount;
+  $('maxSpeedInput').value = settings.maxSpeedMB;
+  $('timeoutInput').value = settings.timeoutMin;
+}
+function bindSettingsForm() {
+  $('themeSeg').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    settings.theme = btn.dataset.theme;
+    saveSettings(); applyTheme();
+  });
+  $('engineSelect').addEventListener('change', (e) => { settings.engine = e.target.value; saveSettings(); });
+  $('formatSelect').addEventListener('change', (e) => { settings.format = e.target.value; saveSettings(); });
+  $('parallelSwitch').addEventListener('change', (e) => { settings.parallel = e.target.checked; saveSettings(); });
+  $('parallelCountInput').addEventListener('change', (e) => { settings.parallelCount = Math.min(16, Math.max(1, parseInt(e.target.value, 10) || 4)); e.target.value = settings.parallelCount; saveSettings(); });
+  $('maxSpeedInput').addEventListener('change', (e) => { settings.maxSpeedMB = Math.max(0, parseFloat(e.target.value) || 0); e.target.value = settings.maxSpeedMB; saveSettings(); });
+  $('timeoutInput').addEventListener('change', (e) => { settings.timeoutMin = Math.min(600, Math.max(1, parseInt(e.target.value, 10) || 30)); e.target.value = settings.timeoutMin; saveSettings(); });
+}
+
+// ═══════════════════════════════════════════════════════
+// 播放记录
+// ═══════════════════════════════════════════════════════
+const HISTORY_KEY = 'vd.history.v2';
+function loadHistory() {
+  try { return Array.isArray(JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]')) ? JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]') : []; }
+  catch { return []; }
+}
+let history = loadHistory();
+function saveHistory() {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
+}
+function upsertHistory(entry) {
+  history = history.filter(h => h.id !== entry.id);
+  history.unshift(entry);
+  saveHistory();
+  renderHistory();
+}
+function removeHistory(id) {
+  history = history.filter(h => h.id !== id);
+  saveHistory();
+  renderHistory();
+}
+
+// ═══════════════════════════════════════════════════════
+// 页面切换
+// ═══════════════════════════════════════════════════════
+function switchPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === `page-${name}`));
+  document.querySelectorAll('[data-page]').forEach(b => b.classList.toggle('active', b.dataset.page === name));
+  if (name === 'browse') { renderHistory(); loadLibrary(); }
+  if (name === 'settings') loadHealth();
+}
+
+// ═══════════════════════════════════════════════════════
+// Socket.IO 连接
+// ═══════════════════════════════════════════════════════
 const socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
-const connDot = document.getElementById('connDot');
-const connText = document.getElementById('connText');
+socket.on('connect', () => { $('connDot').className = 'conn-dot on'; loadTasks(); });
+socket.on('disconnect', () => { $('connDot').className = 'conn-dot off'; });
+socket.on('task-status', (task) => updateTaskCard(task));
+socket.on('task-list-update', (tasks) => renderTasks(tasks));
+socket.on('task-finalized', ({ taskId }) => socket.emit('unsubscribe', taskId));
 
-socket.on('connect', () => {
-  connDot.className = 'status-dot connected';
-  connText.textContent = '已连接';
-  connText.style.color = 'var(--green)';
-  loadTasks();
-});
-
-socket.on('disconnect', () => {
-  connDot.className = 'status-dot disconnected';
-  connText.textContent = '未连接';
-  connText.style.color = 'var(--red)';
-});
-
-socket.on('task-status', (task) => {
-  updateTaskCard(task);
-});
-
-socket.on('task-list-update', (tasks) => {
-  renderTaskList(tasks);
-});
-
-// ⭐ Socket.IO 房间清理：收到终态通知时自动退订，防止房间泄漏
-socket.on('task-finalized', ({ taskId }) => {
-  socket.emit('unsubscribe', taskId);
-});
-
-// ─── 选择/取消选择 ─────────────────────────────────
-function toggleTaskSelection(taskId) {
-  if (selectedTasks.has(taskId)) {
-    selectedTasks.delete(taskId);
-  } else {
-    selectedTasks.add(taskId);
-  }
-  updateBatchBar();
-  updateSelectAll();
-  // 更新卡片选中样式
-  const card = document.getElementById(`task-${taskId}`);
-  if (card) {
-    card.classList.toggle('selected', selectedTasks.has(taskId));
-    const cb = card.querySelector('.task-checkbox');
-    if (cb) cb.classList.toggle('checked', selectedTasks.has(taskId));
-  }
-}
-
-function clearSelection() {
-  // 清除所有选中样式
-  for (const id of selectedTasks) {
-    const card = document.getElementById(`task-${id}`);
-    if (card) {
-      card.classList.remove('selected');
-      const cb = card.querySelector('.task-checkbox');
-      if (cb) cb.classList.remove('checked');
-    }
-  }
-  selectedTasks.clear();
-  updateBatchBar();
-  updateSelectAll();
-}
-
-// ─── 全选/取消全选 ─────────────────────────────────
-function toggleSelectAll() {
-  const tasks = document.querySelectorAll('.task-card');
-  if (!tasks.length) return;
-
-  // 判断当前是否"全部已选"：如果全部已选则取消全选，否则全选
-  const allCardIds = [...tasks].map(card => card.id.replace('task-', ''));
-  const allSelected = allCardIds.every(id => selectedTasks.has(id));
-
-  if (allSelected) {
-    // 取消全选
-    for (const id of allCardIds) {
-      selectedTasks.delete(id);
-      const card = document.getElementById(`task-${id}`);
-      if (card) {
-        card.classList.remove('selected');
-        const cb = card.querySelector('.task-checkbox');
-        if (cb) cb.classList.remove('checked');
-      }
-    }
-  } else {
-    // 全选
-    for (const id of allCardIds) {
-      selectedTasks.add(id);
-      const card = document.getElementById(`task-${id}`);
-      if (card) {
-        card.classList.add('selected');
-        const cb = card.querySelector('.task-checkbox');
-        if (cb) cb.classList.add('checked');
-      }
-    }
-  }
-
-  updateBatchBar();
-  updateSelectAll();
-}
-
-function updateSelectAll() {
-  const area = document.getElementById('selectAllArea');
-  const cb = document.getElementById('selectAllCheckbox');
-  const tasks = document.querySelectorAll('.task-card');
-  
-  if (!tasks.length) {
-    area.style.display = 'none';
-    return;
-  }
-
-  area.style.display = 'flex';
-  
-  const allCardIds = [...tasks].map(card => card.id.replace('task-', ''));
-  const allSelected = allCardIds.every(id => selectedTasks.has(id));
-  const someSelected = allCardIds.some(id => selectedTasks.has(id));
-
-  cb.classList.toggle('checked', allSelected);
-  // 部分选中时显示中间态（视觉上用半透明表示）
-  cb.style.opacity = (!allSelected && someSelected) ? '0.5' : '1';
-}
-
-function updateBatchBar() {
-  const bar = document.getElementById('batchBar');
-  const count = document.getElementById('selectedCount');
-  count.textContent = selectedTasks.size;
-  bar.classList.toggle('visible', selectedTasks.size > 0);
-}
-
-// ─── 提交下载 ──────────────────────────────────────
+// ═══════════════════════════════════════════════════════
+// 下载页：提交任务
+// ═══════════════════════════════════════════════════════
 async function submitDownload() {
-  const input = document.getElementById('urlInput');
-  const btn = document.getElementById('downloadBtn');
+  const input = $('urlInput');
+  const btn = $('downloadBtn');
   const url = input.value.trim();
-
-  if (!url) {
-    showToast('请输入视频播放页 URL', 'error');
-    input.focus();
-    return;
-  }
-
-  if (!url.startsWith('http://') && !url.startsWith('https://')) {
-    showToast('请输入有效的 URL（以 http:// 或 https:// 开头）', 'error');
-    return;
-  }
-
+  if (!url) { input.focus(); return; }
+  if (!/^https?:\/\//i.test(url)) { showToast('请输入以 http(s):// 开头的链接'); input.focus(); return; }
   btn.disabled = true;
-  btn.innerHTML = '⏳ 提交中...';
-
+  btn.textContent = '提交中…';
   try {
-    const engine = document.getElementById('engineSelect').value;
-    const format = document.getElementById('formatSelect').value;
-    const parallel = document.getElementById('parallelCheck').checked;
-    const parallelCount = parseInt(document.getElementById('parallelCountInput').value, 10) || 4;
-    const maxSpeedMB = parseFloat(document.getElementById('maxSpeedInput').value) || 0;
-    const timeoutMin = parseInt(document.getElementById('timeoutInput').value, 10) || 30;
-
     const res = await fetch('/api/download/advanced', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         url,
-        engine,
-        format,
-        parallel,
-        parallelCount,
-        maxSpeed: Math.round(maxSpeedMB * 1024 * 1024),
-        timeoutMs: timeoutMin * 60 * 1000,
+        engine: settings.engine,
+        format: settings.format,
+        parallel: settings.parallel,
+        parallelCount: settings.parallelCount,
+        maxSpeed: Math.round(settings.maxSpeedMB * 1024 * 1024),
+        timeoutMs: settings.timeoutMin * 60 * 1000,
       }),
     });
-
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.error || `请求失败 (${res.status})`);
-    }
-
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);
     input.value = '';
-    showToast('🎯 任务已创建，正在解析视频流...', 'success');
-
-    // 订阅该任务
     socket.emit('subscribe', data.taskId);
-
-    // 立即刷新列表
     loadTasks();
+    showToast('任务已创建，开始解析');
   } catch (err) {
-    showToast(err.message, 'error');
+    showToast(err.message, true);
   } finally {
     btn.disabled = false;
-    btn.innerHTML = '<span>⬇</span> 下载';
+    btn.textContent = '下载';
   }
 }
 
-// ─── 获取任务列表 ──────────────────────────────────
 async function loadTasks() {
   try {
     const res = await fetch('/api/tasks');
-    if (res.ok) {
-      const tasks = await res.json();
-      renderTaskList(tasks);
-    }
-  } catch (err) {
-    // 静默失败，WebSocket 会补充
-  }
+    if (res.ok) renderTasks(await res.json());
+  } catch {}
 }
 
-// ─── 停止任务（不删除，保留分片缓存，可重试续跑）──────
-async function stopTask(taskId) {
+async function actionTask(taskId, action) {
+  const map = {
+    stop: ['POST', `/api/task/${taskId}/cancel`, '已停止，可续跑'],
+    retry: ['POST', `/api/task/${taskId}/retry`, '已重新加入队列'],
+    delete: ['DELETE', `/api/task/${taskId}`, '已删除'],
+  };
+  const [method, url, okMsg] = map[action];
   try {
-    const res = await fetch(`/api/task/${taskId}/cancel`, { method: 'POST' });
-    if (res.ok) {
-      showToast('⏹ 任务已停止，可随时重试续跑', 'success');
-      loadTasks();
-    } else {
-      const err = await res.json();
-      showToast(err.error || '停止失败', 'error');
-    }
+    const res = await fetch(url, { method });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '操作失败');
+    showToast(okMsg);
+    if (action === 'retry') socket.emit('subscribe', taskId);
+    loadTasks();
   } catch (err) {
-    showToast(err.message, 'error');
+    showToast(err.message, true);
   }
 }
 
-// ─── 重试单个任务 ──────────────────────────────────
-async function retryTask(taskId) {
-  try {
-    const res = await fetch(`/api/task/${taskId}/retry`, { method: 'POST' });
-    const data = await res.json();
-    if (res.ok) {
-      showToast('🔄 任务已重新加入队列', 'success');
-      socket.emit('subscribe', taskId);
-      loadTasks();
-    } else {
-      showToast(data.error || '重试失败', 'error');
-    }
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-}
-
-// ─── 删除单个任务 ──────────────────────────────────
-async function deleteTask(taskId) {
-  if (!confirm('确定要删除此任务记录吗？')) return;
-  try {
-    const res = await fetch(`/api/task/${taskId}`, { method: 'DELETE' });
-    const data = await res.json();
-    if (res.ok) {
-      showToast('🗑 任务已删除', 'success');
-      selectedTasks.delete(taskId);
-      updateBatchBar();
-      loadTasks();
-    } else {
-      showToast(data.error || '删除失败', 'error');
-    }
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-}
-
-// ─── 批量重试 ──────────────────────────────────────
-async function batchRetry() {
-  const taskIds = [...selectedTasks];
-  if (taskIds.length === 0) {
-    showToast('请先选择要重试的任务', 'error');
-    return;
-  }
-
-  try {
-    const res = await fetch('/api/tasks/retry-batch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskIds }),
-    });
-    const data = await res.json();
-    if (res.ok) {
-      showToast(`🔄 已重试 ${data.success} 个任务（${data.failed} 个跳过）`, 'success');
-      // 订阅所有重试的任务
-      for (const id of taskIds) socket.emit('subscribe', id);
-      clearSelection();
-      loadTasks();
-    } else {
-      showToast(data.error || '批量重试失败', 'error');
-    }
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-}
-
-// ─── 批量删除 ──────────────────────────────────────
-async function batchDelete() {
-  const taskIds = [...selectedTasks];
-  if (taskIds.length === 0) {
-    showToast('请先选择要删除的任务', 'error');
-    return;
-  }
-
-  if (!confirm(`确定要删除 ${taskIds.length} 个任务的记录吗？`)) return;
-
-  try {
-    const res = await fetch('/api/tasks/delete-batch', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ taskIds }),
-    });
-    const data = await res.json();
-    if (res.ok) {
-      showToast(`🗑 已删除 ${data.success} 个任务（${data.failed} 个失败）`, 'success');
-      clearSelection();
-      loadTasks();
-    } else {
-      showToast(data.error || '批量删除失败', 'error');
-    }
-  } catch (err) {
-    showToast(err.message, 'error');
-  }
-}
-
-// ─── 渲染任务列表 ──────────────────────────────────
-function renderTaskList(tasks) {
-  const container = document.getElementById('taskList');
-  const countEl = document.getElementById('taskCount');
-
-  if (!tasks || tasks.length === 0) {
-    container.innerHTML = `
-      <div class="empty-state">
-        <div class="icon">📥</div>
-        <p>还没有下载任务</p>
-        <p style="font-size:12px;margin-top:4px;">在上方输入播放页 URL 开始下载</p>
-      </div>`;
-    countEl.textContent = '0 个任务';
-    return;
-  }
-
-  countEl.textContent = `${tasks.length} 个任务`;
-
-  // 按创建时间倒序：新任务在上面
-  const sorted = [...tasks].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-
-  let html = '';
-  for (const task of sorted) {
-    html += buildTaskCard(task);
-  }
-  container.innerHTML = html;
-
-  // 恢复选中状态
-  for (const id of selectedTasks) {
-    const card = document.getElementById(`task-${id}`);
-    if (card) {
-      card.classList.add('selected');
-      const cb = card.querySelector('.task-checkbox');
-      if (cb) cb.classList.add('checked');
-    }
-  }
-}
-
-// ─── 阶段标签映射 ──────────────────────────────────
-const PHASE_LABEL = {
-  preparing:      { label: '🔍 准备中（解析视频）',      cls: 'preparing' },
-  preparing_done: { label: '✅ 准备完成，即将下载',     cls: 'preparing_done' },
-  downloading:    { label: '⬇ 下载中',                  cls: 'downloading' },
+const STATUS_TEXT = {
+  created: ['排队中', ''],
+  running: ['进行中', 'running'],
+  completed: ['已完成', 'completed'],
+  failed: ['失败', 'failed'],
+  cancelled: ['已停止', 'cancelled'],
 };
 
-// ─── 构建任务卡片 HTML ─────────────────────────────
-function buildTaskCard(task) {
+function buildTaskRow(task) {
   const status = task.status || 'created';
-  const statusInfo = STATUS_MAP[status] || { label: status, icon: '❓' };
-  const progress = task.progress || 0;
-  const speed = task.speed || '';
-  const phase = task.phase || '';
-  const isDone = status === 'completed';
-  const isFailed = status === 'failed';
-  const isCancelled = status === 'cancelled';
-  const isActive = status === 'created' || status === 'running';
-  const fileName = task.outputFile ? task.outputFile.split('/').pop() || task.outputFile : '';
-
-  const isSelected = selectedTasks.has(task.id);
-  const checkboxClass = `task-checkbox${isSelected ? ' checked' : ''}`;
-
-  let progressClass = 'progress-bar-fill';
-  if (isDone) progressClass += ' done';
-  else if (isFailed) progressClass += ' failed';
-
-  // 下载链接
-  let downloadLink = '';
-  if (isDone && fileName) {
-    downloadLink = `<a href="/downloads/${encodeURIComponent(fileName)}" class="btn-download-file" download>⬇ 下载文件</a>`;
-  } else if (isDone && task.outputFile) {
-    downloadLink = `<a href="/downloads/${encodeURIComponent(task.outputFile.split('/').pop())}" class="btn-download-file" download>⬇ 下载文件</a>`;
+  const [statusText, cls] = STATUS_TEXT[status] || [status, ''];
+  const progress = Math.max(0, Math.min(100, task.progress || 0));
+  const actions = [];
+  if (status === 'created' || status === 'running') actions.push(`<button class="icon-btn danger" title="停止" onclick="actionTask('${task.id}','stop')">${icon('stop', 17)}</button>`);
+  if (status === 'failed' || status === 'cancelled') actions.push(`<button class="icon-btn" title="重试" onclick="actionTask('${task.id}','retry')">${icon('retry', 17)}</button>`);
+  actions.push(`<button class="icon-btn danger" title="删除" onclick="actionTask('${task.id}','delete')">${icon('trash', 17)}</button>`);
+  if (status === 'completed' && task.outputFile) {
+    const name = task.outputFile.split('/').pop();
+    actions.push(`<button class="icon-btn green" title="下载文件" onclick="playLibrary('${name.replace(/'/g, "\\'")}')">${icon('dlFile', 17)}</button>`);
   }
-
-  // 停止按钮（仅等待/执行中显示）
-  let stopBtn = '';
-  if (isActive) {
-    stopBtn = `<button class="btn-cancel" onclick="stopTask('${task.id}')">⏹ 停止</button>`;
-  }
-
-  // 重试按钮（失败/已停止可续跑）
-  let retryBtn = '';
-  if (isFailed || isCancelled) {
-    retryBtn = `<button class="btn-retry" onclick="retryTask('${task.id}')">🔄 ${isCancelled ? '续跑' : '重试'}</button>`;
-  }
-
-  // 删除按钮（所有状态都显示）
-  let deleteBtn = `<button class="btn-delete-task" onclick="deleteTask('${task.id}')">🗑 删除</button>`;
-
+  const metaParts = [];
+  metaParts.push(`<span class="task-status ${cls}">${statusText}</span>`);
+  if (task.progress != null) metaParts.push(`<span>${Math.round(progress)}%</span>`);
+  if (task.speed) metaParts.push(`<span>${escapeHtml(task.speed)}</span>`);
+  if (task.outputSizeBytes) metaParts.push(`<span>${formatBytes(task.outputSizeBytes)}</span>`);
   const errorHtml = task.error ? `<div class="task-error">⚠ ${escapeHtml(task.error)}</div>` : '';
-
-  // 阶段标签
-  let phaseHtml = '';
-  let messageHtml = '';
-  if (phase && PHASE_LABEL[phase]) {
-    phaseHtml = `<div class="phase-label ${phase}">${PHASE_LABEL[phase].label}</div>`;
-  }
-  if (task.message) {
-    messageHtml = `<div class="progress-message" title="${escapeHtml(task.message)}">${escapeHtml(task.message)}</div>`;
-  }
-
-  let percentLabel = `${progress}%`;
-  if (isDone) percentLabel = '100%';
-  const sizeHtml = task.outputSizeBytes
-    ? `<span class="speed">${formatBytes(task.outputSizeBytes)}</span>`
-    : '';
-
   return `
-    <div class="task-card${isSelected ? ' selected' : ''}" id="task-${task.id}" data-status="${status}">
-      <div class="${checkboxClass}" data-task-id="${task.id}"></div>
-      <div class="task-header">
-        <span class="task-status-icon ${status}"></span>
-        <span class="task-url" title="${escapeHtml(task.url)}">${escapeHtml(task.url)}</span>
-        <span class="task-status-label ${status}">${statusInfo.icon} ${statusInfo.label}</span>
+    <div class="row task-row" data-id="${task.id}">
+      <div class="task-icon ${cls}">${status === 'completed' ? icon('dlFile', 17) : status === 'failed' ? icon('xmark', 17) : icon('download', 17)}</div>
+      <div class="task-main">
+        <div class="task-url" title="${escapeHtml(task.url)}">${escapeHtml(task.url)}</div>
+        <div class="task-meta">${metaParts.join('')}</div>
+        ${task.message ? `<div class="task-message" title="${escapeHtml(task.message)}">${escapeHtml(task.message)}</div>` : ''}
+        <div class="task-progress"><i class="${cls}" style="width:${progress}%"></i></div>
+        ${errorHtml}
       </div>
-      ${phaseHtml}
-      <div class="task-progress">
-        <div class="progress-bar-bg">
-          <div class="${progressClass}" style="width:${progress}%"></div>
-        </div>
-        <div class="progress-info">
-          <span>${percentLabel}</span>
-          ${sizeHtml}
-          ${speed ? `<span class="speed">${speed}</span>` : ''}
-        </div>
-        ${messageHtml}
-      </div>
-      ${errorHtml}
-      <div class="task-actions">
-        ${retryBtn}
-        ${stopBtn}
-        ${deleteBtn}
-        ${downloadLink}
-      </div>
-    </div>
-  `;
+      <div class="task-actions">${actions.join('')}</div>
+    </div>`;
 }
 
-// ─── 更新单个任务卡 ────────────────────────────────
+function renderTasks(tasks) {
+  const list = $('taskList');
+  $('taskCount').textContent = tasks.length ? `(${tasks.length})` : '';
+  if (!tasks.length) {
+    list.innerHTML = '<div class="empty"><div class="big">📥</div>还没有下载任务</div>';
+    return;
+  }
+  const sorted = [...tasks].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  list.innerHTML = sorted.map(buildTaskRow).join('');
+}
+
 function updateTaskCard(task) {
-  const existing = document.getElementById(`task-${task.id}`);
-  if (existing) {
-    existing.outerHTML = buildTaskCard(task);
-    // 恢复选中状态
-    if (selectedTasks.has(task.id)) {
-      const card = document.getElementById(`task-${task.id}`);
-      if (card) {
-        card.classList.add('selected');
-        const cb = card.querySelector('.task-checkbox');
-        if (cb) cb.classList.add('checked');
-      }
-    }
+  const list = $('taskList');
+  const rows = [...list.querySelectorAll('.task-row')];
+  const idx = rows.findIndex(r => r.dataset.id === task.id);
+  if (idx !== -1) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = buildTaskRow(task);
+    list.replaceChild(tmp.firstElementChild, rows[idx]);
   } else {
     loadTasks();
   }
 }
 
-// ─── Toast 通知 ────────────────────────────────────
-let toastTimer = null;
-function showToast(msg, type = '') {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.className = 'toast' + (type ? ` toast-${type}` : '');
-  void el.offsetWidth;
-  el.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => el.classList.remove('show'), 4000);
-}
-
-// ─── 工具函数 ──────────────────────────────────────
-function escapeHtml(str) {
-  if (!str) return '';
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
-function formatBytes(bytes) {
-  if (!bytes || bytes <= 0) return '';
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-  let i = 0;
-  let value = bytes;
-  while (value >= 1024 && i < units.length - 1) {
-    value /= 1024;
-    i++;
+// ═══════════════════════════════════════════════════════
+// 浏览页：视频库 + 播放
+// ═══════════════════════════════════════════════════════
+async function loadLibrary() {
+  try {
+    const res = await fetch('/api/library');
+    if (!res.ok) throw new Error();
+    const files = await res.json();
+    renderLibrary(files);
+  } catch {
+    $('libraryGrid').innerHTML = '<div class="empty"><div class="big">⚠️</div>视频库读取失败</div>';
   }
-  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
-// ─── 事件委托：复选框点击 ─────────────────────────
-// 使用事件委托监听 taskList 容器上的复选框点击，避免 DOM 替换导致事件丢失
-document.getElementById('taskList').addEventListener('click', (e) => {
-  const checkbox = e.target.closest('.task-checkbox');
-  if (!checkbox) return;
-  const taskId = checkbox.dataset.taskId;
-  if (!taskId) return;
-  e.stopPropagation();
-  toggleTaskSelection(taskId);
+function renderLibrary(files) {
+  const grid = $('libraryGrid');
+  $('libraryCount').textContent = files.length ? `(${files.length})` : '';
+  if (!files.length) {
+    grid.innerHTML = '<div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>';
+    return;
+  }
+  grid.innerHTML = files.map((f, i) => `
+    <div class="video-card" data-name="${escapeHtml(f.name)}" onclick="playLibrary(this.dataset.name)">
+      <div class="video-thumb"><span class="play-badge">${icon('play', 20)}</span></div>
+      <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+      <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
+    </div>`).join('');
+}
+
+function renderHistory() {
+  const list = $('historyList');
+  if (!history.length) {
+    list.innerHTML = '<div class="empty"><div class="big">▶️</div>暂无播放记录<br>播放过的视频会出现在这里，下次自动续播</div>';
+    return;
+  }
+  list.innerHTML = history.map(h => {
+    const pct = h.duration ? Math.min(100, (h.time / h.duration) * 100) : 0;
+    return `
+    <div class="row history-row">
+      <div class="task-icon">${icon('playRect', 17)}</div>
+      <div class="history-main" data-history-id="${escapeHtml(h.id)}">
+        <div class="history-title">${escapeHtml(h.title)}</div>
+        <div class="history-meta">${formatTime(h.time)} / ${formatTime(h.duration)} · ${formatDate(h.updatedAt)}</div>
+        <div class="history-bar"><i style="width:${pct}%"></i></div>
+      </div>
+      <button class="icon-btn danger" title="删除记录" data-remove-id="${escapeHtml(h.id)}">${icon('xmark', 16)}</button>
+    </div>`;
+  }).join('');
+}
+
+// ── 播放器核心 ──────────────────────────────────
+let hls = null;
+let currentPlay = null;
+let lastSaveTime = 0;
+
+function openPlayer(title, src, id) {
+  const overlay = $('player');
+  const video = $('playerVideo');
+  $('playerTitle').textContent = title;
+  overlay.hidden = false;
+  // 先落盘上一次播放进度，再切到新视频
+  if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
+  currentPlay = null;
+  currentPlay = { id, title, src, time: 0, duration: 0, updatedAt: Date.now() };
+
+  if (hls) { hls.destroy(); hls = null; }
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+
+  const isHls = /\.m3u8($|\?)/i.test(src);
+  if (isHls && window.Hls && Hls.isSupported()) {
+    hls = new Hls({ enableWorker: true, maxBufferLength: 60 });
+    hls.loadSource(src);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.ERROR, (_e, data) => {
+      if (data.fatal) {
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+        else showToast('播放失败：流地址不可用', true);
+      }
+    });
+  } else {
+    video.src = src;
+  }
+
+  // 续播
+  const prev = history.find(h => h.id === id);
+  video.onloadedmetadata = () => {
+    if (!currentPlay) return;
+    currentPlay.duration = video.duration || 0;
+    if (prev && prev.time > 3 && prev.time < (video.duration || Infinity) - 5) {
+      video.currentTime = prev.time;
+    }
+    video.play().catch(() => {});
+  };
+  video.ontimeupdate = () => {
+    if (!currentPlay) return;
+    currentPlay.time = video.currentTime || 0;
+    currentPlay.duration = video.duration || 0;
+    const now = Date.now();
+    if (now - lastSaveTime > 5000) {
+      lastSaveTime = now;
+      upsertHistory({ ...currentPlay, updatedAt: now });
+    }
+  };
+  video.onpause = () => { if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() }); };
+  video.onended = () => {
+    if (!currentPlay) return;
+    currentPlay.time = currentPlay.duration;
+    upsertHistory({ ...currentPlay, updatedAt: Date.now() });
+  };
+  video.onerror = () => showToast('播放失败：请确认链接可访问且格式受支持', true);
+}
+
+function closePlayer() {
+  const video = $('playerVideo');
+  if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
+  currentPlay = null;
+  if (hls) { hls.destroy(); hls = null; }
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  $('player').hidden = true;
+  loadLibrary();
+}
+
+function playLibrary(name) {
+  openPlayer(name, `/downloads/${encodeURIComponent(name)}`, `file:${name}`);
+}
+
+function playHistory(id) {
+  const h = history.find(x => x.id === id);
+  if (h) openPlayer(h.title, h.src, h.id);
+}
+
+function playUrl() {
+  const url = $('playUrlInput').value.trim();
+  if (!/^https?:\/\//i.test(url)) { showToast('请输入有效的 http(s) 链接', true); return; }
+  openPlayer(url, url, `url:${url}`);
+}
+
+// ═══════════════════════════════════════════════════════
+// 设置页：服务状态
+// ═══════════════════════════════════════════════════════
+async function loadHealth() {
+  try {
+    const res = await fetch('/api/health');
+    if (!res.ok) throw new Error();
+    const h = await res.json();
+    $('healthUptime').textContent = `${Math.floor(h.uptime / 60)} 分钟`;
+    $('healthQueue').textContent = `${h.tasks.queued} / ${h.tasks.running}`;
+    const eng = h.engines || {};
+    $('healthEngines').innerHTML = `${dot(eng.ffmpeg)} ffmpeg ${dot(eng.ffprobe)} ffprobe`;
+    $('healthNre').innerHTML = dot(eng.nM3u8DLRe) + (eng.nM3u8DLRe ? ' 可用' : ' 未安装');
+    $('healthDisk').textContent = h.disk || '—';
+  } catch {
+    $('healthUptime').textContent = '连接失败';
+  }
+}
+function dot(ok) { return `<span class="status-dot ${ok ? 'ok' : 'no'}"></span>`; }
+
+// ═══════════════════════════════════════════════════════
+// Toast
+// ═══════════════════════════════════════════════════════
+let toastTimer = null;
+function showToast(msg, isError = false) {
+  let t = document.querySelector('.toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.className = 'toast';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.classList.toggle('error', isError);
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+// ═══════════════════════════════════════════════════════
+// 初始化
+// ═══════════════════════════════════════════════════════
+function initTabs() {
+  document.querySelectorAll('[data-page]').forEach(btn => {
+    btn.addEventListener('click', () => switchPage(btn.dataset.page));
+  });
+}
+
+$('downloadBtn').addEventListener('click', submitDownload);
+$('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitDownload(); });
+$('playUrlBtn').addEventListener('click', playUrl);
+$('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
+$('playerBack').addEventListener('click', closePlayer);
+$('refreshHealth').addEventListener('click', loadHealth);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('player').hidden) closePlayer(); });
+
+// 播放记录事件委托（避免内联 onclick 的引号转义问题）
+$('historyList').addEventListener('click', (e) => {
+  const main = e.target.closest('.history-main');
+  if (main && main.dataset.historyId) {
+    playHistory(main.dataset.historyId);
+    return;
+  }
+  const del = e.target.closest('[data-remove-id]');
+  if (del) removeHistory(del.dataset.removeId);
 });
 
-// ─── 回车提交 ──────────────────────────────────────
-document.getElementById('urlInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') submitDownload();
-});
+// 移动端 TabBar 图标
+$('tabDownloads').innerHTML = `${icon('download', 22)}<span>下载</span>`;
+$('tabBrowse').innerHTML = `${icon('playRect', 22)}<span>浏览</span>`;
+$('tabSettings').innerHTML = `${icon('gear', 22)}<span>设置</span>`;
 
-// ─── 初始加载 ──────────────────────────────────────
-console.log('🎬 视频下载器前端已加载');
+applyTheme();
+renderSettingsForm();
+bindSettingsForm();
+initTabs();
+loadTasks();
+
+// toast 样式（避免与页面样式混在一起）
+const style = document.createElement('style');
+style.textContent = `
+  .toast {
+    position: fixed; left: 50%; bottom: 90px; transform: translateX(-50%) translateY(16px);
+    background: rgba(28,28,30,0.92); color: #fff; font-size: 14px; font-weight: 500;
+    padding: 11px 20px; border-radius: 24px; opacity: 0; pointer-events: none;
+    transition: all 0.25s ease; z-index: 200; max-width: 86vw; text-align: center;
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+    box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.error { background: rgba(255,59,48,0.95); }
+`;
+document.head.appendChild(style);
 </script>
 </body>
 </html>

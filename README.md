@@ -12,7 +12,9 @@
 - 全局/单任务限速、真实带宽统计、磁盘空间预检
 - 断点续跑：停止任务后重试，已下载分片自动跳过
 - 浏览器池复用（cookie/代理按任务注入）、SSRF 全链路防护、可选 API Token
-- 前端本地化 socket.io（无 CDN 依赖）、高级选项（引擎/格式/并行/限速/超时）
+- iOS/macOS 风格三页界面（下载 / 浏览 / 设置），浅色深色主题自动跟随
+- 浏览页：本地视频库、在线 m3u8/mp4 播放（hls.js）、播放记录与自动续播
+- 前端资源全部本地化（socket.io / hls.js，无 CDN 依赖）、下载默认参数可在设置页配置
 
 ## 快速开始
 
@@ -38,6 +40,7 @@ npm start
 | `DOWNLOADS_AUTH` | 空 | `1` 且设置了 `API_TOKEN` 时，下载文件也需鉴权 |
 | `MAX_BANDWIDTH` | `0` | 全局限速（字节/秒），`0` 不限制 |
 | `LOG_LEVEL` | `info` | pino 日志级别 |
+| `AUTO_START_QUEUE` | `1` | `0` 时进入待命模式：启动后不自动处理任务队列（维护/调试用） |
 
 ## API 摘要
 
@@ -50,6 +53,7 @@ npm start
 - `DELETE /api/task/:id` — 删除任务
 - `GET /api/health` — 健康检查（含队列/浏览器池/引擎/磁盘）
 - `GET /api/stats` — 统计
+- `GET /api/library` — 已下载视频库（文件列表，供浏览页播放）
 
 ## 部署
 
