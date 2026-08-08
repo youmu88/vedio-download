@@ -169,6 +169,11 @@ class TaskManager extends EventEmitter {
    * @returns {object|null}
    */
   dequeue() {
+    // 每次出队前同步磁盘设置，保证并行下载数改动即使绕过 API 也即时生效
+    const diskSetting = this._loadSettings().maxConcurrent;
+    if (diskSetting && diskSetting !== this.maxConcurrent) {
+      this.maxConcurrent = diskSetting;
+    }
     if (this.running.size >= this.maxConcurrent) return null;
     while (this.queue.length > 0) {
       const taskId = this.queue.shift();

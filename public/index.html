@@ -10,6 +10,7 @@
 <style>
   /* ── Apple 设计语言基础 ───────────────────────── */
   :root {
+    color-scheme: light;
     --accent: #007AFF;
     --accent-press: #0062CC;
     --green: #34C759;
@@ -23,7 +24,7 @@
     --separator: rgba(60, 60, 67, 0.16);
     --text: #000000;
     --text2: rgba(60, 60, 67, 0.6);
-    --text3: rgba(60, 60, 67, 0.32);
+    --text3: rgba(60, 60, 67, 0.38);
     --toolbar: rgba(246, 246, 250, 0.78);
     --desktop-bg: linear-gradient(180deg, #F4F4F6 0%, #DEDEE4 100%);
     --shadow: 0 1px 2px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08);
@@ -31,6 +32,7 @@
     --radius: 12px;
   }
   [data-theme="dark"] {
+    color-scheme: dark;
     --bg: #000000;
     --card: #1C1C1E;
     --fill: rgba(120, 120, 128, 0.24);
@@ -38,13 +40,14 @@
     --separator: rgba(84, 84, 88, 0.6);
     --text: #FFFFFF;
     --text2: rgba(235, 235, 245, 0.6);
-    --text3: rgba(235, 235, 245, 0.3);
+    --text3: rgba(235, 235, 245, 0.45);
     --toolbar: rgba(18, 18, 20, 0.78);
     --desktop-bg: linear-gradient(180deg, #1C1C20 0%, #0A0A0C 100%);
     --window-shadow: 0 18px 60px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4);
   }
 
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  [hidden] { display: none !important; }
   html, body { height: 100%; overflow: hidden; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
@@ -59,6 +62,23 @@
 
   /* ── 桌面舞台 ─────────────────────────────────── */
   .desktop { position: fixed; inset: 0; background: var(--desktop-bg); overflow: hidden; }
+  .desktop-hint {
+    position: absolute; inset: 0; z-index: 0;
+    display: flex; align-items: center; justify-content: center;
+    text-align: center; color: var(--text3); font-size: 15px; line-height: 2;
+    pointer-events: none; transition: opacity 0.3s ease;
+  }
+  .desktop-hint.hidden { opacity: 0; }
+
+  /* ── 壁纸 ─────────────────────────────────────── */
+  .desktop.wallpaper-aurora { background: linear-gradient(160deg, #E0EAFC 0%, #CFDEF3 100%); }
+  [data-theme="dark"] .desktop.wallpaper-aurora { background: linear-gradient(160deg, #0F2027 0%, #203A43 55%, #2C5364 100%); }
+  .desktop.wallpaper-sunset { background: linear-gradient(160deg, #FAD0C4 0%, #FFD1FF 100%); }
+  [data-theme="dark"] .desktop.wallpaper-sunset { background: linear-gradient(160deg, #3A1C2E 0%, #6B2D4E 55%, #2C1B3D 100%); }
+  .desktop.wallpaper-ocean { background: linear-gradient(160deg, #A1C4FD 0%, #C2E9FB 100%); }
+  [data-theme="dark"] .desktop.wallpaper-ocean { background: linear-gradient(160deg, #0B486B 0%, #175D78 55%, #0E2F44 100%); }
+  .desktop.wallpaper-graphite { background: linear-gradient(160deg, #E3E3E6 0%, #C7C7CC 100%); }
+  [data-theme="dark"] .desktop.wallpaper-graphite { background: linear-gradient(160deg, #2A2A2E 0%, #161618 100%); }
   .windows-layer { position: absolute; inset: 0; z-index: 1; }
 
   /* ── App 窗口 ────────────────────────────────── */
@@ -78,6 +98,7 @@
     inset: 0 !important; width: auto !important; height: auto !important;
     border-radius: 0; box-shadow: none; z-index: 999;
   }
+  .window.fullscreen[hidden] { display: none; }
 
   .titlebar {
     display: flex; align-items: center; gap: 10px;
@@ -311,32 +332,60 @@
 
   .footer-note { text-align: center; font-size: 12px; color: var(--text3); margin-top: 26px; }
 
-  /* ── 播放器 ──────────────────────────────────── */
-  .player {
-    position: fixed; inset: 0; z-index: 1000;
-    background: rgba(0,0,0,0.92);
-    backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
-    display: flex; flex-direction: column;
-    animation: playerIn 0.25s ease;
+  .segmented {
+    display: flex; gap: 2px; padding: 2px;
+    background: var(--fill); border-radius: 9px;
   }
-  .player[hidden] { display: none; }
-  @keyframes playerIn { from { opacity: 0; } to { opacity: 1; } }
-  .player-bar {
-    display: flex; align-items: center; gap: 12px;
-    padding: 12px 18px; padding-top: max(12px, env(safe-area-inset-top));
-    color: #fff;
+  .segmented button {
+    padding: 6px 12px; border-radius: 7px;
+    font-size: 13px; font-weight: 600; color: var(--text2);
+    transition: all 0.18s ease;
   }
-  .player-back {
-    width: 34px; height: 34px; border-radius: 50%; color: #fff; font-size: 20px;
-    background: rgba(255,255,255,0.12); display: flex; align-items: center; justify-content: center;
+  .segmented button.active {
+    background: var(--card); color: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
   }
-  .player-title { flex: 1; font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .player-video-wrap { flex: 1; display: flex; align-items: center; justify-content: center; padding: 12px; min-height: 0; }
-  .player-video-wrap video {
-    max-width: 100%; max-height: 100%; border-radius: 12px;
-    background: #000; box-shadow: 0 12px 48px rgba(0,0,0,0.6);
+
+  /* ── 内嵌播放器（浏览窗口内） ────────────────── */
+  .inline-player {
+    margin-top: 12px;
+    background: var(--card); border-radius: var(--radius); overflow: hidden;
+    box-shadow: var(--shadow);
   }
-  .player-error { color: #FF6B6B; font-size: 14px; text-align: center; padding: 20px; }
+  .inline-player-bar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 14px; border-bottom: 0.5px solid var(--separator);
+  }
+  .inline-player-title {
+    flex: 1; font-size: 13px; font-weight: 600; color: var(--text2);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .inline-player video { display: block; width: 100%; max-height: 360px; background: #000; }
+
+  /* ── 壁纸选择器 ──────────────────────────────── */
+  .wallpaper-picker { display: flex; gap: 10px; flex-shrink: 0; }
+  .swatch {
+    width: 40px; height: 40px; border-radius: 11px;
+    border: 2px solid transparent; position: relative;
+    box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1);
+    transition: transform 0.15s ease, border-color 0.15s ease;
+  }
+  .swatch:hover { transform: scale(1.08); }
+  .swatch.active { border-color: var(--accent); }
+  .swatch.s-default { background: linear-gradient(160deg, #E8E8ED, #C9C9D2); }
+  [data-theme="dark"] .swatch.s-default { background: linear-gradient(160deg, #2C2C31, #101012); }
+  .swatch.s-aurora { background: linear-gradient(160deg, #E0EAFC, #CFDEF3); }
+  [data-theme="dark"] .swatch.s-aurora { background: linear-gradient(160deg, #0F2027, #2C5364); }
+  .swatch.s-sunset { background: linear-gradient(160deg, #FAD0C4, #FFD1FF); }
+  [data-theme="dark"] .swatch.s-sunset { background: linear-gradient(160deg, #3A1C2E, #6B2D4E); }
+  .swatch.s-ocean { background: linear-gradient(160deg, #A1C4FD, #C2E9FB); }
+  [data-theme="dark"] .swatch.s-ocean { background: linear-gradient(160deg, #0B486B, #175D78); }
+  .swatch.s-graphite { background: linear-gradient(160deg, #E3E3E6, #C7C7CC); }
+  [data-theme="dark"] .swatch.s-graphite { background: linear-gradient(160deg, #2A2A2E, #161618); }
+  .swatch .swatch-name {
+    position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%);
+    font-size: 10px; color: var(--text2); white-space: nowrap;
+  }
 
   /* ── 移动端适配 ──────────────────────────────── */
   @media (max-width: 700px) {
@@ -349,11 +398,15 @@
 </style>
 </head>
 <body>
-<div class="desktop">
+<div class="desktop" id="desktop">
   <div class="windows-layer">
+    <!-- 桌面提示（无窗口打开时显示） -->
+    <div class="desktop-hint" id="desktopHint">
+      <div>点击底部 Dock 图标打开 App<br>📥 下载 · 🎬 浏览 · ⚙️ 设置</div>
+    </div>
 
     <!-- ═══════ App：下载 ═══════ -->
-    <section class="window" id="win-downloads" data-app="downloads">
+    <section class="window closed" id="win-downloads" data-app="downloads">
       <div class="titlebar">
         <div class="traffic">
           <button class="tl red" data-act="close" title="关闭">×</button>
@@ -389,6 +442,13 @@
         <span class="win-conn conn-dot off" title="连接状态"></span>
       </div>
       <div class="win-content">
+        <div class="inline-player" id="inlinePlayer" hidden>
+          <div class="inline-player-bar">
+            <span class="inline-player-title" id="inlinePlayerTitle"></span>
+            <button class="icon-btn danger" id="inlinePlayerClose" title="关闭播放">×</button>
+          </div>
+          <video id="inlinePlayerVideo" controls playsinline></video>
+        </div>
         <div class="group-title" style="margin-top:12px;">继续观看</div>
         <div class="group" id="historyList">
           <div class="empty"><div class="big">▶️</div>暂无播放记录</div>
@@ -423,6 +483,16 @@
       <div class="win-content">
         <div class="group-title" style="margin-top:12px;">外观</div>
         <div class="group">
+          <div class="row setting-row" style="flex-wrap:wrap;">
+            <div class="row-label">壁纸<small>桌面背景，随主题切换深浅色</small></div>
+            <div class="wallpaper-picker" id="wallpaperPicker">
+              <button class="swatch s-default active" data-wallpaper="default"><span class="swatch-name">默认</span></button>
+              <button class="swatch s-aurora" data-wallpaper="aurora"><span class="swatch-name">极光</span></button>
+              <button class="swatch s-sunset" data-wallpaper="sunset"><span class="swatch-name">落日</span></button>
+              <button class="swatch s-ocean" data-wallpaper="ocean"><span class="swatch-name">海洋</span></button>
+              <button class="swatch s-graphite" data-wallpaper="graphite"><span class="swatch-name">石墨</span></button>
+            </div>
+          </div>
           <div class="row setting-row">
             <div class="row-label">主题<small>自动跟随系统 / 浅色 / 深色</small></div>
             <div class="segmented" id="themeSeg">
@@ -477,6 +547,7 @@
 
         <div class="group-title">服务状态</div>
         <div class="group" id="healthGroup">
+          <div class="row status-row"><span class="row-label">服务版本</span><span class="status-value" id="healthVersion">—</span></div>
           <div class="row status-row"><span class="row-label">运行时间</span><span class="status-value" id="healthUptime">—</span></div>
           <div class="row status-row"><span class="row-label">队列 / 运行中</span><span class="status-value" id="healthQueue">—</span></div>
           <div class="row status-row"><span class="row-label">ffmpeg / ffprobe</span><span class="status-value" id="healthEngines">—</span></div>
@@ -505,18 +576,6 @@
       <span class="dock-sep"></span>
       <span class="dock-conn conn-dot off" id="connDot" title="连接状态"></span>
     </div>
-  </div>
-</div>
-
-<!-- 播放器 -->
-<div class="player" id="player" hidden>
-  <div class="player-bar">
-    <button class="player-back" id="playerBack">‹</button>
-    <div class="player-title" id="playerTitle"></div>
-    <span class="conn-dot on"></span>
-  </div>
-  <div class="player-video-wrap">
-    <video id="playerVideo" controls playsinline></video>
   </div>
 </div>
 
@@ -611,6 +670,16 @@ function updateDock() {
   document.querySelectorAll('.dock-icon').forEach((b) => b.classList.toggle('active', b.dataset.app === activeApp));
 }
 
+function updateNoDock() {
+  const anyFull = APP_ORDER.some((name) => winState[name].fullscreen);
+  document.body.classList.toggle('no-dock', anyFull);
+}
+
+function updateDesktopHint() {
+  const anyOpen = APP_ORDER.some((name) => winState[name].open && !winState[name].minimized);
+  $('desktopHint').classList.toggle('hidden', anyOpen);
+}
+
 function focusApp(name) {
   const win = $('win-' + name);
   win.classList.remove('closed');
@@ -619,6 +688,7 @@ function focusApp(name) {
   win.style.zIndex = winState[name].fullscreen ? 999 : ++zTop;
   activeApp = name;
   updateDock();
+  updateDesktopHint();
   if (name === 'browse') { renderHistory(); loadLibrary(); }
   if (name === 'settings') { loadServerSettings(); loadHealth(); }
 }
@@ -633,18 +703,33 @@ function ensureOpen(name) {
 }
 
 function closeApp(name) {
+  clearFullscreenState(name);
   winState[name].open = false;
   winState[name].minimized = false;
   $('win-' + name).classList.add('closed');
   if (activeApp === name) activeApp = null;
   updateDock();
+  updateNoDock();
+  updateDesktopHint();
 }
 
 function minimizeApp(name) {
+  clearFullscreenState(name);
   winState[name].minimized = true;
   $('win-' + name).classList.add('closed');
   if (activeApp === name) activeApp = null;
   updateDock();
+  updateNoDock();
+  updateDesktopHint();
+}
+
+function clearFullscreenState(name) {
+  const st = winState[name];
+  if (!st.fullscreen) return;
+  st.fullscreen = false;
+  const win = $('win-' + name);
+  win.classList.remove('fullscreen');
+  win.querySelector('.tl.green').classList.remove('active');
 }
 
 function maximizeApp(name) {
@@ -673,7 +758,6 @@ function toggleFullscreen(name) {
   st.prevFull = { maximized: st.maximized, rect: currentRect(win) };
   st.fullscreen = true;
   st.maximized = false;
-  document.body.classList.add('no-dock');
   win.classList.add('fullscreen');
   win.classList.remove('maximized');
   win.style.inset = '0';
@@ -681,6 +765,7 @@ function toggleFullscreen(name) {
   win.style.zIndex = 999;
   win.querySelector('.tl.green').classList.add('active');
   activeApp = name;
+  updateNoDock();
   updateDock();
 }
 
@@ -688,7 +773,7 @@ function exitFullscreen(name) {
   const st = winState[name];
   const win = $('win-' + name);
   st.fullscreen = false;
-  document.body.classList.remove('no-dock');
+  updateNoDock();
   win.classList.remove('fullscreen');
   win.querySelector('.tl.green').classList.remove('active');
   win.style.zIndex = ++zTop;
@@ -765,7 +850,7 @@ window.addEventListener('resize', () => {
 // ═══════════════════════════════════════════════════════
 const SETTINGS_KEY = 'vd.settings.v2';
 const defaultSettings = {
-  theme: 'auto', engine: 'auto', format: 'auto',
+  theme: 'auto', wallpaper: 'default', engine: 'auto', format: 'auto',
   parallel: false, parallelCount: 4, maxSpeedMB: 0, timeoutMin: 30,
 };
 function loadSettings() {
@@ -784,6 +869,11 @@ function applyTheme() {
   document.querySelector('meta[name="theme-color"]').setAttribute('content', dark ? '#000000' : '#F2F2F7');
   document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('active', b.dataset.theme === settings.theme));
 }
+function applyWallpaper() {
+  const name = settings.wallpaper || 'default';
+  $('desktop').className = 'desktop' + (name === 'default' ? '' : ` wallpaper-${name}`);
+  document.querySelectorAll('#wallpaperPicker .swatch').forEach((s) => s.classList.toggle('active', s.dataset.wallpaper === name));
+}
 function renderSettingsForm() {
   $('engineSelect').value = settings.engine;
   $('formatSelect').value = settings.format;
@@ -798,6 +888,12 @@ function bindSettingsForm() {
     if (!btn) return;
     settings.theme = btn.dataset.theme;
     saveSettings(); applyTheme();
+  });
+  $('wallpaperPicker').addEventListener('click', (e) => {
+    const btn = e.target.closest('.swatch');
+    if (!btn) return;
+    settings.wallpaper = btn.dataset.wallpaper;
+    saveSettings(); applyWallpaper();
   });
   $('engineSelect').addEventListener('change', (e) => { settings.engine = e.target.value; saveSettings(); });
   $('formatSelect').addEventListener('change', (e) => { settings.format = e.target.value; saveSettings(); });
@@ -866,10 +962,10 @@ function removeHistory(id) {
 // ═══════════════════════════════════════════════════════
 const socket = io(window.location.origin, { transports: ['websocket', 'polling'] });
 socket.on('connect', () => {
-  document.querySelectorAll('.conn-dot').forEach(d => d.className = d.id === 'player' ? d.className : 'conn-dot on');
+  document.querySelectorAll('.conn-dot').forEach(d => d.className = 'conn-dot on');
   loadTasks();
 });
-socket.on('disconnect', () => document.querySelectorAll('.conn-dot').forEach(d => d.className = d.id === 'player' ? d.className : 'conn-dot off'));
+socket.on('disconnect', () => document.querySelectorAll('.conn-dot').forEach(d => d.className = 'conn-dot off'));
 socket.on('task-status', (task) => updateTaskCard(task));
 socket.on('task-list-update', (tasks) => renderTasks(tasks));
 socket.on('task-finalized', ({ taskId }) => socket.emit('unsubscribe', taskId));
@@ -1058,10 +1154,11 @@ let currentPlay = null;
 let lastSaveTime = 0;
 
 function openPlayer(title, src, id) {
-  const overlay = $('player');
-  const video = $('playerVideo');
-  $('playerTitle').textContent = title;
-  overlay.hidden = false;
+  // 在浏览 App 窗口内嵌播放
+  ensureOpen('browse');
+  const video = $('inlinePlayerVideo');
+  $('inlinePlayerTitle').textContent = title;
+  $('inlinePlayer').hidden = false;
   if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
   currentPlay = null;
   currentPlay = { id, title, src, time: 0, duration: 0, updatedAt: Date.now() };
@@ -1116,14 +1213,14 @@ function openPlayer(title, src, id) {
 }
 
 function closePlayer() {
-  const video = $('playerVideo');
+  const video = $('inlinePlayerVideo');
   if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
   currentPlay = null;
   if (hls) { hls.destroy(); hls = null; }
   video.pause();
   video.removeAttribute('src');
   video.load();
-  $('player').hidden = true;
+  $('inlinePlayer').hidden = true;
   loadLibrary();
 }
 
@@ -1150,6 +1247,7 @@ async function loadHealth() {
     const res = await fetch('/api/health');
     if (!res.ok) throw new Error();
     const h = await res.json();
+    $('healthVersion').textContent = h.version || '—';
     $('healthUptime').textContent = `${Math.floor(h.uptime / 60)} 分钟`;
     $('healthQueue').textContent = `${h.tasks.queued} / ${h.tasks.running}（上限 ${h.tasks.maxConcurrent}）`;
     const eng = h.engines || {};
@@ -1187,10 +1285,10 @@ $('downloadBtn').addEventListener('click', submitDownload);
 $('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitDownload(); });
 $('playUrlBtn').addEventListener('click', playUrl);
 $('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
-$('playerBack').addEventListener('click', closePlayer);
+$('inlinePlayerClose').addEventListener('click', closePlayer);
 $('refreshHealth').addEventListener('click', loadHealth);
 $('parallelDownloadsInput').addEventListener('change', saveServerSettings);
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('player').hidden) closePlayer(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('inlinePlayer').hidden) closePlayer(); });
 
 // 播放记录事件委托
 $('historyList').addEventListener('click', (e) => {
@@ -1209,9 +1307,10 @@ document.querySelector('.dock-icon[data-app="browse"]').innerHTML = `${icon('pla
 document.querySelector('.dock-icon[data-app="settings"]').innerHTML = `${icon('gear', 24)}<span class="label">设置</span>`;
 
 applyTheme();
+applyWallpaper();
 renderSettingsForm();
 bindSettingsForm();
-ensureOpen('downloads');
+updateDesktopHint();
 loadTasks();
 
 // toast 样式
@@ -1227,19 +1326,6 @@ style.textContent = `
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
   .toast.error { background: rgba(255,59,48,0.95); }
-  .segmented {
-    display: flex; gap: 2px; padding: 2px;
-    background: var(--fill); border-radius: 9px;
-  }
-  .segmented button {
-    padding: 6px 12px; border-radius: 7px;
-    font-size: 13px; font-weight: 600; color: var(--text2);
-    transition: all 0.18s ease;
-  }
-  .segmented button.active {
-    background: var(--card); color: var(--text);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
-  }
 `;
 document.head.appendChild(style);
 </script>

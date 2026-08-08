@@ -11,3 +11,4 @@ logs/
 config/
 sessions/
 *.part
+task_*/
