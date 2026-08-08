@@ -291,6 +291,8 @@ app.get('/api/library', (_req, res) => {
       .filter(t => [TaskStatus.CREATED, TaskStatus.RUNNING].includes(t.status))
       .map(t => t.id)
   );
+  // 已加入列表（含私密列表）的视频：浏览页不再直接可见，仅存于对应列表
+  const listedNames = listStore.allItemNames();
   let files = [];
   try {
     files = fs.readdirSync(DOWNLOADS_DIR)
@@ -298,6 +300,7 @@ app.get('/api/library', (_req, res) => {
         if (name.startsWith('.')) return false;
         if (name.endsWith('.part')) return false;
         if (runningIds.has(name) || [...runningIds].some(id => name.startsWith(`${id}.`))) return false;
+        if (listedNames.has(name)) return false; // ⭐ 已入列表：浏览页隐藏
         const p = path.join(DOWNLOADS_DIR, name);
         let stat;
         try { stat = fs.statSync(p); } catch { return false; }

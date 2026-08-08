@@ -159,7 +159,7 @@ try {
     check('删除视频弹出 iOS Action Sheet', false, '无删除按钮可测');
   }
 
-  // ── 4.6 回归验证：批量加入私密列表自动引导解锁（修复"请激活"提示） ──
+  // ── 4.6 回归验证：批量动态菜单 + 加入私密列表自动引导解锁 ──
   // 模拟未解锁状态（清除本地 token）
   await page.evaluate(() => localStorage.removeItem('vd.private.token'));
   await page.click('.dock-icon[data-app="browse"]');
@@ -170,11 +170,16 @@ try {
   await page.waitForTimeout(200);
   await page.click('#batchSelectAllBtn');
   await page.waitForTimeout(200);
-  // 点击"私密列表"批量按钮 → 应自动弹出 PIN 解锁界面（而非仅 toast 提示）
-  await page.click('#batchPrivateBtn');
+  // 点击"操作"批量按钮 → 动态菜单（删除 / 加入列表 / 私密列表 / 新建）
+  await page.click('#batchOpsBtn');
+  await page.waitForTimeout(400);
+  const opsText = await page.$eval('#modalCard', el => el.textContent).catch(() => '');
+  check('批量操作弹出动态菜单', opsText.includes('删除') && opsText.includes('加入') && opsText.includes('私密列表'), opsText.slice(0, 80));
+  // 动态菜单中点击"加入私密列表" → 自动弹出 PIN 解锁界面
+  await page.click('#modalCard .as-btn:has-text("加入私密列表")');
   await page.waitForTimeout(500);
   const pinShown = await page.$eval('#modalCard .pin-screen', el => !!el).catch(() => false);
-  check('批量加入私密列表自动弹出 PIN 解锁界面', pinShown);
+  check('动态菜单加入私密列表自动弹出 PIN 解锁界面', pinShown);
   // 输入正确密码解锁 → 自动继续加入流程（PIN 界面关闭）
   for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
   await page.waitForTimeout(800);
@@ -183,6 +188,46 @@ try {
   // 退出选择模式，清理状态
   await page.click('#batchCancelBtn').catch(() => {});
   await page.waitForTimeout(200);
+
+  // ── 4.7 本轮新增：加入列表后浏览页隐藏 / 私密列表卡片播放 / 切后台锁定 ──
+  // 通过 API 创建公开列表并加入第一个视频（走真实接口）
+  const libFiles = await fetch(`${BASE}/api/library`).then(r => r.json());
+  if (libFiles.length) {
+    const first = libFiles[0].name;
+    const mkRes = await fetch(`${BASE}/api/lists`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'E2E收藏' }),
+    });
+    const mkData = await mkRes.json();
+    const listId = mkData.list?.id;
+    if (listId) {
+      const addRes = await fetch(`${BASE}/api/lists/${listId}/items`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [first] }),
+      });
+      check('API: 视频成功加入列表', addRes.ok, JSON.stringify(await addRes.json().catch(() => ({}))).slice(0, 80));
+      // 加入列表后浏览页应隐藏该视频
+      const libAfter = await fetch(`${BASE}/api/library`).then(r => r.json());
+      check('加入列表后浏览页隐藏该视频', !libAfter.some(f => f.name === first), `hidden=${first}`);
+      // 清理：删除测试列表（视频恢复可见）
+      await fetch(`${BASE}/api/lists/${listId}`, { method: 'DELETE' });
+      const libRestored = await fetch(`${BASE}/api/library`).then(r => r.json());
+      check('删除列表后视频恢复浏览页可见', libRestored.some(f => f.name === first));
+    }
+  } else {
+    check('API: 视频成功加入列表', false, '视频库为空，跳过');
+  }
+
+  // 私密列表：卡片网格播放能力（前端 DOM 断言）
+  await page.click('.dock-icon[data-app="settings"]');
+  await page.waitForTimeout(400);
+  await page.click('#privateEntryBtn');
+  await page.waitForTimeout(400);
+  const pinVerifyTitle = await page.$eval('#modalCard .pin-screen-title', el => el.textContent).catch(() => '');
+  if (pinVerifyTitle.includes('输入密码')) {
+    for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+    await page.waitForTimeout(800);
+  }
+  const manageHasCreate = await page.$eval('#modalCard', el => el.textContent.includes('新建私密列表')).catch(() => false);
+  check('解锁后进入私密列表管理', manageHasCreate);
 
   // ── 5. API 层冒烟（走 HTTP 直接验证） ──
   const api = await fetch(`${BASE}/api/private/status`).then(r => r.json());

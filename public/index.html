@@ -696,9 +696,7 @@
         <div class="batch-bar" id="batchBar" hidden>
           <button class="title-btn" id="batchSelectAllBtn">全选</button>
           <span class="batch-count" id="batchCount">已选 0 项</span>
-          <button class="title-btn danger" id="batchDeleteBtn">删除</button>
-          <button class="title-btn" id="batchAddListBtn">加入列表</button>
-          <button class="title-btn" id="batchPrivateBtn">私密列表</button>
+          <button class="title-btn danger" id="batchOpsBtn">操作 ▾</button>
           <button class="title-btn" id="batchCancelBtn">取消</button>
         </div>
         <div class="library-grid" id="libraryGrid">
@@ -1574,6 +1572,8 @@ function openModal(html) {
 function closeModal() {
   modalMask.hidden = true;
   modalCard.innerHTML = '';
+  // 退出私密列表上下文时自动锁定，需重新解锁
+  if (privateCtx) { privateCtx = false; setPrivateToken(''); }
 }
 modalMask.addEventListener('click', (e) => { if (e.target === modalMask) closeModal(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modalMask.hidden) closeModal(); });
@@ -1682,6 +1682,28 @@ async function batchDeleteSelected() {
   });
 }
 
+// ── 批量操作：动态菜单（删除 / 加入各列表 / 加入私密列表 / 新建列表） ──
+function openBatchOps() {
+  if (!selectedSet.size) { showToast('请先选择视频', true); return; }
+  const n = selectedSet.size;
+  // 动态生成：删除 + 每个公开列表一项 + 私密列表 + 新建列表
+  const listBtns = myLists.map(l => `
+    <button class="as-btn" onclick="addSelectedTo('${l.id}', false)">📁 加入「${escapeHtml(l.name)}」</button>`).join('');
+  const privateBtn = myPrivateLists.length
+    ? myPrivateLists.map(l => `<button class="as-btn" onclick="addSelectedTo('${l.id}', true)">🔒 加入「${escapeHtml(l.name)}」</button>`).join('')
+    : '';
+  openModal(`
+    <div class="modal-head"><span class="modal-title">批量操作（已选 ${n} 项）</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="action-sheet">
+        <button class="as-btn danger" onclick="closeModal();batchDeleteSelected()">🗑 删除选中的 ${n} 个视频</button>
+        ${listBtns}
+        ${privateBtn ? `<div class="as-title">🔒 私密列表</div>${privateBtn}` : ''}
+        <button class="as-btn" style="color:var(--accent);" onclick="closeModal();openAddToList(false)">＋ 加入其他列表 / 新建列表</button>
+        <button class="as-btn" style="color:var(--accent);" onclick="closeModal();openAddToList(true)">🔒 加入私密列表</button>
+      </div>
+    </div>`);
+}
 // ── 加入列表 ────────────────────────────────────
 function openAddToList(isPrivate = false) {
   // 私密列表未解锁时：自动引导设置/验证密码，解锁后继续加入流程
@@ -1719,6 +1741,7 @@ async function addSelectedTo(listId, isPrivate) {
     closeModal();
     exitSelectionMode();
     loadLists();
+    loadLibrary(); // 加入列表后浏览页隐藏该视频
   } catch (err) { showToast(err.message, true); }
 }
 
@@ -1789,6 +1812,7 @@ async function removeList(listId) {
         showToast('列表已删除');
         closeModal();
         loadLists();
+        loadLibrary(); // 列表删除后，其中视频恢复在浏览页可见
       } catch (err) { showToast(err.message, true); }
     },
   });
@@ -1815,6 +1839,7 @@ async function removeListItem(listId, name) {
     showToast('已移除');
     openListDetail(listId);
     loadLists();
+    loadLibrary(); // 从列表移除后，浏览页恢复显示该视频
   } catch (err) { showToast(err.message, true); }
 }
 
@@ -1824,6 +1849,7 @@ async function removeListItem(listId, name) {
 const PRIVATE_TOKEN_KEY = 'vd.private.token';
 const PIN_LEN_KEY = 'vd.private.pinlen';
 let pendingPrivateAction = null; // 解锁成功后待执行的后续动作（如：加入私密列表）
+let privateCtx = false;          // 当前是否处于私密列表上下文（退出即锁定）
 function getPrivateToken() { return localStorage.getItem(PRIVATE_TOKEN_KEY) || ''; }
 function setPrivateToken(t) { if (t) localStorage.setItem(PRIVATE_TOKEN_KEY, t); else localStorage.removeItem(PRIVATE_TOKEN_KEY); }
 
@@ -1837,6 +1863,18 @@ function afterPrivateUnlock() {
     openPrivateManage();
   }
 }
+
+/** 进入后台/切走窗口：自动锁定私密会话，需重新解锁 */
+function lockPrivateSession() {
+  if (getPrivateToken()) {
+    setPrivateToken('');
+    privateCtx = false;
+    if (!modalMask.hidden) closeModal();
+    showToast('私密列表已锁定');
+  }
+}
+window.addEventListener('blur', lockPrivateSession);
+document.addEventListener('visibilitychange', () => { if (document.hidden) lockPrivateSession(); });
 
 // ── iOS PIN 弹窗（圆点 + 数字键盘） ────────────
 let pinState = null;
@@ -1970,8 +2008,9 @@ function openPrivateVerify() {
   });
 }
 
-// ── 私密列表管理 ────────────────────────────────
+// ── 私密列表管理（进入后 privateCtx=true，退出自动锁定） ──
 async function openPrivateManage() {
+  privateCtx = true;
   await loadPrivateLists();
   const rows = myPrivateLists.map(l => `
     <div class="list-tile" onclick="openPrivateDetail('${l.id}')">
@@ -2006,6 +2045,7 @@ async function removePrivateList(listId) {
         showToast('私密列表已删除');
         closeModal();
         loadLists();
+        loadLibrary(); // 私密列表删除后，其中视频恢复在浏览页可见
       } catch (err) { showToast(err.message, true); }
     },
   });
@@ -2013,14 +2053,29 @@ async function removePrivateList(listId) {
 function openPrivateDetail(listId) {
   const list = myPrivateLists.find(l => l.id === listId);
   if (!list) return;
+  privateCtx = true;
+  // 与浏览页一致的卡片网格：点击卡片播放，右上角移除
   const items = list.items.length ? list.items.map(i => `
-    <div class="list-item-row">
-      <span class="list-item-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</span>
-      <button class="list-item-del" onclick="removePrivateItem('${listId}','${i.name.replace(/'/g, "\\'")}')">移除</button>
+    <div class="video-card" data-name="${escapeHtml(i.name)}" onclick="playPrivateVideo('${i.name.replace(/'/g, "\\'")}')">
+      <div class="video-thumb">
+        <span class="play-badge">${icon('play', 20)}</span>
+        <button class="video-delete" onclick="event.stopPropagation();removePrivateItem('${listId}','${i.name.replace(/'/g, "\\'")}')" title="从列表移除">${icon('trash', 14)}</button>
+      </div>
+      <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
+      <div class="video-meta">${i.addedAt ? formatDate(i.addedAt) + ' 加入' : ''}</div>
     </div>`).join('') : '<div class="empty">列表为空</div>';
   openModal(`
     <div class="modal-head"><span class="modal-title">🔒 ${escapeHtml(list.name)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">${items}</div>`);
+    <div class="modal-body">
+      <div class="library-grid">${items}</div>
+      <div class="pin-tip">点击卡片播放 · 离开本弹窗或切换窗口将自动锁定</div>
+    </div>`);
+}
+
+/** 播放私密列表中的视频（复用浏览页播放器，与浏览体验一致） */
+function playPrivateVideo(name) {
+  closeModal();
+  playLibrary(name);
 }
 async function removePrivateItem(listId, name) {
   try {
@@ -2034,6 +2089,7 @@ async function removePrivateItem(listId, name) {
     showToast('已移除');
     openPrivateDetail(listId);
     loadLists();
+    loadLibrary(); // 从私密列表移除后，浏览页恢复显示该视频
   } catch (err) { showToast(err.message, true); }
 }
 
@@ -2088,9 +2144,7 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('inli
 $('cleanCompletedBtn').addEventListener('click', cleanCompleted);
 $('selectModeBtn').addEventListener('click', () => { selectionMode ? exitSelectionMode() : enterSelectionMode(); });
 $('batchSelectAllBtn').addEventListener('click', toggleSelectAll);
-$('batchDeleteBtn').addEventListener('click', batchDeleteSelected);
-$('batchAddListBtn').addEventListener('click', () => openAddToList(false));
-$('batchPrivateBtn').addEventListener('click', () => openAddToList(true));
+$('batchOpsBtn').addEventListener('click', openBatchOps);
 $('batchCancelBtn').addEventListener('click', exitSelectionMode);
 $('openListsBtn').addEventListener('click', openMyLists);
 $('privateEntryBtn').addEventListener('click', openPrivateEntry);

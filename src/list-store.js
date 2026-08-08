@@ -89,6 +89,23 @@ class ListStore {
     return this.lists.some((l) => l.private);
   }
 
+  /**
+   * 所有列表（含私密）中的条目文件名集合
+   * 用于浏览页过滤：已加入列表的视频不再直接可见
+   */
+  allItemNames() {
+    const set = new Set();
+    for (const l of this.lists) {
+      for (const i of l.items) set.add(i.name);
+    }
+    return set;
+  }
+
+  /** 条目是否已存在于任何列表 */
+  isListed(name) {
+    return this.allItemNames().has(name);
+  }
+
   get(id) {
     return this.lists.find((l) => l.id === id) || null;
   }
