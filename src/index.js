@@ -42,6 +42,7 @@ import { startDownload, cancelDownload, validateDiskSpace, getBandwidthUsage, se
 import { createLogger, taskLogger } from './logger.js';
 import { assertPublicUrl } from './security.js';
 import browserPool from './browser-pool.js';
+import listStore from './list-store.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -483,6 +484,177 @@ app.get('/api/stats', (_req, res) => {
   });
 });
 
+// ═══════════════════════════════════════════════════════
+// 列表系统 API（公开列表 + 私密列表 + 私密密码）
+// ═══════════════════════════════════════════════════════
+
+/** 从 Header 读取私密 token（私密操作鉴权） */
+function privateToken(req) {
+  return (req.headers['x-private-token'] || '').toString();
+}
+
+/**
+ * GET /api/lists — 列出公开列表（私密列表默认不可见）
+ */
+app.get('/api/lists', (_req, res) => {
+  res.json({ lists: listStore.listAll(), hasPrivate: listStore.hasPrivateList() });
+});
+
+/**
+ * GET /api/lists/:id — 查询单个列表（私密列表需 token）
+ */
+app.get('/api/lists/:id', (req, res) => {
+  const list = listStore.get(req.params.id);
+  if (!list) return res.status(404).json({ error: '列表不存在' });
+  if (list.private) {
+    try { listStore.verifyToken(privateToken(req)); }
+    catch (err) { return res.status(401).json({ error: err.message }); }
+  }
+  res.json(list);
+});
+
+/**
+ * POST /api/lists — 创建列表
+ * Body: { name: string, private?: boolean }
+ * 创建私密列表需携带 x-private-token
+ */
+app.post('/api/lists', (req, res) => {
+  const { name, private: isPrivate } = req.body || {};
+  try {
+    const list = listStore.create(name, !!isPrivate, privateToken(req));
+    log.info({ listId: list.id, name: list.name, private: list.private }, '创建列表');
+    res.json({ ok: true, list });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/lists/:id — 删除列表（私密列表需 token）
+ */
+app.delete('/api/lists/:id', (req, res) => {
+  try {
+    const ok = listStore.remove(req.params.id, privateToken(req));
+    if (!ok) return res.status(404).json({ error: '列表不存在' });
+    log.info({ listId: req.params.id }, '删除列表');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/lists/:id/items — 添加条目到列表
+ * Body: { names: string[] }
+ */
+app.post('/api/lists/:id/items', (req, res) => {
+  const { names } = req.body || {};
+  try {
+    const list = listStore.addItems(req.params.id, names, privateToken(req));
+    res.json({ ok: true, list });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * DELETE /api/lists/:id/items — 从列表移除条目
+ * Body: { names: string[] }
+ */
+app.delete('/api/lists/:id/items', (req, res) => {
+  const { names } = req.body || {};
+  try {
+    const list = listStore.removeItems(req.params.id, names, privateToken(req));
+    res.json({ ok: true, list });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/tasks/clean-completed — 一键清理所有已完成任务记录（保留已下载文件）
+ */
+app.post('/api/tasks/clean-completed', (req, res) => {
+  const completed = taskManager.listAll()
+    .filter(t => t.status === TaskStatus.COMPLETED)
+    .map(t => t.id);
+  if (completed.length === 0) {
+    return res.json({ ok: true, removed: 0 });
+  }
+  const result = taskManager.removeBatch(completed);
+  log.info({ removed: result.success }, '一键清理已完成任务记录');
+  res.json({ ok: true, ...result });
+});
+
+/**
+ * GET /api/private/status — 私密密码状态（是否已设置 / 是否存在私密列表）
+ */
+app.get('/api/private/status', (_req, res) => {
+  res.json({ hasPassword: listStore.hasPassword(), hasPrivate: listStore.hasPrivateList() });
+});
+
+/**
+ * POST /api/private/password — 首次设置私密密码（4/6 位数字）
+ * Body: { password: string }
+ */
+app.post('/api/private/password', (req, res) => {
+  if (listStore.hasPassword()) {
+    return res.status(400).json({ error: '私密密码已设置，如需修改请先验证' });
+  }
+  const { password } = req.body || {};
+  try {
+    listStore.setPassword(password);
+    log.info('设置私密密码');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/private/verify — 验证私密密码，签发 30 分钟 token
+ * Body: { password: string }
+ */
+app.post('/api/private/verify', (req, res) => {
+  const { password } = req.body || {};
+  try {
+    const { token, expiresAt } = listStore.verifyPassword(password);
+    res.json({ ok: true, token, expiresAt });
+  } catch (err) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/private/change — 修改私密密码（需 token + 原密码）
+ * Body: { oldPassword, newPassword }
+ */
+app.post('/api/private/change', (req, res) => {
+  const { oldPassword, newPassword } = req.body || {};
+  try {
+    listStore.changePassword(privateToken(req), oldPassword, newPassword);
+    log.info('修改私密密码');
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/private/lists — 列出私密列表（需 token）
+ */
+app.get('/api/private/lists', (req, res) => {
+  try {
+    listStore.verifyToken(privateToken(req));
+  } catch (err) {
+    return res.status(401).json({ error: err.message });
+  }
+  res.json({ lists: listStore.listPrivate(privateToken(req)) });
+});
+
+// ═══════════════════════════════════════════════════════
+// 核心流程：拦截 → 下载（增强版）
+// ═══════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════
 // 核心流程：拦截 → 下载（增强版）
 // ═══════════════════════════════════════════════════════

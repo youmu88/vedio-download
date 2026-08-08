@@ -430,6 +430,143 @@
     font-size: 10px; color: var(--text2); white-space: nowrap;
   }
 
+  /* ── 标题行小按钮 ───────────────────────────── */
+  .title-btn {
+    margin-left: auto;
+    min-height: 32px; padding: 8px 12px; border-radius: 8px;
+    font-size: 12px; font-weight: 600; color: var(--accent);
+    background: var(--fill); transition: background 0.15s ease, color 0.15s ease;
+    white-space: nowrap;
+  }
+  .title-btn:hover { background: var(--fill-strong); }
+  .title-btn.danger { color: var(--red); }
+  .title-btn.active { background: var(--accent); color: #fff; }
+  .group-title > .view-toggle + .title-btn { margin-left: 0; }
+
+  /* ── 浏览选择模式 ───────────────────────────── */
+  .video-card { position: relative; }
+  .sel-check {
+    position: absolute; top: 8px; left: 8px; z-index: 3;
+    width: 24px; height: 24px; border-radius: 50%;
+    background: rgba(0,0,0,0.45); color: transparent;
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+    border: 1.5px solid rgba(255,255,255,0.85);
+    transition: all 0.15s ease; pointer-events: none;
+    font-size: 13px; font-weight: 700;
+  }
+  .video-card.selected .sel-check {
+    background: var(--accent); border-color: var(--accent); color: #fff;
+  }
+  .selecting .video-card { cursor: pointer; }
+  .selecting .video-card.selected::after {
+    content: ''; position: absolute; inset: 0; border-radius: 12px;
+    box-shadow: inset 0 0 0 2px var(--accent); pointer-events: none;
+  }
+  .selecting .video-delete { opacity: 0 !important; pointer-events: none; }
+  .library-list .sel-check { top: 50%; transform: translateY(-50%); left: 8px; }
+  .library-list.selecting .video-card.selected::after { border-radius: 12px; }
+
+  /* ── 批量操作栏 ─────────────────────────────── */
+  .batch-bar {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 8px;
+    margin: 8px 0 12px; padding: 8px 12px;
+    background: var(--toolbar);
+    backdrop-filter: blur(24px) saturate(180%);
+    -webkit-backdrop-filter: blur(24px) saturate(180%);
+    border: 0.5px solid var(--separator); border-radius: 12px;
+    box-shadow: var(--shadow);
+  }
+  .batch-count { flex: 1; font-size: 13px; font-weight: 600; color: var(--text2); }
+  .batch-bar .title-btn { margin-left: 0; }
+
+  /* ── 弹窗 ───────────────────────────────────── */
+  .modal-mask {
+    position: fixed; inset: 0; z-index: 1000;
+    background: rgba(0,0,0,0.4);
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    animation: modalFade 0.18s ease;
+  }
+  @keyframes modalFade { from { opacity: 0; } to { opacity: 1; } }
+  .modal-card {
+    width: min(440px, calc(100vw - 48px));
+    max-height: min(78vh, 680px);
+    display: flex; flex-direction: column;
+    background: var(--bg); border-radius: 16px;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.4);
+    overflow: hidden; animation: modalUp 0.22s cubic-bezier(0.3, 1.3, 0.5, 1);
+  }
+  @keyframes modalUp { from { transform: translateY(24px) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }
+  .modal-head {
+    display: flex; align-items: center; gap: 12px;
+    padding: 16px 16px; border-bottom: 0.5px solid var(--separator);
+  }
+  .modal-title { flex: 1; font-size: 15px; font-weight: 700; }
+  .modal-close {
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--fill); color: var(--text2); font-size: 15px;
+    display: flex; align-items: center; justify-content: center;
+    transition: background 0.15s ease;
+  }
+  .modal-close:hover { background: var(--fill-strong); }
+  .modal-body { flex: 1; overflow-y: auto; padding: 12px 16px; overscroll-behavior: contain; }
+  .modal-foot {
+    display: flex; gap: 10px; padding: 12px 16px;
+    border-top: 0.5px solid var(--separator);
+  }
+  .modal-foot .btn-primary { flex: 1; }
+  .btn-secondary {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    background: var(--fill); color: var(--text); font-size: 14px; font-weight: 600;
+    padding: 12px 16px; border-radius: 10px; white-space: nowrap;
+    transition: background 0.15s ease, transform 0.08s ease;
+  }
+  .btn-secondary:active { transform: scale(0.97); }
+  .btn-secondary.danger { color: var(--red); }
+
+  /* ── 列表面板 ───────────────────────────────── */
+  .list-tile {
+    display: flex; align-items: center; gap: 12px;
+    padding: 12px 16px; margin-bottom: 8px;
+    background: var(--card); border-radius: 12px; box-shadow: var(--shadow);
+    cursor: pointer; transition: background 0.15s ease;
+  }
+  .list-tile:hover { background: var(--fill); }
+  .list-tile-icon {
+    width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: var(--fill); color: var(--accent); font-size: 16px;
+  }
+  .list-tile-icon.private { color: var(--orange); }
+  .list-tile-main { flex: 1; min-width: 0; }
+  .list-tile-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list-tile-meta { font-size: 12px; color: var(--text2); margin-top: 4px; }
+  .list-items { padding: 2px 0 10px; }
+  .list-item-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 8px 12px; border-radius: 10px; margin-bottom: 8px;
+    background: var(--fill);
+  }
+  .list-item-name { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .list-item-del { color: var(--red); font-size: 12px; padding: 8px; border-radius: 8px; flex-shrink: 0; min-height: 32px; }
+  .list-item-del:hover { background: rgba(255,59,48,0.12); }
+
+  /* ── 密码输入 ───────────────────────────────── */
+  .pin-field { display: flex; gap: 12px; justify-content: center; padding: 16px 0 8px; }
+  .pin-input {
+    width: 60px; height: 64px; text-align: center;
+    font-size: 28px; font-weight: 700;
+    background: var(--card); border: 1.5px solid var(--fill-strong);
+    border-radius: 12px; color: var(--text); outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    -webkit-text-security: disc;
+  }
+  .pin-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,122,255,0.18); }
+  .pin-tip { text-align: center; font-size: 13px; color: var(--text2); padding: 4px 0 12px; }
+  .pin-error { text-align: center; font-size: 13px; color: var(--red); min-height: 20px; }
+
   /* ── 移动端适配 ──────────────────────────────── */
   @media (max-width: 700px) {
     .dock { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
@@ -466,7 +603,9 @@
             <button class="btn-primary" id="downloadBtn">下载</button>
           </div>
         </div>
-        <div class="group-title">任务列表 <span id="taskCount" style="text-transform:none;"></span></div>
+        <div class="group-title">任务列表 <span id="taskCount" style="text-transform:none;"></span>
+          <button class="title-btn danger" id="cleanCompletedBtn" title="清理所有已完成任务记录（保留已下载文件）">清理已完成</button>
+        </div>
         <div class="group" id="taskList">
           <div class="empty"><div class="big">📥</div>还没有下载任务</div>
         </div>
@@ -506,6 +645,16 @@
             <button data-view="grid" class="active" title="网格视图">▦</button>
             <button data-view="list" title="列表视图">☰</button>
           </span>
+          <button class="title-btn" id="selectModeBtn" title="进入选择模式">选择</button>
+          <button class="title-btn" id="openListsBtn" title="查看我的列表">我的列表</button>
+        </div>
+        <div class="batch-bar" id="batchBar" hidden>
+          <button class="title-btn" id="batchSelectAllBtn">全选</button>
+          <span class="batch-count" id="batchCount">已选 0 项</span>
+          <button class="title-btn danger" id="batchDeleteBtn">删除</button>
+          <button class="title-btn" id="batchAddListBtn">加入列表</button>
+          <button class="title-btn" id="batchPrivateBtn">私密列表</button>
+          <button class="title-btn" id="batchCancelBtn">取消</button>
         </div>
         <div class="library-grid" id="libraryGrid">
           <div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>
@@ -546,6 +695,15 @@
             </div>
           </div>
         </div>
+
+        <div class="group-title">隐私</div>
+        <div class="group">
+          <div class="row setting-row">
+            <div class="row-label">私密列表<small>4/6 位数字密码保护，默认不可见</small></div>
+            <button class="btn-secondary" id="privateEntryBtn">进入</button>
+          </div>
+        </div>
+
 
         <div class="group-title">下载默认设置</div>
         <div class="group">
@@ -621,6 +779,11 @@
       <span class="dock-conn conn-dot off" id="connDot" title="连接状态"></span>
     </div>
   </div>
+</div>
+
+<!-- 通用弹窗 -->
+<div class="modal-mask" id="modalMask" hidden>
+  <div class="modal-card" id="modalCard"></div>
 </div>
 
 <script>
@@ -1120,6 +1283,8 @@ function buildTaskRow(task) {
 function renderTasks(tasks) {
   const list = $('taskList');
   $('taskCount').textContent = tasks.length ? `(${tasks.length})` : '';
+  // 有已完成任务时才显示「一键清理」
+  $('cleanCompletedBtn').hidden = !tasks.some(t => t.status === 'completed');
   if (!tasks.length) {
     list.innerHTML = '<div class="empty"><div class="big">📥</div>还没有下载任务</div>';
     return;
@@ -1166,7 +1331,7 @@ function libraryProgress(name) {
 function renderLibrary(files) {
   const grid = $('libraryGrid');
   const view = settings.libraryView || 'grid';
-  grid.className = view === 'list' ? 'library-list' : 'library-grid';
+  grid.className = (view === 'list' ? 'library-list' : 'library-grid') + (selectionMode ? ' selecting' : '');
   $('libraryCount').textContent = files.length ? `(${files.length})` : '';
   document.querySelectorAll('#libraryViewToggle button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   if (!files.length) {
@@ -1180,9 +1345,12 @@ function renderLibrary(files) {
       : view === 'list'
         ? `<div class="video-progress">${pct}%<span class="bar" style="width:${pct}%"></span></div>`
         : `<span class="video-progress">${pct}%</span>`;
+    const sel = selectionMode ? `<span class="sel-check">${selectedSet.has(f.name) ? '✓' : ''}</span>` : '';
+    const selCls = selectionMode && selectedSet.has(f.name) ? ' selected' : '';
     if (view === 'list') {
       return `
-      <div class="video-card" data-name="${escapeHtml(f.name)}">
+      <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}">
+        ${sel}
         <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span></div>
         <div class="video-info">
           <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
@@ -1193,7 +1361,8 @@ function renderLibrary(files) {
       </div>`;
     }
     return `
-    <div class="video-card" data-name="${escapeHtml(f.name)}">
+    <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}">
+      ${sel}
       <div class="video-thumb">
         <span class="play-badge">${icon('play', 20)}</span>
         ${progressHtml}
@@ -1345,6 +1514,409 @@ function showToast(msg, isError = false) {
 }
 
 // ═══════════════════════════════════════════════════════
+// 弹窗管理
+// ═══════════════════════════════════════════════════════
+const modalMask = $('modalMask');
+const modalCard = $('modalCard');
+function openModal(html) {
+  modalCard.innerHTML = html;
+  modalMask.hidden = false;
+}
+function closeModal() {
+  modalMask.hidden = true;
+  modalCard.innerHTML = '';
+}
+modalMask.addEventListener('click', (e) => { if (e.target === modalMask) closeModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modalMask.hidden) closeModal(); });
+
+// ═══════════════════════════════════════════════════════
+// 下载页：一键清理已完成
+// ═══════════════════════════════════════════════════════
+async function cleanCompleted() {
+  if (!confirm('确定清理所有「已完成」任务记录？已下载的视频文件将保留。')) return;
+  try {
+    const res = await fetch('/api/tasks/clean-completed', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '清理失败');
+    showToast(`已清理 ${data.removed || 0} 条已完成记录`);
+    loadTasks();
+  } catch (err) { showToast(err.message, true); }
+}
+
+// ═══════════════════════════════════════════════════════
+// 浏览页：列表数据 + 选择模式 + 批量操作
+// ═══════════════════════════════════════════════════════
+let myLists = [];            // 公开列表
+let myPrivateLists = [];     // 私密列表（解锁后加载）
+let selectionMode = false;   // 是否处于选择模式
+let selectedSet = new Set(); // 已选文件名
+
+async function loadLists() {
+  try {
+    const res = await fetch('/api/lists');
+    if (!res.ok) return;
+    const data = await res.json();
+    myLists = data.lists || [];
+    if (data.hasPrivate && getPrivateToken()) loadPrivateLists();
+  } catch {}
+}
+async function loadPrivateLists() {
+  try {
+    const res = await fetch('/api/private/lists', { headers: { 'X-Private-Token': getPrivateToken() } });
+    if (res.ok) myPrivateLists = (await res.json()).lists || [];
+  } catch {}
+}
+
+// ── 选择模式 ────────────────────────────────────
+function enterSelectionMode() {
+  selectionMode = true;
+  selectedSet.clear();
+  $('selectModeBtn').textContent = '取消';
+  $('batchBar').hidden = false;
+  renderLibrary(libraryFiles);
+}
+function exitSelectionMode() {
+  selectionMode = false;
+  selectedSet.clear();
+  $('selectModeBtn').textContent = '选择';
+  $('batchBar').hidden = true;
+  renderLibrary(libraryFiles);
+}
+function toggleSelect(name) {
+  if (selectedSet.has(name)) selectedSet.delete(name);
+  else selectedSet.add(name);
+  updateBatchBar();
+  renderLibrary(libraryFiles);
+}
+function updateBatchBar() {
+  $('batchCount').textContent = `已选 ${selectedSet.size} 项`;
+  $('batchSelectAllBtn').textContent = (selectedSet.size === libraryFiles.length && libraryFiles.length) ? '全不选' : '全选';
+}
+function toggleSelectAll() {
+  if (selectedSet.size === libraryFiles.length) selectedSet.clear();
+  else libraryFiles.forEach(f => selectedSet.add(f.name));
+  updateBatchBar();
+  renderLibrary(libraryFiles);
+}
+async function batchDeleteSelected() {
+  if (!selectedSet.size) { showToast('请先选择视频', true); return; }
+  if (!confirm(`确定删除选中的 ${selectedSet.size} 个视频文件？删除后无法恢复。`)) return;
+  let ok = 0;
+  for (const name of selectedSet) {
+    try {
+      const res = await fetch(`/api/library/${encodeURIComponent(name)}`, { method: 'DELETE' });
+      if (res.ok) { ok++; removeHistory('file:' + name); }
+    } catch {}
+  }
+  showToast(`已删除 ${ok} 个视频`);
+  exitSelectionMode();
+  loadLibrary();
+}
+
+// ── 加入列表 ────────────────────────────────────
+function openAddToList(isPrivate = false) {
+  if (isPrivate && !getPrivateToken()) { showToast('请先在「设置 → 私密列表」解锁', true); return; }
+  const listArr = isPrivate ? myPrivateLists : myLists;
+  if (!listArr.length) { showToast(isPrivate ? '暂无私密列表，请先创建' : '暂无列表，请先创建', true); return; }
+  const items = listArr.map(l => `
+    <div class="list-tile" onclick="addSelectedTo('${l.id}', ${isPrivate})">
+      <span class="list-tile-icon ${isPrivate ? 'private' : ''}">${isPrivate ? '🔒' : '📁'}</span>
+      <span class="list-tile-main">
+        <span class="list-tile-name">${escapeHtml(l.name)}</span>
+        <span class="list-tile-meta">${l.items.length} 项</span>
+      </span>
+    </div>`).join('');
+  openModal(`
+    <div class="modal-head"><span class="modal-title">加入${isPrivate ? '私密' : ''}列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">${items || '<div class="empty">暂无列表</div>'}</div>`);
+}
+async function addSelectedTo(listId, isPrivate) {
+  const names = [...selectedSet];
+  if (!names.length) { showToast('请先选择视频', true); return; }
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (isPrivate) headers['X-Private-Token'] = getPrivateToken();
+    const res = await fetch(`/api/lists/${listId}/items`, {
+      method: 'POST', headers, body: JSON.stringify({ names }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '加入失败');
+    showToast(`已加入 ${names.length} 项`);
+    closeModal();
+    exitSelectionMode();
+    loadLists();
+  } catch (err) { showToast(err.message, true); }
+}
+
+// ── 创建列表 ────────────────────────────────────
+function openCreateList(isPrivate = false) {
+  openModal(`
+    <div class="modal-head"><span class="modal-title">创建${isPrivate ? '私密' : ''}列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <input class="text-input" id="newListName" placeholder="列表名称" maxlength="40" style="width:100%;">
+      ${isPrivate ? '<p class="pin-tip">🔒 私密列表仅凭密码可见</p>' : ''}
+    </div>
+    <div class="modal-foot">
+      <button class="btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn-primary" onclick="submitCreateList(${isPrivate})">创建</button>
+    </div>`);
+  setTimeout(() => { const el = $('newListName'); if (el) el.focus(); }, 60);
+}
+async function submitCreateList(isPrivate) {
+  const name = ($('newListName')?.value || '').trim();
+  if (!name) { showToast('请输入列表名称', true); return; }
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (isPrivate) headers['X-Private-Token'] = getPrivateToken();
+    const res = await fetch('/api/lists', {
+      method: 'POST', headers, body: JSON.stringify({ name, private: isPrivate }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '创建失败');
+    showToast(`列表「${data.list.name}」已创建`);
+    closeModal();
+    loadLists();
+    if (isPrivate) openPrivateManage();
+  } catch (err) { showToast(err.message, true); }
+}
+
+// ── 我的列表面板 ────────────────────────────────
+function openMyLists() {
+  const rows = myLists.map(listTileHtml).join('') ||
+    '<div class="empty"><div class="big">📂</div>暂无公开列表</div>';
+  openModal(`
+    <div class="modal-head"><span class="modal-title">我的列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      ${rows}
+      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="openCreateList(false)">＋ 新建公开列表</button>
+    </div>`);
+}
+function listTileHtml(list) {
+  return `
+    <div class="list-tile" onclick="openListDetail('${list.id}')">
+      <span class="list-tile-icon">📁</span>
+      <span class="list-tile-main">
+        <span class="list-tile-name">${escapeHtml(list.name)}</span>
+        <span class="list-tile-meta">${list.items.length} 项 · ${formatDate(list.createdAt)}</span>
+      </span>
+      <button class="list-item-del" onclick="event.stopPropagation();removeList('${list.id}')">删除</button>
+    </div>`;
+}
+async function removeList(listId) {
+  if (!confirm('确定删除该列表？列表中的视频文件不会被删除。')) return;
+  try {
+    const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '删除失败');
+    showToast('列表已删除');
+    closeModal();
+    loadLists();
+  } catch (err) { showToast(err.message, true); }
+}
+function openListDetail(listId) {
+  const list = myLists.find(l => l.id === listId);
+  if (!list) return;
+  const items = list.items.length ? list.items.map(i => `
+    <div class="list-item-row">
+      <span class="list-item-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</span>
+      <button class="list-item-del" onclick="removeListItem('${listId}','${i.name.replace(/'/g, "\\'")}')">移除</button>
+    </div>`).join('') : '<div class="empty">列表为空</div>';
+  openModal(`
+    <div class="modal-head"><span class="modal-title">${escapeHtml(list.name)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">${items}</div>`);
+}
+async function removeListItem(listId, name) {
+  try {
+    const res = await fetch(`/api/lists/${listId}/items`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [name] }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '移除失败');
+    showToast('已移除');
+    openListDetail(listId);
+    loadLists();
+  } catch (err) { showToast(err.message, true); }
+}
+
+// ═══════════════════════════════════════════════════════
+// 私密密码：设置 / 验证 / 修改
+// ═══════════════════════════════════════════════════════
+const PRIVATE_TOKEN_KEY = 'vd.private.token';
+function getPrivateToken() { return localStorage.getItem(PRIVATE_TOKEN_KEY) || ''; }
+function setPrivateToken(t) { if (t) localStorage.setItem(PRIVATE_TOKEN_KEY, t); else localStorage.removeItem(PRIVATE_TOKEN_KEY); }
+
+async function openPrivateEntry() {
+  try {
+    const res = await fetch('/api/private/status');
+    if (!res.ok) throw new Error();
+    const st = await res.json();
+    if (!st.hasPassword) openPrivateSetup();
+    else openPrivateVerify();
+  } catch { showToast('无法获取私密状态', true); }
+}
+
+// ── 首次设置密码 ────────────────────────────────
+function openPrivateSetup() {
+  openModal(`
+    <div class="modal-head"><span class="modal-title">设置私密密码</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="pin-tip">设置 4 位或 6 位数字密码<br>用于保护私密列表</p>
+      <div class="pin-field"><input class="pin-input" id="pinNew" type="password" inputmode="numeric" maxlength="6" placeholder="新密码" style="width:100%;"></div>
+      <div class="pin-field"><input class="pin-input" id="pinConfirm" type="password" inputmode="numeric" maxlength="6" placeholder="确认密码" style="width:100%;"></div>
+      <div class="pin-error" id="pinError"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn-primary" onclick="submitPrivateSetup()">设置</button>
+    </div>`);
+}
+async function submitPrivateSetup() {
+  const p1 = ($('pinNew')?.value || '').trim();
+  const p2 = ($('pinConfirm')?.value || '').trim();
+  const err = $('pinError');
+  if (!/^(\d{4}|\d{6})$/.test(p1)) { err.textContent = '密码需为 4 位或 6 位数字'; return; }
+  if (p1 !== p2) { err.textContent = '两次输入不一致'; return; }
+  try {
+    const res = await fetch('/api/private/password', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p1 }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '设置失败');
+    showToast('私密密码已设置');
+    closeModal();
+    openPrivateVerify();
+  } catch (e) { err.textContent = e.message; }
+}
+
+// ── 验证密码 ────────────────────────────────────
+function openPrivateVerify() {
+  openModal(`
+    <div class="modal-head"><span class="modal-title">私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <p class="pin-tip">输入私密密码解锁</p>
+      <div class="pin-field"><input class="pin-input" id="pinInput" type="password" inputmode="numeric" maxlength="6" placeholder="密码" style="width:100%;"></div>
+      <div class="pin-error" id="pinError"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn-primary" onclick="submitPrivateVerify()">解锁</button>
+    </div>`);
+}
+async function submitPrivateVerify() {
+  const p = ($('pinInput')?.value || '').trim();
+  const err = $('pinError');
+  if (!p) { err.textContent = '请输入密码'; return; }
+  try {
+    const res = await fetch('/api/private/verify', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '密码错误');
+    setPrivateToken(data.token);
+    showToast('解锁成功');
+    closeModal();
+    openPrivateManage();
+  } catch (e) { err.textContent = e.message; }
+}
+
+// ── 私密列表管理 ────────────────────────────────
+async function openPrivateManage() {
+  await loadPrivateLists();
+  const rows = myPrivateLists.map(l => `
+    <div class="list-tile" onclick="openPrivateDetail('${l.id}')">
+      <span class="list-tile-icon private">🔒</span>
+      <span class="list-tile-main">
+        <span class="list-tile-name">${escapeHtml(l.name)}</span>
+        <span class="list-tile-meta">${l.items.length} 项 · ${formatDate(l.createdAt)}</span>
+      </span>
+      <button class="list-item-del" onclick="event.stopPropagation();removePrivateList('${l.id}')">删除</button>
+    </div>`).join('') || '<div class="empty"><div class="big">🔒</div>暂无私有列表</div>';
+  openModal(`
+    <div class="modal-head"><span class="modal-title">🔒 私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      ${rows}
+      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="openCreateList(true)">＋ 新建私密列表</button>
+      <div style="text-align:center;margin-top:14px;">
+        <button class="btn-secondary" onclick="openChangePin()">修改密码</button>
+        <button class="btn-secondary danger" onclick="setPrivateToken('');closeModal();showToast('已锁定')">退出锁定</button>
+      </div>
+    </div>`);
+}
+async function removePrivateList(listId) {
+  if (!confirm('确定删除该私密列表？列表中的视频文件不会被删除。')) return;
+  try {
+    const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE', headers: { 'X-Private-Token': getPrivateToken() } });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '删除失败');
+    showToast('私密列表已删除');
+    closeModal();
+    loadLists();
+  } catch (err) { showToast(err.message, true); }
+}
+function openPrivateDetail(listId) {
+  const list = myPrivateLists.find(l => l.id === listId);
+  if (!list) return;
+  const items = list.items.length ? list.items.map(i => `
+    <div class="list-item-row">
+      <span class="list-item-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</span>
+      <button class="list-item-del" onclick="removePrivateItem('${listId}','${i.name.replace(/'/g, "\\'")}')">移除</button>
+    </div>`).join('') : '<div class="empty">列表为空</div>';
+  openModal(`
+    <div class="modal-head"><span class="modal-title">🔒 ${escapeHtml(list.name)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">${items}</div>`);
+}
+async function removePrivateItem(listId, name) {
+  try {
+    const res = await fetch(`/api/lists/${listId}/items`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json', 'X-Private-Token': getPrivateToken() },
+      body: JSON.stringify({ names: [name] }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '移除失败');
+    showToast('已移除');
+    openPrivateDetail(listId);
+    loadLists();
+  } catch (err) { showToast(err.message, true); }
+}
+
+// ── 修改密码 ────────────────────────────────────
+function openChangePin() {
+  openModal(`
+    <div class="modal-head"><span class="modal-title">修改私密密码</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="pin-field"><input class="pin-input" id="pinOld" type="password" inputmode="numeric" maxlength="6" placeholder="原密码" style="width:100%;"></div>
+      <div class="pin-field"><input class="pin-input" id="pinNew2" type="password" inputmode="numeric" maxlength="6" placeholder="新密码" style="width:100%;"></div>
+      <div class="pin-error" id="pinError"></div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn-primary" onclick="submitChangePin()">修改</button>
+    </div>`);
+}
+async function submitChangePin() {
+  const oldP = ($('pinOld')?.value || '').trim();
+  const newP = ($('pinNew2')?.value || '').trim();
+  const err = $('pinError');
+  if (!/^(\d{4}|\d{6})$/.test(newP)) { err.textContent = '新密码需为 4 位或 6 位数字'; return; }
+  try {
+    const res = await fetch('/api/private/change', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Private-Token': getPrivateToken() },
+      body: JSON.stringify({ oldPassword: oldP, newPassword: newP }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '修改失败');
+    showToast('密码已修改');
+    closeModal();
+  } catch (e) { err.textContent = e.message; }
+}
+
+// ═══════════════════════════════════════════════════════
+// 初始化
+// ═══════════════════════════════════════════════════════
+$('downloadBtn').addEventListener('click', submitDownload);
+// ═══════════════════════════════════════════════════════
 // 初始化
 // ═══════════════════════════════════════════════════════
 $('downloadBtn').addEventListener('click', submitDownload);
@@ -1356,16 +1928,19 @@ $('refreshHealth').addEventListener('click', loadHealth);
 $('parallelDownloadsInput').addEventListener('change', saveServerSettings);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('inlinePlayer').hidden) closePlayer(); });
 
-// 视频库事件委托：播放 / 删除
+// 视频库事件委托：播放 / 删除 / 选择模式
 $('libraryGrid').addEventListener('click', (e) => {
   const del = e.target.closest('[data-delete-name]');
   if (del) {
     e.stopPropagation();
-    deleteVideo(del.dataset.deleteName);
+    if (!selectionMode) deleteVideo(del.dataset.deleteName);
     return;
   }
   const card = e.target.closest('.video-card');
-  if (card && card.dataset.name) playLibrary(card.dataset.name);
+  if (card && card.dataset.name) {
+    if (selectionMode) toggleSelect(card.dataset.name);
+    else playLibrary(card.dataset.name);
+  }
 });
 
 // 网格/列表视图切换
