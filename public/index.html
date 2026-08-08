@@ -855,6 +855,40 @@
         <div class="footer-note">视频下载器 v2.1 · Playwright 流拦截 + 多引擎下载</div>
       </div>
     </section>
+
+    <!-- ═══════ App：私密浏览（临时，认证后创建，退出即销毁） ═══════ -->
+    <section class="window closed" id="win-private" data-app="private">
+      <div class="titlebar">
+        <div class="traffic">
+          <button class="tl red" data-act="close" title="关闭">×</button>
+          <button class="tl yellow" data-act="min" title="最小化">−</button>
+          <button class="tl green" data-act="full" title="全屏">⤢</button>
+        </div>
+        <div class="win-title">🔒 私密列表</div>
+        <span class="win-conn conn-dot off" title="连接状态"></span>
+      </div>
+      <div class="win-content">
+        <div class="inline-player" id="privateInlinePlayer" hidden>
+          <div class="inline-player-bar">
+            <span class="inline-player-title" id="privateInlinePlayerTitle"></span>
+            <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放">×</button>
+          </div>
+          <video id="privateInlinePlayerVideo" controls playsinline></video>
+        </div>
+
+        <div class="group-title">私密视频库 <span id="privateBrowseCrumb" style="text-transform:none;"></span><span id="privateCount" style="text-transform:none;"></span>
+          <span class="view-toggle" id="privateViewToggle">
+            <button data-view="grid" class="active" title="网格视图">▦</button>
+            <button data-view="list" title="列表视图">☰</button>
+          </span>
+          <button class="title-btn danger" id="privateLockBtn" title="锁定并退出私密浏览">锁定</button>
+        </div>
+        <div class="folder-grid" id="privateFolderGrid" hidden></div>
+        <div class="library-grid" id="privateLibraryGrid">
+          <div class="empty"><div class="big">🔒</div>私密列表为空<br>认证后此处显示私密内容</div>
+        </div>
+      </div>
+    </section>
   </div>
 
   <!-- Dock -->
@@ -868,6 +902,10 @@
       </button>
       <button class="dock-icon app-settings" data-app="settings" title="设置">
         <span class="label">设置</span>
+      </button>
+      <span class="dock-sep" id="privateDockSep" hidden></span>
+      <button class="dock-icon app-private" id="privateDockIcon" data-app="private" title="🔒 私密列表" hidden>
+        <span class="label">私密</span>
       </button>
       <span class="dock-sep"></span>
       <span class="dock-conn conn-dot off" id="connDot" title="连接状态"></span>
@@ -935,7 +973,7 @@ function icon(name, size = 18) {
 // ═══════════════════════════════════════════════════════
 // 窗口管理器（macOS 风格 Dock + 多窗口）
 // ═══════════════════════════════════════════════════════
-const APP_ORDER = ['downloads', 'browse', 'settings'];
+const APP_ORDER = ['downloads', 'browse', 'settings', 'private'];
 const winState = {};
 let activeApp = 'downloads';
 let zTop = 20;
@@ -992,6 +1030,7 @@ function focusApp(name) {
   updateDesktopHint();
   if (name === 'browse') { loadLibrary(); }
   if (name === 'settings') { loadServerSettings(); loadHealth(); }
+  if (name === 'private') { loadPrivateLists().then(renderPrivateBrowse); }
 }
 
 function ensureOpen(name) {
@@ -1012,6 +1051,14 @@ function closeApp(name) {
   updateDock();
   updateNoDock();
   updateDesktopHint();
+  // 私密临时 App 关闭即销毁：隐藏 dock 入口、清除 token
+  if (name === 'private') {
+    $('privateDockIcon').hidden = true;
+    $('privateDockSep').hidden = true;
+    setPrivateToken('');
+    privateCtx = false;
+    privateFolder = null;
+  }
 }
 
 function minimizeApp(name) {
@@ -1618,12 +1665,15 @@ let hls = null;
 let currentPlay = null;
 let lastSaveTime = 0;
 
-function openPlayer(title, src, id) {
-  // 在浏览 App 窗口内嵌播放
-  ensureOpen('browse');
-  const video = $('inlinePlayerVideo');
-  $('inlinePlayerTitle').textContent = title;
-  $('inlinePlayer').hidden = false;
+function openPlayer(title, src, id, target = 'browse') {
+  // 目标容器：browse=浏览窗口 / private=私密临时 App
+  const pfx = target === 'private' ? 'private' : '';
+  const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+  const titleEl = $(pfx ? 'privateInlinePlayerTitle' : 'inlinePlayerTitle');
+  const video = $(pfx ? 'privateInlinePlayerVideo' : 'inlinePlayerVideo');
+  ensureOpen(target === 'private' ? 'private' : 'browse');
+  titleEl.textContent = title;
+  box.hidden = false;
   if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
   currentPlay = null;
   currentPlay = { id, title, src, time: 0, duration: 0, updatedAt: Date.now() };
@@ -2040,7 +2090,8 @@ function afterPrivateUnlock() {
     pendingPrivateAction = null;
     cb();
   } else {
-    openPrivateManage();
+    // 认证通过后打开私密临时浏览 App（而非弹窗式管理）
+    openPrivateApp();
   }
 }
 
@@ -2207,43 +2258,161 @@ function openPrivateSetup() {
 
 // ── 验证密码解锁（4/6 位自适应） ──────────────
 function openPrivateVerify() {
-  // 第一级认证：输入密码
+  // 进入私密列表仅需输入 1 次密码（设置/修改密码时才需两次）
   openPinScreen({
-    title: '输入密码', sub: '第 1 次 · 输入私密密码（4 或 6 位）', len: 6, autoBoth: true,
-    onDone: async (p1) => {
+    title: '输入密码', sub: '输入私密密码（4 或 6 位）', len: 6, autoBoth: true,
+    onDone: async (p) => {
       try {
-        const res1 = await fetch('/api/private/verify', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p1 }),
+        const res = await fetch('/api/private/verify', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p }),
         });
-        const data1 = await res1.json().catch(() => ({}));
-        if (!res1.ok) throw new Error(data1.error || '密码错误');
-        // 第二级认证：再次输入确认（防止误触/中间人）
-        openPinScreen({
-          title: '确认密码', sub: '第 2 次 · 再次输入以确认（4 或 6 位）', len: 6, autoBoth: true,
-          onDone: async (p2) => {
-            try {
-              const res2 = await fetch('/api/private/verify', {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p2 }),
-              });
-              const data2 = await res2.json().catch(() => ({}));
-              if (!res2.ok) throw new Error(data2.error || '密码错误');
-              setPrivateToken(data2.token);
-              showToast('解锁成功');
-              closeModal();
-              afterPrivateUnlock();
-            } catch (e2) {
-              pinSetError(e2.message + '，请重试');
-            }
-          },
-        });
-      } catch (e1) {
-        pinSetError(e1.message + '，请重试');
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '密码错误');
+        setPrivateToken(data.token);
+        showToast('解锁成功');
+        closeModal();
+        afterPrivateUnlock();
+      } catch (e) {
+        pinSetError(e.message + '，请重试');
       }
     },
   });
 }
 
 // ── 私密列表管理（进入后 privateCtx=true，退出自动锁定） ──
+// ═══════════════════════════════════════════════════════
+// 私密列表临时浏览 App（认证后创建，退出即销毁）
+// ═══════════════════════════════════════════════════════
+let privateFolder = null; // 当前私密浏览位置：null=私密列表首页 / {id,name}
+
+/** 打开私密临时浏览 App（已认证，token 有效） */
+function openPrivateApp() {
+  privateCtx = true;
+  // 显示 dock 中的私密图标（临时 App 入口）
+  $('privateDockIcon').hidden = false;
+  $('privateDockSep').hidden = false;
+  browseFolder = null;
+  privateFolder = null;
+  ensureOpen('private');
+  loadPrivateLists().then(renderPrivateBrowse);
+}
+
+/** 关闭私密临时 App：销毁窗口、隐藏 dock 图标、清除 token（重新解锁才可再进） */
+function closePrivateApp() {
+  try { closeApp('private'); } catch (_) {}
+  $('privateDockIcon').hidden = true;
+  $('privateDockSep').hidden = true;
+  setPrivateToken('');
+  privateCtx = false;
+  privateFolder = null;
+  // 关闭私密播放器（若在播放）
+  try {
+    const v = $('privateInlinePlayerVideo');
+    if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+    $('privateInlinePlayer').hidden = true;
+  } catch (_) {}
+  showToast('已退出私密浏览');
+}
+
+/** 渲染私密临时 App 内容：首页=私密列表文件夹 / 列表内=视频卡片 */
+function renderPrivateBrowse() {
+  const grid = $('privateLibraryGrid');
+  const folderEl = $('privateFolderGrid');
+  const crumb = $('privateBrowseCrumb');
+  const view = settings.libraryView || 'grid';
+  const isList = privateFolder && privateFolder.id;
+
+  crumb.innerHTML = isList
+    ? `<button class="folder-back" onclick="privateFolder=null;renderPrivateBrowse()">‹ 私密列表</button> ${escapeHtml(privateFolder.name)}`
+    : '私密列表';
+  $('privateCount').textContent = '';
+
+  if (isList) {
+    folderEl.hidden = true;
+    renderPrivateFolderVideos(privateFolder);
+    return;
+  }
+  // 首页：私密列表文件夹网格
+  folderEl.hidden = false;
+  if (!myPrivateLists.length) {
+    folderEl.innerHTML = '<div class="empty"><div class="big">🔒</div>暂无私密列表<br>可在浏览页选择视频后创建</div>';
+  } else {
+    folderEl.innerHTML = myPrivateLists.map((l) => `
+      <div class="folder-card" data-pfolder="${l.id}" data-pname="${escapeHtml(l.name)}">
+        <div class="folder-icon private">🔒</div>
+        <div class="folder-name">${escapeHtml(l.name)}</div>
+        <div class="folder-meta">${l.items.length} 个视频</div>
+      </div>`).join('');
+  }
+  grid.innerHTML = '';
+}
+
+/** 私密列表内视频（复用浏览页卡片样式，含大小/时间/进度） */
+async function renderPrivateFolderVideos(folder) {
+  const grid = $('privateLibraryGrid');
+  const view = settings.libraryView || 'grid';
+  grid.className = view === 'list' ? 'library-list' : 'library-grid';
+  $('privateCount').textContent = '';
+  let items = [];
+  try {
+    const res = await privateFetch(`/api/lists/${folder.id}`);
+    if (res && res.ok) {
+      const list = await res.json();
+      items = list.items || [];
+    } else if (res === null) { return; } // 已转入重新解锁流程
+  } catch (_) {}
+  if (!items.length) {
+    grid.innerHTML = '<div class="empty"><div class="big">📂</div>列表为空<br>在浏览页选择视频后可加入</div>';
+    return;
+  }
+  grid.innerHTML = items.map((i) => {
+    const pct = libraryProgress(i.name);
+    const progressHtml = pct === null ? '' : view === 'list'
+      ? `<div class="video-progress">${pct}%<span class="bar" style="width:${pct}%"></span></div>`
+      : `<span class="video-progress">${pct}%</span>`;
+    const meta = [i.size ? formatBytes(i.size) : '', i.mtime ? formatDate(i.mtime) : '', i.addedAt ? formatDate(i.addedAt) + ' 加入' : ''].filter(Boolean).join(' · ');
+    return view === 'list'
+      ? `
+      <div class="video-card" data-pvideo="${escapeHtml(i.name)}">
+        <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span>${progressHtml}</div>
+        <div class="video-info">
+          <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
+          <div class="video-meta">${meta}</div>
+        </div>
+        <button class="video-delete" data-prm="${folder.id}|${escapeHtml(i.name)}" title="从列表移除">${icon('trash', 15)}</button>
+      </div>`
+      : `
+      <div class="video-card" data-pvideo="${escapeHtml(i.name)}">
+        <div class="video-thumb">
+          <span class="play-badge">${icon('play', 20)}</span>
+          ${progressHtml}
+          <button class="video-delete" data-prm="${folder.id}|${escapeHtml(i.name)}" title="从列表移除">${icon('trash', 14)}</button>
+        </div>
+        <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
+        <div class="video-meta">${meta}</div>
+      </div>`;
+  }).join('');
+}
+
+/** 私密 App 内播放视频（私密窗口内嵌播放器） */
+function playPrivateVideo2(name) {
+  openPlayer(name, `/downloads/${encodeURIComponent(name)}`, `file:${name}`, 'private');
+}
+
+/** 私密 App 内从列表移除视频 */
+async function removePrivateVideo(folderId, name) {
+  try {
+    const res = await privateFetch(`/api/lists/${folderId}/items`, {
+      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [name] }),
+    }, () => renderPrivateFolderVideos(privateFolder));
+    if (res === null) return;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '移除失败');
+    showToast('已从私密列表移除');
+    loadPrivateLists().then(renderPrivateBrowse);
+  } catch (err) { showToast(err.message, true); }
+}
+
 async function openPrivateManage() {
   privateCtx = true;
   // 进入私密列表管理前统一校验 token，过期时自动引导重新解锁
@@ -2395,6 +2564,44 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('inli
 $('cleanCompletedBtn').addEventListener('click', cleanCompleted);
 $('selectModeBtn').addEventListener('click', () => { selectionMode ? exitSelectionMode() : enterSelectionMode(); });
 $('batchSelectAllBtn').addEventListener('click', toggleSelectAll);
+$('batchOpsBtn').addEventListener('click', openBatchOps);
+$('batchCancelBtn').addEventListener('click', exitSelectionMode);
+$('openListsBtn').addEventListener('click', () => { browseFolder = null; renderBrowse(); });
+$('privateEntryBtn').addEventListener('click', openPrivateEntry);
+
+// ── 私密临时浏览 App 事件绑定 ──
+$('privateLockBtn').addEventListener('click', closePrivateApp);
+$('privateInlinePlayerClose').addEventListener('click', () => {
+  const v = $('privateInlinePlayerVideo');
+  if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+  $('privateInlinePlayer').hidden = true;
+});
+$('privateViewToggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  settings.libraryView = btn.dataset.view;
+  saveSettings();
+  renderPrivateBrowse();
+});
+// 私密文件夹进入
+$('privateFolderGrid').addEventListener('click', (e) => {
+  const card = e.target.closest('.folder-card');
+  if (!card || !card.dataset.pfolder) return;
+  privateFolder = { id: card.dataset.pfolder, name: card.dataset.pname };
+  renderPrivateBrowse();
+});
+// 私密列表内：播放 / 从列表移除
+$('privateLibraryGrid').addEventListener('click', (e) => {
+  const rm = e.target.closest('[data-prm]');
+  if (rm) {
+    e.stopPropagation();
+    const [fid, fname] = rm.dataset.prm.split('|');
+    removePrivateVideo(fid, fname);
+    return;
+  }
+  const card = e.target.closest('.video-card');
+  if (card && card.dataset.pvideo) playPrivateVideo2(card.dataset.pvideo);
+});
 $('batchOpsBtn').addEventListener('click', openBatchOps);
 $('batchCancelBtn').addEventListener('click', exitSelectionMode);
 $('openListsBtn').addEventListener('click', () => { browseFolder = null; renderBrowse(); });
