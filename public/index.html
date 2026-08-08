@@ -567,6 +567,51 @@
   .pin-tip { text-align: center; font-size: 13px; color: var(--text2); padding: 4px 0 12px; }
   .pin-error { text-align: center; font-size: 13px; color: var(--red); min-height: 20px; }
 
+  /* ── iOS Action Sheet 确认菜单 ──────────────── */
+  .action-sheet { padding: 6px 0; display: flex; flex-direction: column; }
+  .as-title { text-align: center; font-size: 13px; font-weight: 600; color: var(--text2); padding: 10px 16px 2px; }
+  .as-message { text-align: center; font-size: 12px; color: var(--text3); padding: 2px 16px 14px; line-height: 1.5; }
+  .as-btn {
+    margin: 0 12px 8px; padding: 14px; border-radius: 12px;
+    font-size: 16px; font-weight: 600; color: var(--text);
+    background: var(--card); text-align: center;
+    transition: background 0.15s ease, transform 0.08s ease;
+  }
+  .as-btn:hover { background: var(--fill); }
+  .as-btn:active { transform: scale(0.98); }
+  .as-btn.danger { color: var(--red); }
+  .as-btn.cancel { background: var(--fill); color: var(--text2); font-weight: 500; margin-top: 4px; }
+
+  /* ── iOS PIN 密码界面（圆点 + 数字键盘） ────── */
+  .pin-screen { text-align: center; padding: 6px 0 2px; }
+  .pin-screen-title { font-size: 20px; font-weight: 700; letter-spacing: 0.3px; }
+  .pin-screen-sub { font-size: 13px; color: var(--text2); margin-top: 6px; }
+  .pin-dots { display: flex; gap: 14px; justify-content: center; margin: 24px 0 20px; }
+  .pin-dot {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: var(--fill-strong); transition: background 0.15s ease, transform 0.15s ease;
+  }
+  .pin-dot.filled { background: var(--accent); transform: scale(1.15); }
+  .pin-seg {
+    display: flex; gap: 2px; justify-content: center;
+    padding: 2px; background: var(--fill); border-radius: 10px;
+    margin: 0 auto 20px; width: fit-content;
+  }
+  .pin-seg button { padding: 8px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--text2); transition: all 0.15s ease; }
+  .pin-seg button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+  .numpad {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
+    max-width: 272px; margin: 0 auto 4px;
+  }
+  .numpad button {
+    height: 62px; border-radius: 14px; font-size: 24px; font-weight: 500;
+    background: var(--card); color: var(--text);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 2px 6px rgba(0,0,0,0.05);
+    transition: transform 0.08s ease, background 0.15s ease;
+  }
+  .numpad button:active { transform: scale(0.94); background: var(--fill); }
+  .numpad button.key-del { font-size: 20px; color: var(--text2); }
+
   /* ── 移动端适配 ──────────────────────────────── */
   @media (max-width: 700px) {
     .dock { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
@@ -1375,17 +1420,21 @@ function renderLibrary(files) {
 }
 
 async function deleteVideo(name) {
-  if (!confirm(`确定删除「${name}」？删除后无法恢复。`)) return;
-  try {
-    const res = await fetch(`/api/library/${encodeURIComponent(name)}`, { method: 'DELETE' });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || '删除失败');
-    removeHistory('file:' + name);
-    showToast('已删除');
-    loadLibrary();
-  } catch (err) {
-    showToast(err.message, true);
-  }
+  showActionSheet({
+    title: '删除视频',
+    message: `「${name}」删除后无法恢复。`,
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        const res = await fetch(`/api/library/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '删除失败');
+        removeHistory('file:' + name);
+        showToast('已删除');
+        loadLibrary();
+      } catch (err) { showToast(err.message, true); }
+    },
+  });
 }
 
 // ── 播放器核心 ──────────────────────────────────
@@ -1530,10 +1579,23 @@ modalMask.addEventListener('click', (e) => { if (e.target === modalMask) closeMo
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modalMask.hidden) closeModal(); });
 
 // ═══════════════════════════════════════════════════════
-// 下载页：一键清理已完成
+// iOS Action Sheet 确认菜单（替代原生 confirm）
+// ═══════════════════════════════════════════════════════
+function showActionSheet({ title, message, confirmText = '删除', cancelText = '取消', danger = true, onConfirm }) {
+  openModal(`
+    <div class="action-sheet">
+      <div class="as-title">${title}</div>
+      <div class="as-message">${message}</div>
+      <button class="as-btn ${danger ? 'danger' : ''}" id="asConfirm">${confirmText}</button>
+      <button class="as-btn cancel" onclick="closeModal()">${cancelText}</button>
+    </div>`);
+  $('asConfirm').addEventListener('click', () => { closeModal(); onConfirm && onConfirm(); });
+}
+
+// ═══════════════════════════════════════════════════════
+// 下载页：一键清理已完成（已完成记录，无需确认）
 // ═══════════════════════════════════════════════════════
 async function cleanCompleted() {
-  if (!confirm('确定清理所有「已完成」任务记录？已下载的视频文件将保留。')) return;
   try {
     const res = await fetch('/api/tasks/clean-completed', { method: 'POST' });
     const data = await res.json().catch(() => ({}));
@@ -1600,17 +1662,24 @@ function toggleSelectAll() {
 }
 async function batchDeleteSelected() {
   if (!selectedSet.size) { showToast('请先选择视频', true); return; }
-  if (!confirm(`确定删除选中的 ${selectedSet.size} 个视频文件？删除后无法恢复。`)) return;
-  let ok = 0;
-  for (const name of selectedSet) {
-    try {
-      const res = await fetch(`/api/library/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      if (res.ok) { ok++; removeHistory('file:' + name); }
-    } catch {}
-  }
-  showToast(`已删除 ${ok} 个视频`);
-  exitSelectionMode();
-  loadLibrary();
+  const names = [...selectedSet];
+  showActionSheet({
+    title: '批量删除',
+    message: `确定删除选中的 ${names.length} 个视频文件？删除后无法恢复。`,
+    confirmText: '删除',
+    onConfirm: async () => {
+      let ok = 0;
+      for (const name of names) {
+        try {
+          const res = await fetch(`/api/library/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          if (res.ok) { ok++; removeHistory('file:' + name); }
+        } catch {}
+      }
+      showToast(`已删除 ${ok} 个视频`);
+      exitSelectionMode();
+      loadLibrary();
+    },
+  });
 }
 
 // ── 加入列表 ────────────────────────────────────
@@ -1703,15 +1772,21 @@ function listTileHtml(list) {
     </div>`;
 }
 async function removeList(listId) {
-  if (!confirm('确定删除该列表？列表中的视频文件不会被删除。')) return;
-  try {
-    const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE' });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || '删除失败');
-    showToast('列表已删除');
-    closeModal();
-    loadLists();
-  } catch (err) { showToast(err.message, true); }
+  showActionSheet({
+    title: '删除列表',
+    message: '确定删除该列表？列表中的视频文件不会被删除。',
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '删除失败');
+        showToast('列表已删除');
+        closeModal();
+        loadLists();
+      } catch (err) { showToast(err.message, true); }
+    },
+  });
 }
 function openListDetail(listId) {
   const list = myLists.find(l => l.id === listId);
@@ -1739,11 +1814,76 @@ async function removeListItem(listId, name) {
 }
 
 // ═══════════════════════════════════════════════════════
-// 私密密码：设置 / 验证 / 修改
+// 私密密码：设置 / 验证 / 修改（iOS PIN 风格）
 // ═══════════════════════════════════════════════════════
 const PRIVATE_TOKEN_KEY = 'vd.private.token';
+const PIN_LEN_KEY = 'vd.private.pinlen';
 function getPrivateToken() { return localStorage.getItem(PRIVATE_TOKEN_KEY) || ''; }
 function setPrivateToken(t) { if (t) localStorage.setItem(PRIVATE_TOKEN_KEY, t); else localStorage.removeItem(PRIVATE_TOKEN_KEY); }
+
+// ── iOS PIN 弹窗（圆点 + 数字键盘） ────────────
+let pinState = null;
+
+function openPinScreen({ title, sub, len = 4, seg = false, autoBoth = false, onDone }) {
+  pinState = { title, sub, len, seg, autoBoth, pin: '', err: '', onDone };
+  renderPinScreen();
+}
+
+function renderPinScreen() {
+  const s = pinState;
+  if (!s) return;
+  const dots = Array.from({ length: s.len }, (_, i) => `<i class="pin-dot${i < s.pin.length ? ' filled' : ''}"></i>`).join('');
+  const segHtml = s.seg ? `
+    <div class="pin-seg">
+      <button class="${s.len === 4 ? 'active' : ''}" onclick="pinSetLen(4)">4 位</button>
+      <button class="${s.len === 6 ? 'active' : ''}" onclick="pinSetLen(6)">6 位</button>
+    </div>` : '';
+  openModal(`
+    <div class="modal-head"><span class="modal-title">🔒 私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="pin-screen">
+        <div class="pin-screen-title">${s.title}</div>
+        <div class="pin-screen-sub">${s.sub}</div>
+        ${segHtml}
+        <div class="pin-dots">${dots}</div>
+        <div class="numpad">
+          ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button onclick="pinKey(${n})">${n}</button>`).join('')}
+          <button class="key-del" onclick="pinKey('del')">⌫</button>
+          <button onclick="pinKey(0)">0</button>
+          <button style="visibility:hidden"></button>
+        </div>
+        <div class="pin-error" id="pinError">${s.err}</div>
+      </div>
+    </div>`);
+}
+
+function pinSetLen(n) {
+  pinState.len = n; pinState.pin = ''; pinState.err = '';
+  renderPinScreen();
+}
+
+function pinKey(k) {
+  if (!pinState) return;
+  if (k === 'del') { pinState.pin = pinState.pin.slice(0, -1); renderPinScreen(); return; }
+  if (typeof k !== 'number') return;
+  if (pinState.pin.length >= pinState.len) return;
+  pinState.pin += String(k);
+  renderPinScreen();
+  const reached = pinState.autoBoth
+    ? (pinState.pin.length === 4 || pinState.pin.length === 6)
+    : (pinState.pin.length === pinState.len);
+  if (reached) {
+    const p = pinState.pin;
+    pinState.pin = '';
+    setTimeout(() => pinState.onDone && pinState.onDone(p), 120);
+  }
+}
+
+function pinSetError(msg) {
+  if (!pinState) return;
+  pinState.err = msg;
+  renderPinScreen();
+}
 
 async function openPrivateEntry() {
   try {
@@ -1755,68 +1895,62 @@ async function openPrivateEntry() {
   } catch { showToast('无法获取私密状态', true); }
 }
 
-// ── 首次设置密码 ────────────────────────────────
+// ── 首次设置密码（设置成功即自动解锁进入） ─────
 function openPrivateSetup() {
-  openModal(`
-    <div class="modal-head"><span class="modal-title">设置私密密码</span><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">
-      <p class="pin-tip">设置 4 位或 6 位数字密码<br>用于保护私密列表</p>
-      <div class="pin-field"><input class="pin-input" id="pinNew" type="password" inputmode="numeric" maxlength="6" placeholder="新密码" style="width:100%;"></div>
-      <div class="pin-field"><input class="pin-input" id="pinConfirm" type="password" inputmode="numeric" maxlength="6" placeholder="确认密码" style="width:100%;"></div>
-      <div class="pin-error" id="pinError"></div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn-secondary" onclick="closeModal()">取消</button>
-      <button class="btn-primary" onclick="submitPrivateSetup()">设置</button>
-    </div>`);
-}
-async function submitPrivateSetup() {
-  const p1 = ($('pinNew')?.value || '').trim();
-  const p2 = ($('pinConfirm')?.value || '').trim();
-  const err = $('pinError');
-  if (!/^(\d{4}|\d{6})$/.test(p1)) { err.textContent = '密码需为 4 位或 6 位数字'; return; }
-  if (p1 !== p2) { err.textContent = '两次输入不一致'; return; }
-  try {
-    const res = await fetch('/api/private/password', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p1 }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || '设置失败');
-    showToast('私密密码已设置');
-    closeModal();
-    openPrivateVerify();
-  } catch (e) { err.textContent = e.message; }
+  const savedLen = parseInt(localStorage.getItem(PIN_LEN_KEY) || '4', 10);
+  const len = [4, 6].includes(savedLen) ? savedLen : 4;
+  openPinScreen({
+    title: '设置密码', sub: '选择 4 或 6 位数字密码', len, seg: true,
+    onDone: async (p1) => {
+      openPinScreen({
+        title: '确认密码', sub: '再次输入以确认', len: pinState.len || p1.length, seg: false,
+        onDone: async (p2) => {
+          if (p2 !== p1) { showToast('两次输入不一致，请重新设置', true); openPrivateSetup(); return; }
+          try {
+            const res = await fetch('/api/private/password', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p1 }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || '设置失败');
+            localStorage.setItem(PIN_LEN_KEY, String(p1.length));
+            // 设置成功后自动验证并解锁，直接进入私密列表管理
+            const vres = await fetch('/api/private/verify', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p1 }),
+            });
+            const vdata = await vres.json().catch(() => ({}));
+            if (vres.ok && vdata.token) setPrivateToken(vdata.token);
+            showToast('私密密码已设置');
+            closeModal();
+            openPrivateManage();
+          } catch (e) {
+            pinSetError(e.message);
+          }
+        },
+      });
+    },
+  });
 }
 
-// ── 验证密码 ────────────────────────────────────
+// ── 验证密码解锁（4/6 位自适应） ──────────────
 function openPrivateVerify() {
-  openModal(`
-    <div class="modal-head"><span class="modal-title">私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">
-      <p class="pin-tip">输入私密密码解锁</p>
-      <div class="pin-field"><input class="pin-input" id="pinInput" type="password" inputmode="numeric" maxlength="6" placeholder="密码" style="width:100%;"></div>
-      <div class="pin-error" id="pinError"></div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn-secondary" onclick="closeModal()">取消</button>
-      <button class="btn-primary" onclick="submitPrivateVerify()">解锁</button>
-    </div>`);
-}
-async function submitPrivateVerify() {
-  const p = ($('pinInput')?.value || '').trim();
-  const err = $('pinError');
-  if (!p) { err.textContent = '请输入密码'; return; }
-  try {
-    const res = await fetch('/api/private/verify', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || '密码错误');
-    setPrivateToken(data.token);
-    showToast('解锁成功');
-    closeModal();
-    openPrivateManage();
-  } catch (e) { err.textContent = e.message; }
+  openPinScreen({
+    title: '输入密码', sub: '输入私密密码解锁（4 或 6 位）', len: 6, autoBoth: true,
+    onDone: async (p) => {
+      try {
+        const res = await fetch('/api/private/verify', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '密码错误');
+        setPrivateToken(data.token);
+        showToast('解锁成功');
+        closeModal();
+        openPrivateManage();
+      } catch (e) {
+        pinSetError(e.message + '，请重试');
+      }
+    },
+  });
 }
 
 // ── 私密列表管理 ────────────────────────────────
@@ -1843,15 +1977,21 @@ async function openPrivateManage() {
     </div>`);
 }
 async function removePrivateList(listId) {
-  if (!confirm('确定删除该私密列表？列表中的视频文件不会被删除。')) return;
-  try {
-    const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE', headers: { 'X-Private-Token': getPrivateToken() } });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || '删除失败');
-    showToast('私密列表已删除');
-    closeModal();
-    loadLists();
-  } catch (err) { showToast(err.message, true); }
+  showActionSheet({
+    title: '删除私密列表',
+    message: '确定删除该私密列表？列表中的视频文件不会被删除。',
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE', headers: { 'X-Private-Token': getPrivateToken() } });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '删除失败');
+        showToast('私密列表已删除');
+        closeModal();
+        loadLists();
+      } catch (err) { showToast(err.message, true); }
+    },
+  });
 }
 function openPrivateDetail(listId) {
   const list = myPrivateLists.find(l => l.id === listId);
@@ -1880,36 +2020,39 @@ async function removePrivateItem(listId, name) {
   } catch (err) { showToast(err.message, true); }
 }
 
-// ── 修改密码 ────────────────────────────────────
+// ── 修改密码（原密码 → 新密码 → 确认） ─────────
 function openChangePin() {
-  openModal(`
-    <div class="modal-head"><span class="modal-title">修改私密密码</span><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">
-      <div class="pin-field"><input class="pin-input" id="pinOld" type="password" inputmode="numeric" maxlength="6" placeholder="原密码" style="width:100%;"></div>
-      <div class="pin-field"><input class="pin-input" id="pinNew2" type="password" inputmode="numeric" maxlength="6" placeholder="新密码" style="width:100%;"></div>
-      <div class="pin-error" id="pinError"></div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn-secondary" onclick="closeModal()">取消</button>
-      <button class="btn-primary" onclick="submitChangePin()">修改</button>
-    </div>`);
-}
-async function submitChangePin() {
-  const oldP = ($('pinOld')?.value || '').trim();
-  const newP = ($('pinNew2')?.value || '').trim();
-  const err = $('pinError');
-  if (!/^(\d{4}|\d{6})$/.test(newP)) { err.textContent = '新密码需为 4 位或 6 位数字'; return; }
-  try {
-    const res = await fetch('/api/private/change', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Private-Token': getPrivateToken() },
-      body: JSON.stringify({ oldPassword: oldP, newPassword: newP }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || '修改失败');
-    showToast('密码已修改');
-    closeModal();
-  } catch (e) { err.textContent = e.message; }
+  openPinScreen({
+    title: '修改密码', sub: '输入原密码', len: 4,
+    onDone: async (oldP) => {
+      openPinScreen({
+        title: '修改密码', sub: '输入新密码（4 或 6 位数字）', len: 4, seg: true,
+        onDone: async (newP) => {
+          openPinScreen({
+            title: '修改密码', sub: '再次输入新密码', len: newP.length,
+            onDone: async (newP2) => {
+              if (newP2 !== newP) { showToast('两次输入不一致，请重新设置', true); openChangePin(); return; }
+              try {
+                const res = await fetch('/api/private/change', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', 'X-Private-Token': getPrivateToken() },
+                  body: JSON.stringify({ oldPassword: oldP, newPassword: newP }),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || '修改失败');
+                localStorage.setItem(PIN_LEN_KEY, String(newP.length));
+                showToast('密码已修改');
+                closeModal();
+              } catch (e) {
+                pinSetError(e.message);
+                openChangePin();
+              }
+            },
+          });
+        },
+      });
+    },
+  });
 }
 
 // ═══════════════════════════════════════════════════════

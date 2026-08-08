@@ -88,41 +88,76 @@ try {
   await page.click('#modalMask .modal-close');
   await page.waitForTimeout(200);
 
-  // ── 4. 设置窗口私密列表入口 + 密码设置 ──
+  // ── 4. 设置窗口私密列表入口 + iOS PIN 密码设置 ──
   await page.click('.dock-icon[data-app="settings"]');
   await page.waitForTimeout(500);
   const privateEntry = await page.$('#privateEntryBtn');
   check('设置页私密列表入口存在', !!privateEntry);
 
+  // 首次进入：iOS PIN 设置界面（圆点 + 数字键盘）
   await page.click('#privateEntryBtn');
   await page.waitForTimeout(400);
-  const setupModal = await page.$eval('#modalCard', el => el.textContent.includes('设置私密密码'));
-  check('首次进入弹出密码设置弹窗', setupModal);
+  const setupTitle = await page.$eval('#modalCard .pin-screen-title', el => el.textContent).catch(() => '');
+  check('首次进入弹出 iOS PIN 设置界面', setupTitle.includes('设置密码'), `title=${setupTitle}`);
+  const numpadKeys = await page.$$eval('#modalCard .numpad button', els => els.length);
+  check('数字键盘渲染（≥10 键）', numpadKeys >= 10, `keys=${numpadKeys}`);
+  const segVisible = await page.$eval('#modalCard .pin-seg', el => !!el).catch(() => false);
+  check('4/6 位分段选择可见', segVisible);
 
-  // 输入密码 1234 + 确认
-  await page.fill('#pinNew', '1234');
-  await page.fill('#pinConfirm', '1234');
-  await page.click('#modalCard .btn-primary');
-  await page.waitForTimeout(600);
-  const verifyModal = await page.$eval('#modalCard', el => el.textContent.includes('输入私密密码'));
-  check('设置成功后进入验证弹窗', verifyModal);
+  // 输入新密码 1234 → 自动进入确认
+  for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(300);
+  const confirmTitle = await page.$eval('#modalCard .pin-screen-title', el => el.textContent).catch(() => '');
+  check('满位后自动进入确认密码', confirmTitle.includes('确认密码'), `title=${confirmTitle}`);
+  for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(800);
+  const manageModal = await page.$eval('#modalCard', el => el.textContent.includes('私密列表'));
+  check('设置成功自动解锁进入私密列表管理', manageModal);
 
-  // 输入错误密码
-  await page.fill('#pinInput', '9999');
-  await page.click('#modalCard .btn-primary');
+  // 管理面板含全部操作
+  const manageText = await page.$eval('#modalCard', el => el.textContent);
+  check('管理面板含全部操作', manageText.includes('新建私密列表') && manageText.includes('修改密码') && manageText.includes('退出锁定'));
+  // 关闭管理面板
+  await page.click('#modalMask .modal-close');
+  await page.waitForTimeout(200);
+
+  // 再次进入：仅需输入密码（iOS PIN 验证）
+  await page.click('#privateEntryBtn');
+  await page.waitForTimeout(400);
+  const verifyTitle = await page.$eval('#modalCard .pin-screen-title', el => el.textContent).catch(() => '');
+  check('已设置密码后进入输入密码界面', verifyTitle.includes('输入密码'), `title=${verifyTitle}`);
+
+  // 输入错误密码 9999 → 提示错误并转 6 位
+  for (const d of ['9', '9', '9', '9']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
   await page.waitForTimeout(500);
   const errText = await page.$eval('#pinError', el => el.textContent).catch(() => '');
   check('错误密码提示', errText.includes('密码错误'), errText);
 
-  // 输入正确密码
-  await page.fill('#pinInput', '1234');
-  await page.click('#modalCard .btn-primary');
+  // 输入正确密码 1234 解锁（管理面板特有内容：新建私密列表）
+  for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
   await page.waitForTimeout(800);
-  const manageModal = await page.$eval('#modalCard', el => el.textContent.includes('私密列表'));
-  check('正确密码解锁进入私密列表管理', manageModal);
-  // 管理面板含新建私密列表 + 修改密码 + 退出锁定
-  const manageText = await page.$eval('#modalCard', el => el.textContent);
-  check('管理面板含全部操作', manageText.includes('新建私密列表') && manageText.includes('修改密码') && manageText.includes('退出锁定'));
+  const manageAgainText = await page.$eval('#modalCard', el => el.textContent).catch(() => '');
+  check('正确密码解锁进入私密列表管理', manageAgainText.includes('新建私密列表'), manageAgainText.slice(0, 60));
+
+  // ── 4.5 删除视频：iOS Action Sheet 确认菜单（替代原生 confirm） ──
+  await page.click('#modalMask .modal-close');
+  await page.waitForTimeout(200);
+  await page.click('.dock-icon[data-app="browse"]');
+  await page.waitForTimeout(500);
+  const delBtn = await page.$('#libraryGrid [data-delete-name]');
+  if (delBtn) {
+    await page.click('#libraryGrid [data-delete-name]');
+    await page.waitForTimeout(400);
+    const asVisible = await page.$eval('#modalCard .action-sheet', el => !!el).catch(() => false);
+    check('删除视频弹出 iOS Action Sheet', asVisible);
+    const asText = await page.$eval('#modalCard', el => el.textContent).catch(() => '');
+    check('Action Sheet 含标题与确认按钮', asText.includes('删除') && asText.includes('取消'), asText.slice(0, 60));
+    // 点击取消，不真正删除
+    await page.click('#modalCard .as-btn.cancel');
+    await page.waitForTimeout(300);
+  } else {
+    check('删除视频弹出 iOS Action Sheet', false, '无删除按钮可测');
+  }
 
   // ── 5. API 层冒烟（走 HTTP 直接验证） ──
   const api = await fetch(`${BASE}/api/private/status`).then(r => r.json());

@@ -583,7 +583,7 @@ app.post('/api/tasks/clean-completed', (req, res) => {
   }
   const result = taskManager.removeBatch(completed);
   log.info({ removed: result.success }, '一键清理已完成任务记录');
-  res.json({ ok: true, ...result });
+  res.json({ ok: true, removed: result.success, ...result });
 });
 
 /**
