@@ -738,7 +738,7 @@
         <div class="inline-player" id="inlinePlayer" hidden>
           <div class="inline-player-bar">
             <span class="inline-player-title" id="inlinePlayerTitle"></span>
-            <button class="title-btn" id="cacheBtn" title="缓存到本地，下次播放优先本地">缓存</button>
+            <button class="title-btn" id="cacheMenuBtn" title="更多操作">⋯</button>
             <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放">×</button>
           </div>
           <video id="inlinePlayerVideo" controls playsinline></video>
@@ -888,7 +888,7 @@
         <div class="inline-player" id="privateInlinePlayer" hidden>
           <div class="inline-player-bar">
             <span class="inline-player-title" id="privateInlinePlayerTitle"></span>
-            <button class="title-btn" id="privateCacheBtn" title="缓存到本地，下次播放优先本地">缓存</button>
+            <button class="title-btn" id="privateCacheMenuBtn" title="更多操作">⋯</button>
             <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放">×</button>
           </div>
           <video id="privateInlinePlayerVideo" controls playsinline></video>
@@ -2607,9 +2607,35 @@ $('downloadBtn').addEventListener('click', submitDownload);
 $('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitDownload(); });
 $('playUrlBtn').addEventListener('click', playUrl);
 $('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
-$('inlinePlayerClose').addEventListener('click', closePlayer);
-$('cacheBtn').addEventListener('click', () => { if (currentPlay) cacheVideo(currentPlay.src, 'browse'); });
-$('privateCacheBtn').addEventListener('click', () => { if (currentPlay) cacheVideo(currentPlay.src, 'private'); });
+$('inlinePlayerClose').addEventListener('click', () => closePlayer());
+$('cacheMenuBtn').addEventListener('click', () => {
+  if (!currentPlay) return;
+  const src = currentPlay.src;
+  updateCacheBtnState('browse', src);
+  openModal(`
+    <div class="modal-head"><span class="modal-title">播放器操作</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="action-sheet">
+        <button class="as-btn" id="menuCacheBtn">⬇ 缓存到本地</button>
+        <button class="as-btn cancel" onclick="closeModal()">取消</button>
+      </div>
+    </div>`);
+  $('menuCacheBtn').addEventListener('click', () => cacheVideo(src, 'browse'));
+});
+$('privateCacheMenuBtn').addEventListener('click', () => {
+  if (!currentPlay) return;
+  const src = currentPlay.src;
+  updateCacheBtnState('private', src);
+  openModal(`
+    <div class="modal-head"><span class="modal-title">播放器操作</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="action-sheet">
+        <button class="as-btn" id="menuCacheBtn">⬇ 缓存到本地</button>
+        <button class="as-btn cancel" onclick="closeModal()">取消</button>
+      </div>
+    </div>`);
+  $('menuCacheBtn').addEventListener('click', () => cacheVideo(src, 'private'));
+});
 $('refreshHealth').addEventListener('click', loadHealth);
 $('parallelDownloadsInput').addEventListener('change', saveServerSettings);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('inlinePlayer').hidden) closePlayer(); });
@@ -2621,17 +2647,39 @@ let userPaused = false; // 用户手动暂停标志（修复空格抢占）
 const VIDEO_CACHE = 'vd-media-cache';
 
 async function cacheVideo(src, target = 'browse') {
+  const btn = $(target === 'private' ? 'privateCacheMenuBtn' : 'cacheMenuBtn');
+  const onProg = (pct) => { if (btn) btn.textContent = `⬇ ${pct}%`; };
   try {
     const cache = await caches.open(VIDEO_CACHE);
     const hit = await cache.match(src);
-    if (hit) { showToast('已缓存，播放将优先使用本地副本'); updateCacheBtnState(target, src); return; }
+    if (hit) { showToast('已缓存，播放将使用本地副本'); onProg(100); updateCacheBtnState(target, src); return; }
+    onProg(0);
     const res = await fetch(src);
     if (!res.ok) throw new Error(`缓存失败 (${res.status})`);
-    await cache.put(src, res);
+    const total = Number(res.headers.get('content-length')) || 0;
+    if (total && res.body && res.body.getReader) {
+      // 流式读取并上报进度，再写入缓存
+      const reader = res.body.getReader();
+      const chunks = [];
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        onProg(Math.min(99, Math.round((received / total) * 100)));
+      }
+      const blob = new Blob(chunks, { type: res.headers.get('content-type') || 'video/mp4' });
+      await cache.put(src, new Response(blob, { status: 200, headers: { 'Content-Type': blob.type } }));
+    } else {
+      await cache.put(src, res);
+    }
+    onProg(100);
     showToast('视频已缓存到本地');
     updateCacheBtnState(target, src);
   } catch (err) {
     showToast('缓存失败：' + err.message, true);
+    updateCacheBtnState(target, src);
   }
 }
 
@@ -2654,13 +2702,13 @@ async function playFromCacheOrStream(video, src, target = 'browse') {
 
 /** 更新缓存按钮状态（已缓存→禁用态文案） */
 async function updateCacheBtnState(target, src) {
-  const btn = $(target === 'private' ? 'privateCacheBtn' : 'cacheBtn');
+  const btn = $(target === 'private' ? 'privateCacheMenuBtn' : 'cacheMenuBtn');
   if (!btn) return;
   try {
     const cache = await caches.open(VIDEO_CACHE);
     const hit = await cache.match(src);
-    if (hit) { btn.textContent = '已缓存'; btn.classList.add('cached'); btn.disabled = true; }
-    else { btn.textContent = '缓存'; btn.classList.remove('cached'); btn.disabled = false; }
+    btn.textContent = hit ? '✓' : '⋯';
+    btn.classList.toggle('cached', !!hit);
   } catch (_) {}
 }
 
@@ -2704,11 +2752,7 @@ $('privateEntryBtn').addEventListener('click', openPrivateEntry);
 
 // ── 私密临时浏览 App 事件绑定 ──
 $('privateLockBtn').addEventListener('click', closePrivateApp);
-$('privateInlinePlayerClose').addEventListener('click', () => {
-  const v = $('privateInlinePlayerVideo');
-  if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
-  $('privateInlinePlayer').hidden = true;
-});
+$('privateInlinePlayerClose').addEventListener('click', () => closePrivatePlayerOnly());
 $('privateViewToggle').addEventListener('click', (e) => {
   const btn = e.target.closest('button');
   if (!btn) return;
