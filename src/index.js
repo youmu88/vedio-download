@@ -513,7 +513,19 @@ app.get('/api/lists/:id', (req, res) => {
     try { listStore.verifyToken(privateToken(req)); }
     catch (err) { return res.status(401).json({ error: err.message }); }
   }
-  res.json(list);
+  // 为列表条目补充文件信息（大小/修改时间），供浏览页列表内视频卡片展示
+  const items = (list.items || []).map((it) => {
+    const p = path.join(DOWNLOADS_DIR, it.name);
+    let size = it.size, mtime = it.mtime;
+    try {
+      if (fs.existsSync(p)) {
+        const st = fs.statSync(p);
+        size = st.size; mtime = st.mtimeMs;
+      }
+    } catch (_) {}
+    return { ...it, size, mtime };
+  });
+  res.json({ ...list, items });
 });
 
 /**

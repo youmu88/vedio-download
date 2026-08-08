@@ -624,6 +624,44 @@
   .numpad button:active { transform: scale(0.94); background: var(--fill); }
   .numpad button.key-del { font-size: 20px; color: var(--text2); }
 
+  /* ── 文件夹网格（视频播放器式列表导航） ────── */
+  .folder-grid {
+    display: grid; gap: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    padding: 0 4px 4px;
+  }
+  .folder-card {
+    cursor: pointer; user-select: none;
+    border-radius: 12px; padding: 16px 12px;
+    background: var(--card); box-shadow: var(--shadow);
+    display: flex; flex-direction: column; align-items: center; gap: 8px;
+    transition: transform 0.15s ease, background 0.15s ease;
+  }
+  .folder-card:hover { transform: translateY(-2px); background: var(--fill); }
+  .folder-card .folder-icon {
+    width: 52px; height: 52px; border-radius: 14px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(145deg, #5AC8FA, #007AFF); color: #fff;
+    font-size: 24px; box-shadow: var(--shadow);
+  }
+  .folder-card .folder-icon.private { background: linear-gradient(145deg, #FF9F0A, #FF6482); }
+  .folder-card .folder-name {
+    font-size: 13px; font-weight: 600; text-align: center;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+  }
+  .folder-card .folder-meta { font-size: 12px; color: var(--text2); }
+  .folder-divider {
+    margin: 16px 16px 8px; font-size: 13px; font-weight: 600;
+    color: var(--text2); text-transform: uppercase; letter-spacing: 0.4px;
+  }
+  .folder-back {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 6px 12px; border-radius: 8px;
+    font-size: 13px; font-weight: 600; color: var(--accent);
+    background: var(--fill); transition: background 0.15s ease;
+  }
+  .folder-back:hover { background: var(--fill-strong); }
+
   /* ── 移动端适配 ──────────────────────────────── */
   @media (max-width: 700px) {
     .dock { padding: 8px 10px calc(8px + env(safe-area-inset-bottom)); }
@@ -697,7 +735,7 @@
           </div>
         </div>
 
-        <div class="group-title">视频库 <span id="libraryCount" style="text-transform:none;"></span>
+        <div class="group-title">视频库 <span id="browseCrumb" style="text-transform:none;"></span><span id="libraryCount" style="text-transform:none;"></span>
           <span class="view-toggle" id="libraryViewToggle">
             <button data-view="grid" class="active" title="网格视图">▦</button>
             <button data-view="list" title="列表视图">☰</button>
@@ -711,6 +749,7 @@
           <button class="title-btn danger" id="batchOpsBtn">操作 ▾</button>
           <button class="title-btn" id="batchCancelBtn">取消</button>
         </div>
+        <div class="folder-grid" id="folderGrid" hidden></div>
         <div class="library-grid" id="libraryGrid">
           <div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>
         </div>
@@ -1371,10 +1410,198 @@ async function loadLibrary() {
     const res = await fetch('/api/library');
     if (!res.ok) throw new Error();
     libraryFiles = await res.json();
-    renderLibrary(libraryFiles);
+    renderBrowse();
   } catch {
     $('libraryGrid').innerHTML = '<div class="empty"><div class="big">⚠️</div>视频库读取失败</div>';
   }
+}
+
+// ═══════════════════════════════════════════════════════
+// 文件夹导航（视频播放器式）：根视图(文件夹+未分类) → 私密文件夹 → 列表内视频
+// ═══════════════════════════════════════════════════════
+let browseFolder = null; // null=根视图 | {home:'private'} | {id,name,isPrivate}
+
+function renderBrowse() {
+  const grid = $('libraryGrid');
+  const folderEl = $('folderGrid');
+  const crumb = $('browseCrumb');
+  const isPrivateHome = browseFolder && browseFolder.home === 'private';
+  const isList = browseFolder && browseFolder.id;
+  const view = settings.libraryView || 'grid';
+
+  // 面包屑
+  if (isList) {
+    crumb.innerHTML = `<button class="folder-back" onclick="backToRoot()">‹ 返回</button> ${escapeHtml(browseFolder.name)}`;
+  } else if (isPrivateHome) {
+    crumb.innerHTML = `<button class="folder-back" onclick="backToRoot()">‹ 返回</button> 🔒 私密列表`;
+  } else {
+    crumb.innerHTML = '视频库';
+  }
+
+  // 文件夹区
+  if (isList) {
+    folderEl.hidden = true;
+    renderFolderVideos(browseFolder);
+  } else if (isPrivateHome) {
+    folderEl.hidden = false;
+    renderPrivateFolders();
+    grid.innerHTML = '';
+    $('libraryCount').textContent = '';
+  } else {
+    folderEl.hidden = false;
+    renderRootFolders();
+    // 未分类视频（未加入任何列表）
+    grid.className = (view === 'list' ? 'library-list' : 'library-grid') + (selectionMode ? ' selecting' : '');
+    $('libraryCount').textContent = libraryFiles.length ? `(${libraryFiles.length})` : '';
+    document.querySelectorAll('#libraryViewToggle button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+    if (!libraryFiles.length) {
+      grid.innerHTML = '<div class="empty"><div class="big">🎬</div>未分类视频为空<br>加入列表的视频会出现在对应文件夹中</div>';
+    } else {
+      grid.innerHTML = libraryFiles.map((f) => {
+        const pct = libraryProgress(f.name);
+        const progressHtml = pct === null ? '' : view === 'list'
+          ? `<div class="video-progress">${pct}%<span class="bar" style="width:${pct}%"></span></div>`
+          : `<span class="video-progress">${pct}%</span>`;
+        const sel = selectionMode ? `<span class="sel-check">${selectedSet.has(f.name) ? '✓' : ''}</span>` : '';
+        const selCls = selectionMode && selectedSet.has(f.name) ? ' selected' : '';
+        if (view === 'list') {
+          return `
+          <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}">
+            ${sel}
+            <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span></div>
+            <div class="video-info">
+              <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+              <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
+              ${progressHtml}
+            </div>
+            <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" title="删除视频">${icon('trash', 15)}</button>
+          </div>`;
+        }
+        return `
+        <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}">
+          ${sel}
+          <div class="video-thumb">
+            <span class="play-badge">${icon('play', 20)}</span>
+            ${progressHtml}
+            <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" title="删除视频">${icon('trash', 14)}</button>
+          </div>
+          <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+          <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
+        </div>`;
+      }).join('');
+    }
+  }
+}
+
+/** 根视图文件夹：公开列表 + 私密列表入口 */
+function renderRootFolders() {
+  const el = $('folderGrid');
+  const pubs = myLists.map((l) => `
+    <div class="folder-card" data-enter="list" data-id="${l.id}" data-name="${escapeHtml(l.name)}">
+      <div class="folder-icon">📁</div>
+      <div class="folder-name">${escapeHtml(l.name)}</div>
+      <div class="folder-meta">${l.items.length} 个视频</div>
+    </div>`).join('');
+  const priv = `
+    <div class="folder-card" data-enter="private">
+      <div class="folder-icon private">🔒</div>
+      <div class="folder-name">私密列表</div>
+      <div class="folder-meta">需要密码</div>
+    </div>`;
+  el.innerHTML = (pubs || '<div class="folder-card" style="cursor:default;"><div class="folder-meta">暂无公开列表</div></div>') + priv;
+}
+
+/** 私密文件夹视图：解锁后展示各私密列表 */
+function renderPrivateFolders() {
+  const el = $('folderGrid');
+  if (!myPrivateLists.length) {
+    el.innerHTML = '<div class="empty"><div class="big">🔒</div>暂无私有列表<br>可在浏览页选择视频后创建</div>';
+    return;
+  }
+  el.innerHTML = myPrivateLists.map((l) => `
+    <div class="folder-card" data-enter="list" data-id="${l.id}" data-name="${escapeHtml(l.name)}" data-private="1">
+      <div class="folder-icon private">🔒</div>
+      <div class="folder-name">${escapeHtml(l.name)}</div>
+      <div class="folder-meta">${l.items.length} 个视频</div>
+    </div>`).join('');
+}
+
+/** 列表内视频视图（进入文件夹后） */
+function renderFolderVideos(folder) {
+  const grid = $('libraryGrid');
+  const view = settings.libraryView || 'grid';
+  grid.className = view === 'list' ? 'library-list' : 'library-grid';
+  $('libraryCount').textContent = '';
+  const list = (folder.isPrivate ? myPrivateLists : myLists).find(l => l.id === folder.id);
+  if (!list || !list.items.length) {
+    grid.innerHTML = '<div class="empty"><div class="big">📂</div>列表为空<br>在浏览页选择视频后可加入</div>';
+    return;
+  }
+  grid.innerHTML = list.items.map((i) => view === 'list'
+    ? `
+      <div class="video-card" data-name="${escapeHtml(i.name)}">
+        <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span></div>
+        <div class="video-info">
+          <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
+          <div class="video-meta">${i.size ? formatBytes(i.size) : ''}${i.addedAt ? ' · ' + formatDate(i.addedAt) + ' 加入' : ''}</div>
+        </div>
+        <button class="video-delete" data-rm-list="${folder.id}|${escapeHtml(i.name)}" title="从列表移除">${icon('trash', 15)}</button>
+      </div>`
+    : `
+      <div class="video-card" data-name="${escapeHtml(i.name)}">
+        <div class="video-thumb">
+          <span class="play-badge">${icon('play', 20)}</span>
+          <button class="video-delete" data-rm-list="${folder.id}|${escapeHtml(i.name)}" title="从列表移除">${icon('trash', 14)}</button>
+        </div>
+        <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
+        <div class="video-meta">${i.size ? formatBytes(i.size) : ''}${i.addedAt ? ' · ' + formatDate(i.addedAt) + ' 加入' : ''}</div>
+      </div>`).join('');
+}
+
+/** 进入私密文件夹（需解锁） */
+function enterPrivateHome() {
+  ensurePrivateUnlock(() => {
+    browseFolder = { home: 'private' };
+    renderBrowse();
+  });
+}
+
+/** 进入具体列表（公开直接进；私密先解锁） */
+function enterListFolder(id, name, isPrivate) {
+  if (isPrivate) {
+    ensurePrivateUnlock(() => enterListFolder(id, name, true));
+    return;
+  }
+  browseFolder = { id, name, isPrivate: !!isPrivate };
+  renderBrowse();
+}
+
+/** 返回根视图 */
+function backToRoot() {
+  browseFolder = null;
+  renderBrowse();
+}
+
+/** 从列表移除视频（文件夹视图内） */
+async function removeListVideo(folderId, name, isPrivate) {
+  try {
+    let res;
+    if (isPrivate) {
+      res = await privateFetch(`/api/lists/${folderId}/items`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [name] }),
+      }, () => enterListFolder(folderId, browseFolder.name, true));
+      if (res === null) return;
+    } else {
+      res = await fetch(`/api/lists/${folderId}/items`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [name] }),
+      });
+    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '移除失败');
+    showToast('已从列表移除');
+    loadLists();
+    loadLibrary();
+  } catch (err) { showToast(err.message, true); }
 }
 
 function libraryProgress(name) {
@@ -1632,6 +1859,7 @@ async function loadLists() {
     const data = await res.json();
     myLists = data.lists || [];
     if (data.hasPrivate && getPrivateToken()) loadPrivateLists();
+    renderBrowse(); // 列表变化后刷新文件夹导航
   } catch {}
 }
 async function loadPrivateLists() {
@@ -2248,13 +2476,20 @@ $('selectModeBtn').addEventListener('click', () => { selectionMode ? exitSelecti
 $('batchSelectAllBtn').addEventListener('click', toggleSelectAll);
 $('batchOpsBtn').addEventListener('click', openBatchOps);
 $('batchCancelBtn').addEventListener('click', exitSelectionMode);
-$('openListsBtn').addEventListener('click', openMyLists);
+$('openListsBtn').addEventListener('click', () => { browseFolder = null; renderBrowse(); });
 $('privateEntryBtn').addEventListener('click', openPrivateEntry);
 // 初始化时加载列表数据（供「我的列表」「加入列表」使用）
 loadLists();
 
-// 视频库事件委托：播放 / 删除 / 选择模式
+// 视频库事件委托：播放 / 删除 / 从列表移除 / 选择模式
 $('libraryGrid').addEventListener('click', (e) => {
+  const rm = e.target.closest('[data-rm-list]');
+  if (rm) {
+    e.stopPropagation();
+    const [fid, fname] = rm.dataset.rmList.split('|');
+    removeListVideo(fid, fname, !!(browseFolder && browseFolder.isPrivate));
+    return;
+  }
   const del = e.target.closest('[data-delete-name]');
   if (del) {
     e.stopPropagation();
@@ -2266,6 +2501,15 @@ $('libraryGrid').addEventListener('click', (e) => {
     if (selectionMode) toggleSelect(card.dataset.name);
     else playLibrary(card.dataset.name);
   }
+});
+
+// 文件夹点击委托：进入列表 / 进入私密
+$('folderGrid').addEventListener('click', (e) => {
+  const card = e.target.closest('.folder-card');
+  if (!card) return;
+  const enter = card.dataset.enter;
+  if (enter === 'private') enterPrivateHome();
+  else if (enter === 'list') enterListFolder(card.dataset.id, card.dataset.name, card.dataset.private === '1');
 });
 
 // 网格/列表视图切换

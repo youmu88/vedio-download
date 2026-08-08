@@ -105,16 +105,35 @@ try {
   const batchBarHidden = await page.$eval('#batchBar', el => el.hidden);
   check('取消后批量栏隐藏', batchBarHidden);
 
-  // ── 3. 我的列表 + 创建列表 ──
+  // ── 3. 文件夹导航：我的列表以文件夹呈现，可进入浏览内部视频 ──
+  // 先创建公开列表，并刷新页面内列表缓存，确保文件夹可进入
+  await page.evaluate(async () => {
+    const res = await fetch('/api/lists', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'E2E文件夹' }),
+    });
+    if (window.loadLists) await window.loadLists(); // 刷新前端 myLists 缓存
+    return res.ok;
+  });
+  await page.waitForTimeout(400);
   await page.click('#openListsBtn');
   await page.waitForTimeout(400);
-  const listsModal = await page.$eval('#modalMask', el => !el.hidden);
-  check('我的列表面板弹出', listsModal);
-  // 新建列表入口
-  const createEntry = await page.$eval('#modalCard', el => el.textContent.includes('新建公开列表'));
-  check('面板含新建列表入口', createEntry);
-  await page.click('#modalMask .modal-close');
-  await page.waitForTimeout(200);
+  const folderVisible = await page.$eval('#folderGrid', el => !el.hidden).catch(() => false);
+  check('浏览页以文件夹方式呈现列表', folderVisible);
+  const folderHasPrivate = await page.$eval('#folderGrid', el => el.textContent.includes('私密列表')).catch(() => false);
+  check('文件夹区含私密列表入口', folderHasPrivate);
+  // 进入公开列表文件夹 → 应显示列表视图（含返回）
+  const pubFolder = await page.$('#folderGrid [data-enter="list"]').catch(() => null);
+  if (pubFolder) {
+    await page.click('#folderGrid [data-enter="list"]');
+    await page.waitForTimeout(400);
+    const inFolder = await page.$eval('#browseCrumb', el => el.textContent).catch(() => '');
+    check('点击文件夹进入列表视图（含返回）', String(inFolder).includes('返回'), inFolder);
+    // 返回根视图
+    await page.click('#browseCrumb .folder-back');
+    await page.waitForTimeout(300);
+  } else {
+    check('点击文件夹进入列表视图（含返回）', false, '无公开列表可进入');
+  }
 
   // ── 4. 设置窗口私密列表入口 + iOS PIN 密码设置 ──
   await page.click('.dock-icon[data-app="settings"]');
