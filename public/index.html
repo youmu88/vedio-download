@@ -1916,10 +1916,6 @@ async function submitChangePin() {
 // 初始化
 // ═══════════════════════════════════════════════════════
 $('downloadBtn').addEventListener('click', submitDownload);
-// ═══════════════════════════════════════════════════════
-// 初始化
-// ═══════════════════════════════════════════════════════
-$('downloadBtn').addEventListener('click', submitDownload);
 $('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitDownload(); });
 $('playUrlBtn').addEventListener('click', playUrl);
 $('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
@@ -1927,6 +1923,19 @@ $('inlinePlayerClose').addEventListener('click', closePlayer);
 $('refreshHealth').addEventListener('click', loadHealth);
 $('parallelDownloadsInput').addEventListener('change', saveServerSettings);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('inlinePlayer').hidden) closePlayer(); });
+
+// ── 新功能绑定：一键清理 / 选择模式 / 批量操作 / 列表 / 私密 ──
+$('cleanCompletedBtn').addEventListener('click', cleanCompleted);
+$('selectModeBtn').addEventListener('click', () => { selectionMode ? exitSelectionMode() : enterSelectionMode(); });
+$('batchSelectAllBtn').addEventListener('click', toggleSelectAll);
+$('batchDeleteBtn').addEventListener('click', batchDeleteSelected);
+$('batchAddListBtn').addEventListener('click', () => openAddToList(false));
+$('batchPrivateBtn').addEventListener('click', () => openAddToList(true));
+$('batchCancelBtn').addEventListener('click', exitSelectionMode);
+$('openListsBtn').addEventListener('click', openMyLists);
+$('privateEntryBtn').addEventListener('click', openPrivateEntry);
+// 初始化时加载列表数据（供「我的列表」「加入列表」使用）
+loadLists();
 
 // 视频库事件委托：播放 / 删除 / 选择模式
 $('libraryGrid').addEventListener('click', (e) => {
