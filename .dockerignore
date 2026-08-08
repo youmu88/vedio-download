@@ -1,0 +1,9 @@
+node_modules
+downloads
+data
+logs
+config
+sessions
+.git
+.DS_Store
+*.log

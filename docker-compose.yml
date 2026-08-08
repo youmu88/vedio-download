@@ -1,0 +1,25 @@
+services:
+  video-downloader:
+    build: .
+    container_name: video-downloader
+    restart: unless-stopped
+    ports:
+      - "3456:3456"
+    environment:
+      - PORT=3456
+      # - API_TOKEN=请改成强随机值
+      # - MAX_BANDWIDTH=10485760          # 10 MB/s 全局限速
+      # - ALLOWED_ORIGINS=http://localhost:3456,http://127.0.0.1:3456
+      # - DOWNLOADS_AUTH=1                # 下载文件也要求 API Token
+      # - LOG_LEVEL=info
+    volumes:
+      - ./downloads:/app/downloads
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config:/app/config
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3456/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

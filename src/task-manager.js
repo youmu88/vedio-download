@@ -4,16 +4,18 @@
  * 任务状态流转：
  *   created → running → completed
  *                       → failed → (重试→running) / (放弃→failed)
+ *                       → cancelled → (手动重试→running)
  *
- * 持久化：data/tasks.json，每次状态变更同步写入
+ * 持久化：data/tasks.json，状态变更立即写入，进度更新防抖写入
  * 排序：按创建时间倒序，新的总在最上面
- * 重试：默认最多 3 次，指数退避（1s → 2s → 4s）
+ * 重试：默认最多 3 次，指数退避（1s → 2s → 4s）；永久性错误不重试
  */
 
 import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { isPermanentError } from './errors.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.resolve(__dirname, '../data');
@@ -30,6 +32,7 @@ export const TaskStatus = {
   RUNNING: 'running',       // 运行中（拦截/下载）
   COMPLETED: 'completed',   // 完成
   FAILED: 'failed',         // 失败
+  CANCELLED: 'cancelled',   // 用户手动取消（可重试续跑）
 };
 
 // ─── 默认配置 ───────────────────────────────────────
@@ -43,6 +46,7 @@ class TaskManager extends EventEmitter {
     this.queue = [];                 // 等待队列（created 状态的任务 ID）
     this.running = new Set();        // 正在执行的任务 ID 集合
     this.maxConcurrent = maxConcurrent;
+    this._saveTimer = null;          // 持久化防抖定时器
 
     // 启动时从持久化文件恢复
     this._loadFromDisk();
@@ -84,6 +88,10 @@ class TaskManager extends EventEmitter {
       parallel: opts.parallel || false,
       parallelCount: opts.parallelCount || 4,
       preferredCodec: opts.preferredCodec || null,
+      timeoutMs: opts.timeoutMs || null,        // 任务级下载超时（null=默认30分钟）
+      streamHeaders: null,                       // 捕获到的防盗链请求头（用于续跑）
+      outputSizeBytes: null,                     // 输出文件大小（前端展示）
+      failureType: null,                         // 'permanent' | 'transient' | null
     };
     this.tasks.set(taskId, task);
     this.queue.push(taskId);
@@ -135,12 +143,15 @@ class TaskManager extends EventEmitter {
 
   /**
    * 通用更新
+   * @param {object} [opts] { immediate: boolean } 是否立即同步写盘（状态变更用）；
+   *   默认防抖写盘，避免进度高频更新阻塞事件循环
    */
-  update(taskId, updates) {
+  update(taskId, updates, opts = {}) {
     const task = this.tasks.get(taskId);
     if (!task) return;
     Object.assign(task, updates, { updatedAt: new Date().toISOString() });
-    this._saveToDisk();
+    if (opts.immediate) this._saveToDisk();
+    else this._scheduleSave();
     this.emit('task-updated', task);
   }
 
@@ -150,25 +161,29 @@ class TaskManager extends EventEmitter {
    */
   markRunning(taskId) {
     const task = this.tasks.get(taskId);
-    if (!task || task.status !== TaskStatus.CREATED) return;
+    if (!task || task.status !== TaskStatus.CREATED) return false;
+    this.running.add(taskId);
     this.update(taskId, {
       status: TaskStatus.RUNNING,
       error: null,          // ⭐ 清除旧错误信息
       message: '任务开始执行...', // ⭐ 重置为正向消息
-    });
+    }, { immediate: true });
+    return true;
   }
 
   /**
    * 标记为完成（running → completed）
    */
-  markCompleted(taskId, outputFile) {
+  markCompleted(taskId, outputFile, extra = {}) {
     const task = this.tasks.get(taskId);
     if (!task) return;
     this.update(taskId, {
       status: TaskStatus.COMPLETED,
       outputFile: outputFile || task.outputFile,
       progress: 100,
-    });
+      failureType: null,
+      ...extra,
+    }, { immediate: true });
     this.running.delete(taskId);
     this.emit('task-completed', this.tasks.get(taskId));
   }
@@ -181,8 +196,24 @@ class TaskManager extends EventEmitter {
   markFailed(taskId, error) {
     const task = this.tasks.get(taskId);
     if (!task) return false;
+    // 用户已取消的任务：不再自动重试、不覆盖取消状态
+    if (task.status === TaskStatus.CANCELLED) return false;
 
     const newRetryCount = (task.retryCount || 0) + 1;
+    const failureType = isPermanentError(error) ? 'permanent' : 'transient';
+
+    // 永久性错误（403/404/非法URL/磁盘不足等）：直接判死，不消耗重试
+    if (failureType === 'permanent') {
+      this.update(taskId, {
+        status: TaskStatus.FAILED,
+        error,
+        failureType,
+        retryCount: newRetryCount,
+      }, { immediate: true });
+      this.running.delete(taskId);
+      this.emit('task-failed', this.tasks.get(taskId));
+      return false;
+    }
 
     if (newRetryCount < task.maxRetries) {
       // ── 自动重试（指数退避）──────────────────
@@ -195,7 +226,8 @@ class TaskManager extends EventEmitter {
         speed: null,
         m3u8Url: null,
         outputFile: null,
-      });
+        failureType,
+      }, { immediate: true });
       this.running.delete(taskId);
       // 重新入队
       this.queue.push(taskId);
@@ -219,37 +251,60 @@ class TaskManager extends EventEmitter {
         status: TaskStatus.FAILED,
         error: error,
         retryCount: newRetryCount,
-      });
+        failureType,
+      }, { immediate: true });
       this.running.delete(taskId);
       this.emit('task-failed', this.tasks.get(taskId));
       return false; // 彻底失败
     }
   }
 
+  /**
+   * 标记为取消（running/created → cancelled）
+   * 不删除任务、保留分片缓存，允许手动重试续跑
+   * @returns {boolean}
+   */
+  markCancelled(taskId) {
+    const task = this.tasks.get(taskId);
+    if (!task) return false;
+    if (![TaskStatus.CREATED, TaskStatus.RUNNING].includes(task.status)) return false;
+
+    this.running.delete(taskId);
+    this.queue = this.queue.filter(id => id !== taskId);
+    this.update(taskId, {
+      status: TaskStatus.CANCELLED,
+      message: '任务已取消，可重试续跑',
+      error: null,
+      failureType: null,
+    }, { immediate: true });
+    this.emit('task-cancelled', this.tasks.get(taskId));
+    return true;
+  }
+
   // ═══════════════════════════════════════════════════
-  // 手动续跑（仅限 failed 状态）
+  // 手动续跑（failed / cancelled 状态）
   // ═══════════════════════════════════════════════════
 
   /**
-   * 手动续跑单个失败任务（failed → created）
+   * 手动续跑单个失败/取消任务（failed|cancelled → created）
    * @param {string} taskId
    * @returns {boolean}
    */
   retry(taskId) {
     const task = this.tasks.get(taskId);
     if (!task) return false;
-    if (task.status !== TaskStatus.FAILED) return false;
+    if (![TaskStatus.FAILED, TaskStatus.CANCELLED].includes(task.status)) return false;
 
     this.update(taskId, {
       status: TaskStatus.CREATED,
       error: null,
       progress: 0,
       speed: null,
-      m3u8Url: null,
-      outputFile: null,
       retryCount: 0,       // 手动续跑重置重试计数
       maxRetries: DEFAULT_MAX_RETRIES,
-    });
+      failureType: null,
+      message: '已重新加入队列',
+    }, { immediate: true });
     this.queue.push(taskId);
     this.emit('task-retry', this.tasks.get(taskId));
     return true;
@@ -369,6 +424,7 @@ class TaskManager extends EventEmitter {
       if (!Array.isArray(tasksArray)) return;
 
       for (const task of tasksArray) {
+        if (!task || !task.id) continue;
         this.tasks.set(task.id, task);
         // 恢复队列：只有 created 状态的任务才重新入队
         // 运行中的任务在重启后重置为 created（因为进程已终止）
@@ -377,6 +433,7 @@ class TaskManager extends EventEmitter {
           task.error = '服务重启，任务已重置';
           task.progress = 0;
           task.retryCount = 0;
+          task.failureType = null;
         }
         if (task.status === TaskStatus.CREATED) {
           this.queue.push(task.id);
@@ -412,6 +469,29 @@ class TaskManager extends EventEmitter {
     } catch (err) {
       console.error('[Persistence] 写入失败:', err.message);
     }
+  }
+
+  /**
+   * 防抖写盘：进度类高频更新合并为低频写入（状态变更走 immediate 同步写）
+   */
+  _scheduleSave() {
+    if (this._saveTimer) return;
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      this._saveToDisk();
+    }, 500);
+    if (this._saveTimer.unref) this._saveTimer.unref();
+  }
+
+  /**
+   * 立即刷新持久化（优雅关闭前调用）
+   */
+  flush() {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+    }
+    this._saveToDisk();
   }
 }
 

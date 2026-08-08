@@ -84,6 +84,7 @@ class BrowserPool {
     }
 
     if (instance) {
+      await this._applyExtraOpts(instance, extraOpts);
       instance.busy = true;
       instance.lastUsedAt = Date.now();
 
@@ -117,16 +118,27 @@ class BrowserPool {
                 return;
               }
 
-              newInst.busy = true;
-              newInst.lastUsedAt = Date.now();
               this.instances.push(newInst);
 
-              // 从队列移除
-              const [entry] = this.waitQueue.splice(idx, 1);
-              clearInterval(entry.pollInterval);
-              clearTimeout(entry.timeoutId);
-
-              resolve(this._wrapInstance(newInst, extraOpts));
+              this._applyExtraOpts(newInst, extraOpts)
+                .then(() => {
+                  // 应用成功后再从队列移除并交付
+                  const entryIdx = this.waitQueue.findIndex((w) => w.pollInterval === pollInterval);
+                  if (entryIdx === -1) {
+                    this._destroyInstance(newInst).catch(() => {});
+                    return;
+                  }
+                  const [entry] = this.waitQueue.splice(entryIdx, 1);
+                  clearInterval(entry.pollInterval);
+                  clearTimeout(entry.timeoutId);
+                  newInst.busy = true;
+                  newInst.lastUsedAt = Date.now();
+                  resolve(this._wrapInstance(newInst, extraOpts));
+                })
+                .catch((err) => {
+                  console.warn(`[BrowserPool] 应用实例配置失败: ${err.message}`);
+                  this._destroyInstance(newInst).catch(() => {});
+                });
             })
             .catch((err) => {
               // 创建失败，继续轮询等待空闲实例
@@ -140,13 +152,21 @@ class BrowserPool {
           const idx = this.waitQueue.findIndex((w) => w.pollInterval === pollInterval);
           if (idx === -1) return; // 已被超时移除
 
-          const [entry] = this.waitQueue.splice(idx, 1);
-          clearInterval(entry.pollInterval);
-          clearTimeout(entry.timeoutId);
-
-          idleInst.busy = true;
-          idleInst.lastUsedAt = Date.now();
-          resolve(this._wrapInstance(idleInst, extraOpts));
+          this._applyExtraOpts(idleInst, extraOpts)
+            .then(() => {
+              const entryIdx = this.waitQueue.findIndex((w) => w.pollInterval === pollInterval);
+              if (entryIdx === -1) return;
+              const [entry] = this.waitQueue.splice(entryIdx, 1);
+              clearInterval(entry.pollInterval);
+              clearTimeout(entry.timeoutId);
+              idleInst.busy = true;
+              idleInst.lastUsedAt = Date.now();
+              resolve(this._wrapInstance(idleInst, extraOpts));
+            })
+            .catch((err) => {
+              console.warn(`[BrowserPool] 应用实例配置失败: ${err.message}`);
+              this._destroyInstance(idleInst).catch(() => {});
+            });
         }
       }, this.config.pollIntervalMs);
 
@@ -257,8 +277,8 @@ class BrowserPool {
     const context = await browser.newContext({
       userAgent: this.config.userAgent,
       viewport: { width: 1280, height: 720 },
-      // 注入反检测脚本（默认启用）
       bypassCSP: true,
+      ...(extraOpts.proxy ? { proxy: { server: extraOpts.proxy } } : {}),
     });
 
     const page = await context.newPage();
@@ -285,6 +305,7 @@ class BrowserPool {
       lastUsedAt: Date.now(),
       busy: false,
       headless: extraOpts.headless !== false,
+      proxy: extraOpts.proxy || null,
     };
 
     // 监听浏览器断开事件
@@ -294,6 +315,43 @@ class BrowserPool {
     });
 
     return instance;
+  }
+
+  /**
+   * 为实例应用本次任务配置（cookie / 自定义脚本 / 代理）
+   * ⭐ 修复：复用空闲实例时 cookie 之前被静默忽略；代理变化时重建 context
+   */
+  async _applyExtraOpts(instance, extraOpts = {}) {
+    // 代理只能在 context 上设置，代理变化时重建 context
+    if (extraOpts.proxy && instance.proxy !== extraOpts.proxy) {
+      if (instance.context) await instance.context.close().catch(() => {});
+      const context = await instance.browser.newContext({
+        userAgent: this.config.userAgent,
+        viewport: { width: 1280, height: 720 },
+        bypassCSP: true,
+        proxy: { server: extraOpts.proxy },
+      });
+      await this._injectAntiDetectionScripts(context, extraOpts);
+      if (extraOpts.cookies && Array.isArray(extraOpts.cookies)) {
+        await context.addCookies(extraOpts.cookies);
+      }
+      const page = await context.newPage();
+      if (extraOpts.injectScript) {
+        await page.addInitScript(extraOpts.injectScript);
+      }
+      instance.context = context;
+      instance.page = page;
+      instance.proxy = extraOpts.proxy;
+      return;
+    }
+
+    // 复用实例时补注入 cookie 与自定义脚本
+    if (extraOpts.cookies && Array.isArray(extraOpts.cookies) && extraOpts.cookies.length > 0) {
+      await instance.context.addCookies(extraOpts.cookies);
+    }
+    if (extraOpts.injectScript) {
+      await instance.page.addInitScript(extraOpts.injectScript);
+    }
   }
 
   /**

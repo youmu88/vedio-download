@@ -38,8 +38,11 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import taskManager, { TaskStatus } from './task-manager.js';
 import { captureM3u8, captureMpd, captureDirectUrl, isM3u8Url, isMpdUrl, parseTokenExpiry } from './m3u8-interceptor.js';
-import { startDownload, cancelDownload, validateDiskSpace, getBandwidthUsage, setBandwidthLimit, addProxy } from './downloader.js';
+import { startDownload, cancelDownload, validateDiskSpace, getBandwidthUsage, setBandwidthLimit, addProxy, getEngineAvailability } from './downloader.js';
 import { createLogger, taskLogger } from './logger.js';
+import { assertPublicUrl } from './security.js';
+import browserPool from './browser-pool.js';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -54,10 +57,22 @@ const log = createLogger({ module: 'index' });
 // ─── Express 配置 ──────────────────────────────────
 const app = express();
 
-// ⭐ P2-11: CORS 收紧（允许前端域名）
+// ⭐ CORS 收紧：默认仅允许本机同源，可通过 ALLOWED_ORIGINS=* 显式放开
+const defaultOrigins = [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`];
 const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',')
-  : ['*']; // 默认全开放，可通过环境变量限制
+  ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
+  : defaultOrigins;
+
+// ⭐ 可选 API Token：设置 API_TOKEN 后，除 /api/health 外所有 API 均需携带
+const API_TOKEN = process.env.API_TOKEN || '';
+const requireAuth = (req, res, next) => {
+  if (!API_TOKEN) return next();
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '') || req.headers['x-api-token'];
+  if (token !== API_TOKEN) {
+    return res.status(401).json({ error: '未授权：缺少或错误的 API Token' });
+  }
+  next();
+};
 
 app.use(cors({
   origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
@@ -85,7 +100,14 @@ const downloadLimiter = rateLimit({
 });
 
 // ─── 静态文件服务 ──────────────────────────────────
+// 前端资源本地化（socket.io client 从 node_modules 提供，避免 CDN 依赖）
+app.use('/vendor/socket.io', express.static(path.join(__dirname, '../node_modules/socket.io/client-dist')));
 app.use(express.static(path.join(__dirname, '../public')));
+
+// 下载文件保护：DOWNLOADS_AUTH=1 + API_TOKEN 时需鉴权
+if (process.env.DOWNLOADS_AUTH === '1' && API_TOKEN) {
+  app.use('/downloads', requireAuth);
+}
 app.use('/downloads', express.static(path.join(__dirname, '../downloads')));
 
 // ─── HTTP Server & Socket.IO ────────────────────────
@@ -139,15 +161,18 @@ taskManager.on('task-failed', (task) => {
   io.to(`task:${task.id}`).emit('task-finalized', { taskId: task.id });
 });
 
+taskManager.on('task-cancelled', (task) => {
+  io.emit('task-list-update', taskManager.listAll());
+  io.to(`task:${task.id}`).emit('task-finalized', { taskId: task.id });
+});
+
 taskManager.on('task-removed', (taskId) => {
   io.emit('task-list-update', taskManager.listAll());
 });
 
-// 重试就绪事件 → 自动执行
-taskManager.on('task-retry-ready', (taskId) => {
-  processTask(taskId).catch((err) => {
-    log.error({ taskId }, `重试执行异常: ${err.message}`);
-  });
+// 重试就绪事件 → 交给统一调度器（受 maxConcurrent 限制）
+taskManager.on('task-retry-ready', () => {
+  scheduleNext();
 });
 
 // ═══════════════════════════════════════════════════════
@@ -158,12 +183,28 @@ taskManager.on('task-retry-ready', (taskId) => {
  * GET /api/health — 健康检查（供负载均衡/监控使用）
  */
 app.get('/api/health', (_req, res) => {
+  const tasks = taskManager.listAll();
   res.json({
     status: 'ok',
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
+    version: '2.0.0',
+    tasks: {
+      total: tasks.length,
+      queued: taskManager.queue.length,
+      running: tasks.filter(t => t.status === TaskStatus.RUNNING).length,
+      completed: tasks.filter(t => t.status === TaskStatus.COMPLETED).length,
+      failed: tasks.filter(t => t.status === TaskStatus.FAILED).length,
+      cancelled: tasks.filter(t => t.status === TaskStatus.CANCELLED).length,
+    },
+    browserPool: browserPool.stats(),
+    engines: getEngineAvailability(),
+    disk: validateDiskSpace(1024 * 1024 * 1024).message,
   });
 });
+
+// ⭐ API 鉴权（/api/health 已在上方注册，天然免鉴权）
+app.use('/api', requireAuth);
 
 /**
  * POST /api/download — 创建下载任务
@@ -175,19 +216,17 @@ app.post('/api/download', downloadLimiter, async (req, res) => {
     return res.status(400).json({ error: '缺少 url 参数' });
   }
 
-  // ⭐ P2-11: SSRF 防护 — 禁止内网地址
-  const ssrfError = checkSsrf(url);
-  if (ssrfError) {
-    return res.status(400).json({ error: ssrfError });
+  // ⭐ SSRF 防护：字面量 + DNS 解析 + 重定向链
+  try {
+    await assertPublicUrl(url);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
   }
 
   const taskId = taskManager.create(url, { cookies, injectScript, maxSpeed, proxy });
   log.info({ taskId, url: url.slice(0, 100) }, '创建下载任务');
 
-  // 异步启动任务
-  processTask(taskId).catch((err) => {
-    log.error({ taskId }, `执行异常: ${err.message}`);
-  });
+  scheduleNext();
 
   res.json({ taskId, status: TaskStatus.CREATED });
 });
@@ -197,27 +236,37 @@ app.post('/api/download', downloadLimiter, async (req, res) => {
  * Body: { url, engine?: 'auto'|'n_m3u8dl_re'|'ffmpeg'|'js', ... }
  */
 app.post('/api/download/advanced', downloadLimiter, async (req, res) => {
-  const { url, engine, cookies, injectScript, maxSpeed, proxy, format, bandwidth } = req.body;
+  const { url, engine, cookies, injectScript, maxSpeed, proxy, format, bandwidth, parallel, parallelCount, timeoutMs } = req.body;
   if (!url) {
     return res.status(400).json({ error: '缺少 url 参数' });
   }
 
-  const ssrfError = checkSsrf(url);
-  if (ssrfError) {
-    return res.status(400).json({ error: ssrfError });
+  try {
+    await assertPublicUrl(url);
+  } catch (err) {
+    return res.status(400).json({ error: err.message });
   }
+
+  // 参数白名单校验
+  const ENGINES = ['auto', 'n_m3u8dl_re', 'ffmpeg', 'js'];
+  const FORMATS = ['auto', 'mp4', 'ts', 'mkv'];
+  const cleanEngine = ENGINES.includes(engine) ? engine : 'auto';
+  const cleanFormat = FORMATS.includes(format) ? format : 'auto';
+  const cleanParallelCount = Math.min(Math.max(parseInt(parallelCount, 10) || 4, 1), 16);
+  const cleanTimeout = Math.min(Math.max(parseInt(timeoutMs, 10) || 0, 0), 10 * 60 * 60 * 1000);
 
   const taskId = taskManager.create(url, {
     cookies, injectScript, maxSpeed, proxy,
-    engine: engine || 'auto',
-    format: format || 'auto',
+    engine: cleanEngine,
+    format: cleanFormat,
     targetBandwidth: bandwidth || null,
+    parallel: !!parallel,
+    parallelCount: cleanParallelCount,
+    timeoutMs: cleanTimeout || null,
   });
 
-  log.info({ taskId, url: url.slice(0, 100), engine, format }, '创建高级下载任务');
-  processTask(taskId).catch((err) => {
-    log.error({ taskId }, `高级下载异常: ${err.message}`);
-  });
+  log.info({ taskId, url: url.slice(0, 100), engine: cleanEngine, format: cleanFormat }, '创建高级下载任务');
+  scheduleNext();
 
   res.json({ taskId, status: TaskStatus.CREATED });
 });
@@ -251,19 +300,32 @@ app.delete('/api/task/:id', (req, res) => {
 });
 
 /**
+ * POST /api/task/:id/cancel — 停止任务（不删除，保留分片缓存，可重试续跑）
+ */
+app.post('/api/task/:id/cancel', (req, res) => {
+  const task = taskManager.get(req.params.id);
+  if (!task) return res.status(404).json({ error: '任务不存在' });
+  if (![TaskStatus.CREATED, TaskStatus.RUNNING].includes(task.status)) {
+    return res.status(400).json({ error: '仅运行中/等待中的任务可停止' });
+  }
+  cancelDownload(req.params.id);
+  const ok = taskManager.markCancelled(req.params.id);
+  if (!ok) return res.status(500).json({ error: '停止失败' });
+  res.json({ ok: true, taskId: req.params.id, status: TaskStatus.CANCELLED });
+});
+
+/**
  * POST /api/task/:id/retry — 手动续跑
  */
 app.post('/api/task/:id/retry', async (req, res) => {
   const task = taskManager.get(req.params.id);
   if (!task) return res.status(404).json({ error: '任务不存在' });
-  if (task.status !== TaskStatus.FAILED) {
-    return res.status(400).json({ error: '仅失败状态的任务可以续跑' });
+  if (![TaskStatus.FAILED, TaskStatus.CANCELLED].includes(task.status)) {
+    return res.status(400).json({ error: '仅失败/已停止状态的任务可以续跑' });
   }
   const ok = taskManager.retry(req.params.id);
   if (!ok) return res.status(500).json({ error: '续跑失败' });
-  processTask(req.params.id).catch((err) => {
-    log.error({ taskId: req.params.id }, `续跑异常: ${err.message}`);
-  });
+  scheduleNext();
   res.json({ ok: true, taskId: req.params.id, status: TaskStatus.CREATED });
 });
 
@@ -276,14 +338,7 @@ app.post('/api/tasks/retry-batch', async (req, res) => {
     return res.status(400).json({ error: '缺少 taskIds 参数或为空' });
   }
   const result = taskManager.retryBatch(taskIds);
-  for (const id of taskIds) {
-    const task = taskManager.get(id);
-    if (task && task.status === TaskStatus.CREATED) {
-      processTask(id).catch((err) => {
-        log.error({ taskId: id }, `批量续跑异常: ${err.message}`);
-      });
-    }
-  }
+  scheduleNext();
   res.json({ ok: true, ...result });
 });
 
@@ -367,7 +422,10 @@ async function processTask(taskId) {
     }
 
     // ── 标记为运行中 ────────────────────────────
-    taskManager.markRunning(taskId);
+    if (!taskManager.markRunning(taskId)) {
+      // 任务已被删除/取消/重复调度，直接结束
+      return;
+    }
 
     // ── 回合 1: 拦截流媒体 URL ──────────────────
     taskManager.update(taskId, {
@@ -442,6 +500,9 @@ async function processTask(taskId) {
     const streamUrl = captureResult.m3u8Url;
     const streamFormat = captureResult.format || 'm3u8';
 
+    // ⭐ SSRF 全链路：捕获到的流地址同样做字面量 + DNS + 重定向校验
+    await assertPublicUrl(streamUrl);
+
     // ── Token 时效性检测 ────────────────────────
     const tokenInfo = parseTokenExpiry(streamUrl);
     if (tokenInfo.timeToLive !== null && tokenInfo.timeToLive < 60000) {
@@ -453,6 +514,7 @@ async function processTask(taskId) {
 
     taskManager.update(taskId, {
       m3u8Url: streamUrl,
+      streamHeaders: pickStreamHeaders(captureResult.headers || {}),
       message: `捕获到 ${streamFormat.toUpperCase()}: ${streamUrl.slice(0, 80)}...`,
       progress: 100,
       phase: 'preparing_done',
@@ -478,6 +540,7 @@ async function processTask(taskId) {
       parallel: task.parallel || false,
       parallelCount: task.parallelCount || 4,
       preferredCodec: task.preferredCodec || null,
+      timeoutMs: task.timeoutMs || null,
     };
 
     // ⭐ 修复：参数顺序必须匹配 startDownload(m3u8Url, headers, taskId, onProgress, options)
@@ -491,10 +554,17 @@ async function processTask(taskId) {
       downloadOpts                      // 第5参数：options（engine/maxSpeed/parallel/format 等）
     );
 
-    taskManager.markCompleted(taskId, outputFile);
+    let outputSizeBytes = null;
+    try {
+      outputSizeBytes = fs.statSync(outputFile).size;
+    } catch (_) {}
+    taskManager.markCompleted(taskId, outputFile, { outputSizeBytes });
     tLog.info({ outputFile }, '下载完成');
   } catch (err) {
     tLog.error({ err: err.message }, '任务执行失败');
+    // 用户已取消/删除的任务：不再自动重试
+    const current = taskManager.get(taskId);
+    if (!current || current.status === TaskStatus.CANCELLED) return;
     const autoRetried = taskManager.markFailed(taskId, err.message);
     if (autoRetried) {
       tLog.info('已自动加入重试队列');
@@ -502,16 +572,17 @@ async function processTask(taskId) {
       tLog.error('已耗尽重试次数');
     }
   } finally {
-    tryDequeueNext();
+    scheduleNext();
   }
 }
 
 /**
- * 从队列中取出下一个待执行任务并启动
+ * 统一任务调度器：受 maxConcurrent 限制，从队列取任务并启动
+ * 所有入口（新建/重试/自动重试/任务结束/启动恢复）都走这里
  */
-function tryDequeueNext() {
-  const next = taskManager.dequeue();
-  if (next) {
+function scheduleNext() {
+  let next;
+  while ((next = taskManager.dequeue())) {
     log.info({ taskId: next.id }, '启动下一个任务');
     processTask(next.id).catch((err) => {
       log.error({ taskId: next.id }, `执行异常: ${err.message}`);
@@ -520,40 +591,25 @@ function tryDequeueNext() {
 }
 
 // ═══════════════════════════════════════════════════════
-// 安全工具函数
+// 工具函数
 // ═══════════════════════════════════════════════════════
 
 /**
- * SSRF 防护：检测 URL 是否指向内网地址
- * @param {string} url
- * @returns {string|null} 错误信息，null 表示安全
+ * 挑选需要透传给下载引擎的请求头（防注入 + 控制体积）
  */
-function checkSsrf(url) {
-  try {
-    const parsed = new URL(url);
-    const hostname = parsed.hostname;
-
-    // ⭐ P2-11: 禁止内网地址
-    const privatePatterns = [
-      /^127\./,
-      /^10\./,
-      /^192\.168\./,
-      /^172\.(1[6-9]|2\d|3[01])\./,
-      /^0\.0\.0\.0$/,
-      /^localhost$/i,
-      /^::1$/,
-    ];
-
-    for (const pattern of privatePatterns) {
-      if (pattern.test(hostname)) {
-        return `禁止下载内网地址: ${hostname}`;
-      }
-    }
-
-    return null;
-  } catch {
-    return '无效的 URL';
+function pickStreamHeaders(headers = {}) {
+  const allowed = new Set([
+    'referer', 'origin', 'cookie', 'user-agent', 'accept', 'accept-language',
+    'authorization', 'x-requested-with',
+  ]);
+  const result = {};
+  for (const [key, value] of Object.entries(headers)) {
+    const k = String(key).toLowerCase();
+    if (!allowed.has(k)) continue;
+    const v = String(value || '').replace(/[\r\n]/g, '');
+    if (v) result[k] = v;
   }
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════
@@ -576,6 +632,9 @@ httpServer.listen(PORT, () => {
     setBandwidthLimit(MAX_GLOBAL_BANDWIDTH);
     log.info({ maxBandwidth: MAX_GLOBAL_BANDWIDTH }, '全局带宽限制已启用');
   }
+
+  // 恢复上次未完成任务（重启后 running → created 已重新入队）
+  scheduleNext();
 });
 
 // ⭐ 优雅关闭：释放 BrowserPool，清理子进程，防止僵尸 Chromium
@@ -595,9 +654,11 @@ async function gracefulShutdown(signal) {
     }
   }
 
-  // 3. 销毁浏览器池（强制关闭所有 Chromium 进程）
+  // 3. 刷新任务持久化
+  taskManager.flush();
+
+  // 4. 销毁浏览器池（强制关闭所有 Chromium 进程）
   try {
-    const { default: browserPool } = await import('./browser-pool.js');
     await browserPool.destroy();
     log.info('BrowserPool 已销毁');
   } catch (err) {

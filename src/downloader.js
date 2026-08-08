@@ -25,11 +25,12 @@ import {
   downloadSingleSegment,
 } from './js-downloader.js';
 import logger from './logger.js';
+import { assertStreamUrlLiteral } from './security.js';
 const log = logger.child({ module: 'downloader' });
 
 const DOWNLOADS_DIR = path.resolve(process.cwd(), 'downloads');
 const PROXY_LIST_PATH = path.resolve(process.cwd(), 'config', 'proxies.txt');
-const DOWNLOAD_TIMEOUT_MS = 1800_000; // ⭐ 全局下载超时：30分钟
+const DEFAULT_DOWNLOAD_TIMEOUT_MS = 1800_000; // ⭐ 默认下载超时：30分钟
 
 // 确保目录存在
 if (!fs.existsSync(DOWNLOADS_DIR)) {
@@ -38,6 +39,25 @@ if (!fs.existsSync(DOWNLOADS_DIR)) {
 const configDir = path.resolve(process.cwd(), 'config');
 if (!fs.existsSync(configDir)) {
   fs.mkdirSync(configDir, { recursive: true });
+}
+
+// 启动清理：删除 7 天前的断点续传分片缓存（防止长期占盘）
+try {
+  const cacheRoot = path.join(DOWNLOADS_DIR, '.cache');
+  if (fs.existsSync(cacheRoot)) {
+    const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    for (const entry of fs.readdirSync(cacheRoot)) {
+      const p = path.join(cacheRoot, entry);
+      const stat = fs.statSync(p);
+      if (stat.isDirectory() && now - stat.mtimeMs > CACHE_MAX_AGE_MS) {
+        fs.rmSync(p, { recursive: true, force: true });
+        console.log(`[Cleanup] 已清理过期分片缓存: ${p}`);
+      }
+    }
+  }
+} catch (err) {
+  console.warn(`[Cleanup] 分片缓存清理失败: ${err.message}`);
 }
 
 // ─── 代理轮换管理器 ────────────────────────────────
@@ -81,8 +101,9 @@ const proxyManager = new ProxyManager();
 
 // ─── 全局速率限制器 ────────────────────────────────
 class BandwidthLimiter {
-  constructor(maxBytesPerSecond = 50 * 1024 * 1024) {
+  constructor(maxBytesPerSecond = 0) { // 0 = 默认不限速，可用 MAX_BANDWIDTH 开启
     this.maxBytesPerSecond = maxBytesPerSecond;
+    this.currentUsage = 0; // 每秒实测下载字节数
     this.activeDownloads = new Map(); // taskId → { startTime, bytesDownloaded, maxSpeed, measuredSpeed }
     this.interval = setInterval(() => this._tick(), 1000);
 
@@ -100,6 +121,7 @@ class BandwidthLimiter {
     this.activeDownloads.set(taskId, {
       startTime: Date.now(),
       bytesDownloaded: 0,
+      windowBytes: 0,
       maxSpeed: maxSpeed || null,
       measuredSpeed: 0,
     });
@@ -112,6 +134,7 @@ class BandwidthLimiter {
     const entry = this.activeDownloads.get(taskId);
     if (entry) {
       entry.bytesDownloaded += bytes;
+      entry.windowBytes += bytes;
     }
   }
 
@@ -126,12 +149,12 @@ class BandwidthLimiter {
     // 单任务限速
     if (entry.maxSpeed) return entry.maxSpeed;
 
-    // 全局带宽分配
+    // 全局带宽分配（0=无限制）
     const activeCount = this.activeDownloads.size;
-    if (activeCount === 0) return null;
-
-    // 按活跃任务数平分全局带宽
-    return Math.floor(this.maxBytesPerSecond / activeCount);
+    if (this.maxBytesPerSecond > 0 && activeCount > 0) {
+      return Math.floor(this.maxBytesPerSecond / activeCount);
+    }
+    return null;
   }
 
   /**
@@ -209,6 +232,14 @@ class BandwidthLimiter {
   }
 
   _tick() {
+    // 每秒实测带宽汇总
+    let usage = 0;
+    for (const entry of this.activeDownloads.values()) {
+      usage += entry.windowBytes || 0;
+      entry.windowBytes = 0;
+    }
+    this.currentUsage = usage;
+
     // 周期任务：清理过期测速数据
     const now = Date.now();
     if (now - this.lastMeasureTime > 5000 && this.bandwidthHistory.length > 0) {
@@ -243,16 +274,27 @@ const bandwidthLimiter = new BandwidthLimiter();
  */
 export function startDownload(m3u8Url, headers, taskId, onProgress, options = {}) {
   return new Promise((resolve, reject) => {
-    const outputName = `${taskId}_${Date.now()}`;
+    // 稳定输出名：同任务多次尝试共享同一缓存/输出，支持断点续跑
+    const outputName = taskId;
     const outputPath = path.join(DOWNLOADS_DIR, outputName);
 
     // 注册带宽
     bandwidthLimiter.register(taskId, options.maxSpeed || null);
 
+    // 流 URL SSRF 字面量校验（DNS 级校验在 index.js 完成）
+    try {
+      assertStreamUrlLiteral(m3u8Url);
+    } catch (err) {
+      bandwidthLimiter.unregister(taskId);
+      reject(err);
+      return;
+    }
+
     // 检测 URL 格式并选择下载策略
     const formatType = detectFormat(m3u8Url);
 
     // 构建额外参数
+    const reportBytes = (n) => bandwidthLimiter.reportBytes(taskId, n);
     const extraArgs = {
       headers,
       outputPath,
@@ -264,6 +306,10 @@ export function startDownload(m3u8Url, headers, taskId, onProgress, options = {}
       parallelCount: options.parallelCount || 4,
       preferredCodec: options.preferredCodec || null,
       engine: options.engine || 'auto',
+      formatType,
+      onBytes: reportBytes,
+      resumeDir: path.join(DOWNLOADS_DIR, '.cache', taskId),
+      allowPartial: options.allowPartial || false,
     };
 
     let downloadPromise;
@@ -284,7 +330,7 @@ export function startDownload(m3u8Url, headers, taskId, onProgress, options = {}
 
     // ⭐ 全局下载超时保护（30分钟），防止任务永久卡死占用槽位
     const timeoutPromise = new Promise((_, timeoutReject) => {
-      const timeoutMs = DOWNLOAD_TIMEOUT_MS;
+      const timeoutMs = options.timeoutMs || DEFAULT_DOWNLOAD_TIMEOUT_MS;
       const timeoutId = setTimeout(() => {
         cancelDownload(taskId);
         timeoutReject(new Error(`下载超时（${Math.round(timeoutMs / 60000)}分钟），已自动取消`));
@@ -294,19 +340,33 @@ export function startDownload(m3u8Url, headers, taskId, onProgress, options = {}
     });
 
     Promise.race([downloadPromise, timeoutPromise])
-      .then((result) => {
+      .then(async (result) => {
         bandwidthLimiter.unregister(taskId);
 
-        // CCTV 花屏修复
+        // CCTV 花屏修复（先修后校验）
         if (isCctvUrl(m3u8Url)) {
-          return fixCctvVideo(result, m3u8Url, outputPath, taskId, onProgress)
-            .then((fixedPath) => {
-              if (fixedPath !== result && fs.existsSync(result)) {
-                try { fs.unlinkSync(result); } catch (_) {}
-              }
-              return fixedPath;
-            });
+          const fixedPath = await fixCctvVideo(result, m3u8Url, outputPath, taskId, onProgress);
+          if (fixedPath !== result && fs.existsSync(result)) {
+            try { fs.unlinkSync(result); } catch (_) {}
+          }
+          result = fixedPath;
         }
+
+        // JS 下载器产出 .ts 时，用 ffmpeg 无损转封装为 mp4（失败则保留 ts）
+        if (result.endsWith('.ts') && which('ffmpeg')) {
+          const remuxed = await remuxToMp4(result, outputPath);
+          if (remuxed !== result) {
+            try { fs.unlinkSync(result); } catch (_) {}
+            result = remuxed;
+          }
+        }
+
+        // ⭐ 所有引擎统一完整性校验（存在性 + 非0字节 + ffprobe 视频轨道）
+        const verify = await verifyDownloadedFile(result);
+        if (!verify.ok) {
+          throw new Error(`视频完整性校验失败: ${verify.reason || path.basename(result)}`);
+        }
+
         return result;
       })
       .then(resolve)
@@ -331,7 +391,21 @@ function detectFormat(url) {
  * 三引擎降级下载
  */
 async function downloadWithEngine(m3u8Url, extra) {
-  const { outputPath, taskId, onProgress, headers, proxy, maxSpeed, parallel, parallelCount, engine } = extra;
+  const {
+    outputPath, taskId, onProgress, headers, proxy, maxSpeed, parallel, parallelCount, engine,
+    onBytes, resumeDir, allowPartial, formatType,
+  } = extra;
+
+  const jsOptions = {
+    headers,
+    onProgress,
+    maxConcurrency: parallelCount,
+    maxSpeed,
+    proxy,
+    onBytes,
+    resumeDir,
+    allowPartial,
+  };
 
   // ⭐ 修复：支持用户指定引擎，优先按指定引擎执行
   if (engine && engine !== 'auto') {
@@ -352,7 +426,7 @@ async function downloadWithEngine(m3u8Url, extra) {
     } else if (engine === 'ffmpeg') {
       if (which('ffmpeg')) {
         try {
-          return await downloadWithFFmpeg(m3u8Url, headers, outputPath, taskId, onProgress, { proxy });
+          return await downloadWithFFmpeg(m3u8Url, headers, outputPath, taskId, onProgress, { proxy, onBytes });
         } catch (err) {
           console.warn(`[Download] ffmpeg 失败，降级到三引擎自动选择: ${err.message}`);
           cleanupOutputFiles(outputPath);
@@ -361,13 +435,11 @@ async function downloadWithEngine(m3u8Url, extra) {
     } else if (engine === 'js') {
       // 用户指定 JS 引擎
       if (parallel) {
-        return await downloadSegmentsParallel(m3u8Url, outputPath, {
-          headers, onProgress, maxConcurrency: parallelCount, proxy,
-        });
+        return await downloadSegmentsParallel(m3u8Url, outputPath, jsOptions);
       } else {
         const outputDir = path.dirname(outputPath);
         const baseName = path.basename(outputPath);
-        return await downloadWithJs(m3u8Url, headers, outputDir, baseName, onProgress, { proxy });
+        return await downloadWithJs(m3u8Url, headers, outputDir, baseName, onProgress, jsOptions);
       }
     }
     // 指定引擎不可用时，继续走 auto 降级
@@ -393,6 +465,7 @@ async function downloadWithEngine(m3u8Url, extra) {
     try {
       return await downloadWithFFmpeg(m3u8Url, headers, outputPath, taskId, onProgress, {
         proxy,
+        onBytes,
       });
     } catch (err) {
       console.warn(`[Download] ffmpeg 失败，降级到 JS 下载器: ${err.message}`);
@@ -401,23 +474,17 @@ async function downloadWithEngine(m3u8Url, extra) {
   }
 
   // 方案 C: JS 原生下载器（兜底）
+  if (formatType === 'mpd') {
+    throw new Error('DASH/MPD 格式需要 ffmpeg 或 N_m3u8DL-RE 支持，且两者均不可用');
+  }
   onProgress({ percent: 0, speed: null, message: '使用 JS 原生下载器（兜底模式）...' });
 
   if (parallel) {
-    return await downloadSegmentsParallel(m3u8Url, outputPath, {
-      headers,
-      onProgress,
-      maxConcurrency: parallelCount,
-      maxSpeed,                               // ⭐ 补充：JS 分片下载也支持限速
-      proxy,
-    });
+    return await downloadSegmentsParallel(m3u8Url, outputPath, jsOptions);
   } else {
     const outputDir = path.dirname(outputPath);
     const baseName = path.basename(outputPath);
-    return await downloadWithJs(m3u8Url, headers, outputDir, baseName, onProgress, {
-      maxSpeed,                               // ⭐ 补充：JS 单线程下载也支持限速
-      proxy,
-    });
+    return await downloadWithJs(m3u8Url, headers, outputDir, baseName, onProgress, jsOptions);
   }
 }
 
@@ -425,100 +492,156 @@ async function downloadWithEngine(m3u8Url, extra) {
  * 下载直链 mp4/mkv
  */
 async function downloadDirectLink(url, extra) {
-  const { outputPath, onProgress, proxy, taskId } = extra;  // ⭐ 修复：添加 taskId 用于 cancelDownload
+  const { outputPath, onProgress, proxy, taskId, headers, onBytes } = extra;
+  const finalPath = `${outputPath}.mp4`;
 
-  // 使用 ffmpeg 或 curl
+  // 方案 A：ffmpeg（完整请求头 + 重试），失败后回退 fetch
   if (which('ffmpeg')) {
-    return new Promise((resolve, reject) => {
-      const args = [
-        '-i', url,
-        '-c', 'copy',
-        '-movflags', '+faststart',
-        '-progress', 'pipe:1',
-        '-nostats',
-        '-y',
-        `${outputPath}.mp4`,
-      ];
-
-      if (proxy) {
-        args.unshift('-http_proxy', proxy);
-      }
-
-      onProgress({ percent: 0, speed: null, message: '使用 ffmpeg 下载直链...' });
-
-      const proc = spawn('ffmpeg', args.filter(Boolean), { stdio: ['ignore', 'pipe', 'pipe'] });
-
-      proc.stdout.on('data', (data) => {
-        const text = data.toString();
-        const timeMatch = text.match(/out_time=(\d+):(\d+):(\d+)/);
-        if (timeMatch) {
-          const seconds = (+timeMatch[1] * 3600) + (+timeMatch[2] * 60) + (+timeMatch[3]);
-          onProgress({
-            percent: Math.min(99, Math.floor(seconds / 10)),
-            speed: null,
-            message: `已下载 ${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3]}`,
-          });
-        }
-      });
-
-      proc.on('close', (code) => {
-        if (code === 0) {
-          onProgress({ percent: 100, speed: null, message: '下载完成！' });
-          resolve(`${outputPath}.mp4`);
-        } else {
-          reject(new Error(`ffmpeg 直链下载退出码 ${code}`));
-        }
-      });
-
-      proc.on('error', (err) => {
-        reject(new Error(`启动 ffmpeg 失败: ${err.message}`));
-      });
-
-      activeProcesses.set(taskId, proc);
-    });
+    try {
+      return await attemptWithRetry(
+        () => downloadDirectWithFFmpeg(url, headers, outputPath, taskId, onProgress, { proxy, onBytes }),
+        2,
+        'ffmpeg 直链'
+      );
+    } catch (err) {
+      console.warn(`[Download] ffmpeg 直链失败，回退到 fetch: ${err.message}`);
+      try { fs.unlinkSync(finalPath); } catch (_) {}
+    }
   }
 
-  // 兜底：使用 fetch + 流式写入（⭐ 修复：移除 async Promise executor 反模式 + 注册 taskId 用于取消）
-  const { default: fetch } = await import('node-fetch');
-  const { createWriteStream } = await import('fs');
+  // 方案 B：fetch + Range 断点续传 + 流式写入
+  onProgress({ percent: 0, speed: null, message: '使用 fetch 下载直链...' });
+  return downloadDirectWithFetch(url, headers, outputPath, taskId, onProgress, { proxy, onBytes });
+}
 
-  try {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const contentLength = response.headers.get('content-length');
-    const totalBytes = contentLength ? parseInt(contentLength, 10) : 0;
-    const fileStream = createWriteStream(`${outputPath}.mp4`);
+/**
+ * ffmpeg 下载直链（带完整防盗链请求头与字节上报）
+ */
+function downloadDirectWithFFmpeg(url, headers, outputPath, taskId, onProgress, options = {}) {
+  return new Promise((resolve, reject) => {
+    const { proxy, onBytes } = options;
+    const args = [
+      '-i', url,
+      '-c', 'copy',
+      '-movflags', '+faststart',
+      '-progress', 'pipe:1',
+      '-nostats',
+      '-y',
+      `${outputPath}.mp4`,
+    ];
 
-    return new Promise((resolve, reject) => {
-      // ⭐ 注册到活跃进程表，支持 cancelDownload
-      activeProcesses.set(taskId, { kill: () => { fileStream.destroy(); } });
+    const headerStr = buildFfmpegHeaders(headers);
+    if (headerStr) args.unshift('-headers', headerStr);
+    if (proxy) args.unshift('-http_proxy', proxy);
 
-      let downloadedBytes = 0;
-      response.body.on('data', (chunk) => {
-        downloadedBytes += chunk.length;
-        if (totalBytes > 0) {
-          onProgress({
-            percent: Math.round((downloadedBytes / totalBytes) * 100),
-            speed: null,
-            message: `直链下载 ${(downloadedBytes / 1024 / 1024).toFixed(1)}MB / ${(totalBytes / 1024 / 1024).toFixed(1)}MB`,
-          });
+    onProgress({ percent: 0, speed: null, message: '使用 ffmpeg 下载直链...' });
+
+    const proc = spawn('ffmpeg', args.filter(Boolean), { stdio: ['ignore', 'pipe', 'pipe'] });
+    let lastTotalSize = 0;
+
+    proc.stdout.on('data', (data) => {
+      const text = data.toString();
+      const timeMatch = text.match(/out_time=(\d+):(\d+):(\d+)/);
+      if (timeMatch) {
+        const seconds = (+timeMatch[1] * 3600) + (+timeMatch[2] * 60) + (+timeMatch[3]);
+        onProgress({
+          percent: Math.min(99, Math.floor(seconds / 10)),
+          speed: null,
+          message: `已下载 ${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3]}`,
+        });
+      }
+      // ffmpeg -progress 会周期性输出 total_size，用于真实带宽统计
+      const sizeMatch = text.match(/total_size=(\d+)/);
+      if (sizeMatch && onBytes) {
+        const totalSize = parseInt(sizeMatch[1], 10);
+        if (totalSize > lastTotalSize) {
+          onBytes(totalSize - lastTotalSize);
+          lastTotalSize = totalSize;
         }
-      });
+      }
+    });
 
-      response.body.pipe(fileStream);
-      fileStream.on('finish', () => {
-        activeProcesses.delete(taskId);
+    proc.on('close', (code) => {
+      if (code === 0) {
         onProgress({ percent: 100, speed: null, message: '下载完成！' });
         resolve(`${outputPath}.mp4`);
-      });
-      fileStream.on('error', (err) => {
-        activeProcesses.delete(taskId);
-        reject(err);
-      });
+      } else {
+        reject(new Error(`ffmpeg 直链下载退出码 ${code}`));
+      }
     });
-  } catch (err) {
-    throw new Error(`直链下载失败: ${err.message}`);
+
+    proc.on('error', (err) => {
+      reject(new Error(`启动 ffmpeg 失败: ${err.message}`));
+    });
+
+    activeProcesses.set(taskId, proc);
+  });
+}
+
+/**
+ * fetch + 流式写入直链（支持 Range 断点续传、完整请求头、取消、字节上报）
+ */
+async function downloadDirectWithFetch(url, headers, outputPath, taskId, onProgress, options = {}) {
+  const { default: fetch } = await import('node-fetch');
+  const { createWriteStream } = await import('fs');
+  const { onBytes } = options;
+  const finalPath = `${outputPath}.mp4`;
+  const partPath = `${outputPath}.part.mp4`;
+
+  let startByte = 0;
+  if (fs.existsSync(partPath)) {
+    startByte = fs.statSync(partPath).size;
   }
+
+  const reqHeaders = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    ...sanitizeHeaders(headers),
+  };
+  if (startByte > 0) reqHeaders['Range'] = `bytes=${startByte}-`;
+
+  const response = await fetch(url, { headers: reqHeaders });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+  // 服务器忽略 Range 时（返回 200），丢弃旧的分片重新下载
+  let resumeOk = startByte > 0 && response.status === 206;
+  if (startByte > 0 && !resumeOk) {
+    try { fs.unlinkSync(partPath); } catch (_) {}
+    startByte = 0;
+  }
+
+  const contentLength = response.headers.get('content-length');
+  const totalBytes = contentLength ? parseInt(contentLength, 10) + (resumeOk ? startByte : 0) : 0;
+  const flags = resumeOk ? 'a' : 'w';
+  const fileStream = createWriteStream(partPath, { flags });
+
+  return new Promise((resolve, reject) => {
+    activeProcesses.set(taskId, { kill: () => { fileStream.destroy(); } });
+
+    let downloadedBytes = resumeOk ? startByte : 0;
+    response.body.on('data', (chunk) => {
+      downloadedBytes += chunk.length;
+      if (onBytes) onBytes(chunk.length);
+      if (totalBytes > 0) {
+        onProgress({
+          percent: Math.round((downloadedBytes / totalBytes) * 100),
+          speed: null,
+          message: `直链下载 ${(downloadedBytes / 1024 / 1024).toFixed(1)}MB / ${(totalBytes / 1024 / 1024).toFixed(1)}MB`,
+        });
+      }
+    });
+
+    response.body.pipe(fileStream);
+    fileStream.on('finish', () => {
+      activeProcesses.delete(taskId);
+      fs.renameSync(partPath, finalPath); // 原子收尾
+      onProgress({ percent: 100, speed: null, message: '下载完成！' });
+      resolve(finalPath);
+    });
+    fileStream.on('error', (err) => {
+      activeProcesses.delete(taskId);
+      reject(err);
+    });
+  });
 }
 
 // ─── N_m3u8DL-RE 下载（增强版） ──────────────────
@@ -553,15 +676,9 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
       args.push('--max-speed', `${Math.floor(maxSpeed / 1024 / 1024)}M`); // N_m3u8DL-RE 使用 M 单位
     }
 
-    // 请求头
-    if (headers?.referer) {
-      args.push('--header', `Referer:${headers.referer.replace(/[\n\r'"]/g, '')}`);
-    }
-    if (headers?.origin) {
-      args.push('--header', `Origin:${headers.origin.replace(/[\n\r'"]/g, '')}`);
-    }
-    if (headers?.cookie) {
-      args.push('--header', `Cookie:${headers.cookie.replace(/[\n\r]/g, '')}`);
+    // 请求头（Referer/Origin/Cookie/UA 等全部透传）
+    for (const [key, value] of Object.entries(sanitizeHeaders(headers))) {
+      args.push('--header', `${key}:${value}`);
     }
 
     onProgress({ percent: 0, speed: null, message: '启动 N_m3u8DL-RE 下载...' });
@@ -594,23 +711,10 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
         const tsPath = `${outputPath}.ts`;
         const finalPath = fs.existsSync(mp4Path) ? mp4Path : fs.existsSync(tsPath) ? tsPath : outputPath;
 
-        verifyVideoIntegrity(finalPath)
-          .then((ok) => {
-            if (ok) {
-              cleanupTempDir(outputPath);
-              onProgress({ percent: 100, speed: null, message: '下载完成！' });
-              resolve(finalPath);
-            } else {
-              cleanupTempDir(outputPath);
-              reject(new Error(`视频完整性校验失败: ${path.basename(finalPath)} 视频轨道数据损坏`));
-            }
-          })
-          .catch((err) => {
-            console.warn(`[Verify] 完整性校验跳过: ${err.message}`);
-            cleanupTempDir(outputPath);
-            onProgress({ percent: 100, speed: null, message: '下载完成！' });
-            resolve(finalPath);
-          });
+        // 完整性校验统一在 startDownload 层执行
+        cleanupTempDir(outputPath);
+        onProgress({ percent: 100, speed: null, message: '下载完成！' });
+        resolve(finalPath);
       } else {
         reject(new Error(`N_m3u8DL-RE 退出码 ${code}`));
       }
@@ -626,7 +730,7 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
 
 // ─── ffmpeg 下载（增强版，带重试） ────────────────
 function downloadWithFFmpeg(m3u8Url, headers, outputPath, taskId, onProgress, options = {}) {
-  const { proxy } = options;
+  const { proxy, onBytes } = options;
 
   return attemptWithRetry(
     async () => {
@@ -637,9 +741,8 @@ function downloadWithFFmpeg(m3u8Url, headers, outputPath, taskId, onProgress, op
       return new Promise((resolve, reject) => {
         const args = [];
 
-        if (headers?.referer) {
-          args.push('-headers', `Referer: ${headers.referer.replace(/[\n\r'"]/g, '')}`);
-        }
+        const headerStr = buildFfmpegHeaders(headers);
+        if (headerStr) args.push('-headers', headerStr);
 
         if (proxy) {
           args.push('-http_proxy', proxy);
@@ -659,6 +762,7 @@ function downloadWithFFmpeg(m3u8Url, headers, outputPath, taskId, onProgress, op
         onProgress({ percent: 0, speed: null, message: '启动 ffmpeg 下载...' });
 
         const proc = spawn('ffmpeg', args.filter(Boolean), { stdio: ['ignore', 'pipe', 'pipe'] });
+        let lastTotalSize = 0;
 
         proc.stdout.on('data', (data) => {
           const text = data.toString();
@@ -670,6 +774,14 @@ function downloadWithFFmpeg(m3u8Url, headers, outputPath, taskId, onProgress, op
               speed: null,
               message: `已下载 ${timeMatch[1]}:${timeMatch[2]}:${timeMatch[3]}`,
             });
+          }
+          const sizeMatch = text.match(/total_size=(\d+)/);
+          if (sizeMatch && onBytes) {
+            const totalSize = parseInt(sizeMatch[1], 10);
+            if (totalSize > lastTotalSize) {
+              onBytes(totalSize - lastTotalSize);
+              lastTotalSize = totalSize;
+            }
           }
         });
 
@@ -774,16 +886,27 @@ function cleanupOutputFiles(outputPath) {
   }
 }
 
-function verifyVideoIntegrity(filePath) {
-  return new Promise((resolve, reject) => {
-    if (!fs.existsSync(filePath)) {
-      reject(new Error(`文件不存在: ${filePath}`));
+/**
+ * 统一完整性校验：存在性 + 非0字节 + ffprobe 可解析出视频轨道
+ * @returns {Promise<{ok: boolean, reason?: string}>}
+ */
+function verifyDownloadedFile(filePath) {
+  return new Promise((resolvePromise) => {
+    if (!filePath || !fs.existsSync(filePath)) {
+      resolvePromise({ ok: false, reason: '输出文件不存在' });
+      return;
+    }
+
+    const stat = fs.statSync(filePath);
+    if (stat.size === 0) {
+      resolvePromise({ ok: false, reason: '输出文件为 0 字节' });
       return;
     }
 
     const ffprobePath = which('ffprobe');
     if (!ffprobePath) {
-      reject(new Error('ffprobe 未安装，跳过完整性校验'));
+      console.warn('[Verify] ffprobe 未安装，仅做文件大小校验');
+      resolvePromise({ ok: true });
       return;
     }
 
@@ -798,15 +921,77 @@ function verifyVideoIntegrity(filePath) {
     proc.stderr.on('data', (data) => { stderr += data.toString(); });
 
     proc.on('close', (code) => {
-      if (code === 0) resolve(true);
-      else {
+      if (code === 0) {
+        resolvePromise({ ok: true });
+      } else {
         const errMsg = stderr.trim().slice(0, 300);
         console.warn(`[Verify] 视频完整性检查失败: ${errMsg}`);
-        resolve(false);
+        resolvePromise({ ok: false, reason: errMsg || '视频轨道数据损坏' });
       }
     });
 
-    proc.on('error', (err) => reject(new Error(`启动 ffprobe 失败: ${err.message}`)));
+    proc.on('error', (err) => {
+      resolvePromise({ ok: false, reason: `启动 ffprobe 失败: ${err.message}` });
+    });
+  });
+}
+
+/**
+ * 过滤请求头白名单（防注入，只保留下载真正需要的头）
+ * @returns {object} 键名小写
+ */
+function sanitizeHeaders(headers = {}) {
+  const allowed = new Set([
+    'referer', 'origin', 'cookie', 'user-agent', 'accept', 'accept-language',
+    'authorization', 'x-requested-with', 'range',
+  ]);
+  const result = {};
+  for (const [key, value] of Object.entries(headers || {})) {
+    const k = String(key).toLowerCase();
+    if (!allowed.has(k)) continue;
+    const v = String(value || '').replace(/[\r\n]/g, '');
+    if (v) result[k] = v;
+  }
+  return result;
+}
+
+/**
+ * 构造 ffmpeg -headers 多行头字符串
+ */
+function buildFfmpegHeaders(headers = {}) {
+  const clean = sanitizeHeaders(headers);
+  return Object.entries(clean)
+    .map(([k, v]) => `${k}: ${v}`)
+    .join('\r\n');
+}
+
+/**
+ * 无损转封装 .ts → .mp4（流复制，不重新编码）
+ * @returns {Promise<string>} 成功返回 mp4 路径，失败返回原输入路径
+ */
+function remuxToMp4(inputPath, outputPath) {
+  return new Promise((resolvePromise) => {
+    const output = `${outputPath}.mp4`;
+    const proc = spawn('ffmpeg', [
+      '-i', inputPath,
+      '-c', 'copy',
+      '-movflags', '+faststart',
+      '-y',
+      output,
+    ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+    let stderr = '';
+    proc.stderr.on('data', (data) => { stderr += data.toString(); });
+
+    proc.on('close', (code) => {
+      if (code === 0 && fs.existsSync(output) && fs.statSync(output).size > 0) {
+        resolvePromise(output);
+      } else {
+        console.warn(`[Remux] ts→mp4 转封装失败（保留 ts）: ${stderr.slice(-200)}`);
+        resolvePromise(inputPath);
+      }
+    });
+    proc.on('error', () => resolvePromise(inputPath));
   });
 }
 
@@ -854,9 +1039,8 @@ export function addProxy(proxyUrl) {
  * @returns {{ currentUsage: number, limit: number, activeTasks: number }}
  */
 export function getBandwidthUsage() {
-  // ⭐ 修复：对齐 BandwidthLimiter 实际属性名
   return {
-    currentUsage: 0,                          // 当前未实现实时字节统计
+    currentUsage: bandwidthLimiter.currentUsage || 0,
     limit: bandwidthLimiter.maxBytesPerSecond || 0,
     activeTasks: bandwidthLimiter.activeDownloads?.size || 0,
   };
@@ -867,8 +1051,19 @@ export function getBandwidthUsage() {
  * @param {number} bytesPerSecond - 每秒字节数限制（0=无限制）
  */
 export function setBandwidthLimit(bytesPerSecond) {
-  bandwidthLimiter.maxBandwidth = bytesPerSecond || 0;
+  bandwidthLimiter.maxBytesPerSecond = bytesPerSecond || 0;
   console.log(`[Bandwidth] 全局带宽限制已设置为: ${bytesPerSecond > 0 ? (bytesPerSecond / 1024 / 1024).toFixed(1) + ' MB/s' : '无限制'}`);
+}
+
+/**
+ * 获取下载引擎可用性（供健康检查/前端展示）
+ */
+export function getEngineAvailability() {
+  return {
+    ffmpeg: !!which('ffmpeg'),
+    ffprobe: !!which('ffprobe'),
+    nM3u8DLRe: !!which('N_m3u8DL-RE'),
+  };
 }
 
 /**

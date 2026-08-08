@@ -5,3 +5,9 @@ node_modules/
 dist/
 *.mp4
 *.ts
+data/
+downloads/
+logs/
+config/
+sessions/
+*.part

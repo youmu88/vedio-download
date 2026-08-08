@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🎬 DMXQ 视频下载器</title>
-<script src="https://cdn.socket.io/4.8.3/socket.io.min.js"></script>
+<script src="/vendor/socket.io/socket.io.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   :root {
@@ -131,6 +131,47 @@
     font-size: 12px;
     color: var(--text-secondary);
     margin-top: 10px;
+  }
+  .advanced-options {
+    margin-top: 12px;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .advanced-options summary {
+    cursor: pointer;
+    user-select: none;
+    color: var(--accent);
+  }
+  .advanced-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    gap: 10px;
+    margin-top: 12px;
+    padding: 12px;
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+  }
+  .advanced-grid label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+  }
+  .advanced-grid select,
+  .advanced-grid input[type="number"] {
+    background: rgba(0,0,0,0.3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px;
+    color: var(--text);
+    font-size: 13px;
+  }
+  .advanced-grid .checkbox-label {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    align-self: end;
   }
 
   /* Section Title */
@@ -496,6 +537,39 @@
         <span>⬇</span> 下载
       </button>
     </div>
+    <details class="advanced-options" id="advancedOptions">
+      <summary>⚙ 高级选项</summary>
+      <div class="advanced-grid">
+        <label>下载引擎
+          <select id="engineSelect">
+            <option value="auto" selected>自动选择</option>
+            <option value="n_m3u8dl_re">N_m3u8DL-RE</option>
+            <option value="ffmpeg">ffmpeg</option>
+            <option value="js">JS 原生</option>
+          </select>
+        </label>
+        <label>输出格式
+          <select id="formatSelect">
+            <option value="auto" selected>自动</option>
+            <option value="mp4">MP4</option>
+            <option value="ts">TS</option>
+            <option value="mkv">MKV</option>
+          </select>
+        </label>
+        <label>并行分片
+          <input type="number" id="parallelCountInput" min="1" max="16" value="4">
+        </label>
+        <label>限速 (MB/s)
+          <input type="number" id="maxSpeedInput" min="0" step="0.5" value="0" placeholder="0=不限速">
+        </label>
+        <label>超时 (分钟)
+          <input type="number" id="timeoutInput" min="1" max="600" value="30">
+        </label>
+        <label class="checkbox-label">
+          <input type="checkbox" id="parallelCheck"> 启用并行分片
+        </label>
+      </div>
+    </details>
     <div class="input-hint">🔗 支持 dmxq.info 等在线播放网站的页面链接，后台自动拦截视频流</div>
   </div>
 
@@ -534,11 +608,11 @@
 <script>
 // ─── 常量 & 状态 ──────────────────────────────────
 const STATUS_MAP = {
-  pending:     { label: '等待中',  icon: '⏳' },
-  capturing:   { label: '解析中',  icon: '🔍' },
-  downloading: { label: '下载中',  icon: '⬇'  },
-  done:        { label: '已完成',  icon: '✅' },
-  failed:      { label: '失败',    icon: '❌' },
+  created:   { label: '等待中',  icon: '⏳' },
+  running:   { label: '执行中',  icon: '🔍' },
+  completed: { label: '已完成',  icon: '✅' },
+  failed:    { label: '失败',    icon: '❌' },
+  cancelled: { label: '已停止',  icon: '⏹' },
 };
 
 // 已选中的任务 ID 集合
@@ -694,10 +768,25 @@ async function submitDownload() {
   btn.innerHTML = '⏳ 提交中...';
 
   try {
-    const res = await fetch('/api/download', {
+    const engine = document.getElementById('engineSelect').value;
+    const format = document.getElementById('formatSelect').value;
+    const parallel = document.getElementById('parallelCheck').checked;
+    const parallelCount = parseInt(document.getElementById('parallelCountInput').value, 10) || 4;
+    const maxSpeedMB = parseFloat(document.getElementById('maxSpeedInput').value) || 0;
+    const timeoutMin = parseInt(document.getElementById('timeoutInput').value, 10) || 30;
+
+    const res = await fetch('/api/download/advanced', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({
+        url,
+        engine,
+        format,
+        parallel,
+        parallelCount,
+        maxSpeed: Math.round(maxSpeedMB * 1024 * 1024),
+        timeoutMs: timeoutMin * 60 * 1000,
+      }),
     });
 
     if (!res.ok) {
@@ -735,16 +824,16 @@ async function loadTasks() {
   }
 }
 
-// ─── 取消任务 ──────────────────────────────────────
-async function cancelTask(taskId) {
+// ─── 停止任务（不删除，保留分片缓存，可重试续跑）──────
+async function stopTask(taskId) {
   try {
-    const res = await fetch(`/api/task/${taskId}`, { method: 'DELETE' });
+    const res = await fetch(`/api/task/${taskId}/cancel`, { method: 'POST' });
     if (res.ok) {
-      showToast('已取消任务', 'success');
+      showToast('⏹ 任务已停止，可随时重试续跑', 'success');
       loadTasks();
     } else {
       const err = await res.json();
-      showToast(err.error || '取消失败', 'error');
+      showToast(err.error || '停止失败', 'error');
     }
   } catch (err) {
     showToast(err.message, 'error');
@@ -892,14 +981,15 @@ const PHASE_LABEL = {
 
 // ─── 构建任务卡片 HTML ─────────────────────────────
 function buildTaskCard(task) {
-  const status = task.status || 'pending';
+  const status = task.status || 'created';
   const statusInfo = STATUS_MAP[status] || { label: status, icon: '❓' };
   const progress = task.progress || 0;
   const speed = task.speed || '';
   const phase = task.phase || '';
-  const isDone = status === 'done';
+  const isDone = status === 'completed';
   const isFailed = status === 'failed';
-  const isActive = status === 'downloading' || status === 'capturing' || status === 'pending';
+  const isCancelled = status === 'cancelled';
+  const isActive = status === 'created' || status === 'running';
   const fileName = task.outputFile ? task.outputFile.split('/').pop() || task.outputFile : '';
 
   const isSelected = selectedTasks.has(task.id);
@@ -917,16 +1007,16 @@ function buildTaskCard(task) {
     downloadLink = `<a href="/downloads/${encodeURIComponent(task.outputFile.split('/').pop())}" class="btn-download-file" download>⬇ 下载文件</a>`;
   }
 
-  // 取消按钮（仅 active 状态显示）
-  let cancelBtn = '';
+  // 停止按钮（仅等待/执行中显示）
+  let stopBtn = '';
   if (isActive) {
-    cancelBtn = `<button class="btn-cancel" onclick="cancelTask('${task.id}')">✕ 取消</button>`;
+    stopBtn = `<button class="btn-cancel" onclick="stopTask('${task.id}')">⏹ 停止</button>`;
   }
 
-  // 重试按钮（仅失败状态显示）
+  // 重试按钮（失败/已停止可续跑）
   let retryBtn = '';
-  if (isFailed) {
-    retryBtn = `<button class="btn-retry" onclick="retryTask('${task.id}')">🔄 重试</button>`;
+  if (isFailed || isCancelled) {
+    retryBtn = `<button class="btn-retry" onclick="retryTask('${task.id}')">🔄 ${isCancelled ? '续跑' : '重试'}</button>`;
   }
 
   // 删除按钮（所有状态都显示）
@@ -946,6 +1036,9 @@ function buildTaskCard(task) {
 
   let percentLabel = `${progress}%`;
   if (isDone) percentLabel = '100%';
+  const sizeHtml = task.outputSizeBytes
+    ? `<span class="speed">${formatBytes(task.outputSizeBytes)}</span>`
+    : '';
 
   return `
     <div class="task-card${isSelected ? ' selected' : ''}" id="task-${task.id}" data-status="${status}">
@@ -962,6 +1055,7 @@ function buildTaskCard(task) {
         </div>
         <div class="progress-info">
           <span>${percentLabel}</span>
+          ${sizeHtml}
           ${speed ? `<span class="speed">${speed}</span>` : ''}
         </div>
         ${messageHtml}
@@ -969,7 +1063,7 @@ function buildTaskCard(task) {
       ${errorHtml}
       <div class="task-actions">
         ${retryBtn}
-        ${cancelBtn}
+        ${stopBtn}
         ${deleteBtn}
         ${downloadLink}
       </div>
@@ -1014,6 +1108,18 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
+}
+
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0;
+  let value = bytes;
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024;
+    i++;
+  }
+  return `${value.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
 }
 
 // ─── 事件委托：复选框点击 ─────────────────────────

@@ -15,12 +15,13 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { spawn } from 'child_process';
+import { assertStreamUrlLiteral } from './security.js';
 
 /**
  * 解析 m3u8 播放列表，提取分片 URL 列表
  * @param {string} m3u8Content - m3u8 文件内容
  * @param {string} baseUrl - 基础 URL（用于拼接相对路径）
- * @returns {{ segments: string[], isMaster: boolean, variants: object[] }}
+ * @returns {{ segments: string[], isMaster: boolean, variants: object[], encKeys: object[], mapUri: string|null }}
  */
 export function parseM3u8(m3u8Content, baseUrl) {
   const lines = m3u8Content.split('\n');
@@ -29,9 +30,15 @@ export function parseM3u8(m3u8Content, baseUrl) {
   const encKeys = [];  // ⭐ 加密密钥列表 [{ method, uri, iv, startIdx }]
   let isMaster = false;
   let segmentIndex = 0;
+  let mapUri = null;   // ⭐ fMP4 init segment (#EXT-X-MAP)
+  let skipNextLine = false; // variant URL 不作为分片
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
+    if (skipNextLine) {
+      skipNextLine = false;
+      continue;
+    }
 
     // 跳过空行和注释
     if (!line || line.startsWith('#')) {
@@ -47,6 +54,7 @@ export function parseM3u8(m3u8Content, baseUrl) {
             bandwidth: bandwidth ? parseInt(bandwidth, 10) : null,
             resolution: resolution || null,
           });
+          skipNextLine = true;
         }
       }
       // ⭐ 检测 #EXT-X-KEY（HLS AES-128 加密）
@@ -63,6 +71,11 @@ export function parseM3u8(m3u8Content, baseUrl) {
           });
         }
       }
+      // ⭐ 检测 #EXT-X-MAP（fMP4 init segment）
+      if (line.startsWith('#EXT-X-MAP')) {
+        const uri = line.match(/URI="([^"]+)"/i)?.[1];
+        if (uri) mapUri = resolveUrl(uri, baseUrl);
+      }
       continue;
     }
 
@@ -71,7 +84,7 @@ export function parseM3u8(m3u8Content, baseUrl) {
     segmentIndex++;
   }
 
-  return { segments, isMaster, variants, encKeys };
+  return { segments, isMaster, variants, encKeys, mapUri };
 }
 
 /**
@@ -79,8 +92,14 @@ export function parseM3u8(m3u8Content, baseUrl) {
  * @param {string} keyUri - 密钥文件 URL
  * @returns {Promise<Buffer>} 16 字节 AES 密钥
  */
-async function fetchEncryptionKey(keyUri) {
-  const res = await fetch(keyUri);
+async function fetchEncryptionKey(keyUri, headers = {}) {
+  assertStreamUrlLiteral(keyUri);
+  const res = await fetch(keyUri, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      ...headers,
+    },
+  });
   if (!res.ok) throw new Error(`获取加密密钥失败: HTTP ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
 }
@@ -112,6 +131,65 @@ function resolveUrl(url, baseUrl) {
 }
 
 /**
+ * 分片缓存文件名（零填充，保证字典序=播放顺序）
+ */
+function segmentCachePath(resumeDir, idx) {
+  return path.join(resumeDir, `${String(idx).padStart(6, '0')}.ts`);
+}
+
+/**
+ * 断点续传状态：playlist 指纹一致才复用缓存，否则清空重建
+ */
+function prepareResumeDir(resumeDir, m3u8Content, m3u8Url) {
+  if (!resumeDir) return;
+  fs.mkdirSync(resumeDir, { recursive: true });
+  const manifestPath = path.join(resumeDir, 'manifest.json');
+  const fingerprint = crypto.createHash('sha256').update(m3u8Content).digest('hex');
+  let existing = null;
+  if (fs.existsSync(manifestPath)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+    } catch (_) {}
+  }
+  if (existing && existing.fingerprint === fingerprint) {
+    fs.mkdirSync(resumeDir, { recursive: true });
+    return;
+  }
+  fs.rmSync(resumeDir, { recursive: true, force: true });
+  fs.mkdirSync(resumeDir, { recursive: true });
+  fs.writeFileSync(manifestPath, JSON.stringify({
+    url: m3u8Url,
+    fingerprint,
+    createdAt: Date.now(),
+  }));
+}
+
+/**
+ * 读取已缓存分片大小（0=不存在/无效）
+ */
+function cachedSegmentSize(resumeDir, idx) {
+  const file = segmentCachePath(resumeDir, idx);
+  if (!fs.existsSync(file)) return 0;
+  const stat = fs.statSync(file);
+  return stat.size > 0 ? stat.size : 0;
+}
+
+/**
+ * 下载 init segment（fMP4 EXT-X-MAP），失败抛错
+ */
+async function downloadInitSegment(mapUri, headers, resumeDir, onBytes) {
+  assertStreamUrlLiteral(mapUri);
+  const res = await fetchWithTimeout(mapUri, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36', ...headers },
+  }, 30000);
+  if (!res.ok) throw new Error(`下载 init segment 失败: HTTP ${res.status}`);
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (resumeDir) fs.writeFileSync(path.join(resumeDir, 'init.mp4'), buffer);
+  if (onBytes) onBytes(buffer.length);
+  return buffer;
+}
+
+/**
  * 使用 AbortController 创建带超时的 fetch
  * ⭐ 修复：node-fetch 的 timeout 选项在 TCP 连接挂起时可能不生效，
  *   改用 AbortController 确保可靠超时
@@ -133,6 +211,7 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 30000) {
 async function downloadSegment(segmentUrl, outputPath, headers = {}, retries = 3, decryptOpts = null) {
   for (let attempt = 0; attempt < retries; attempt++) {
     try {
+      assertStreamUrlLiteral(segmentUrl);
       const res = await fetchWithTimeout(segmentUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
@@ -175,6 +254,9 @@ export async function downloadWithJs(m3u8Url, headers, outputDir, outputName, on
     maxConcurrency = 4,
     retries = 3,
     maxSpeed = 0,       // ⭐ 限速支持：bytes/s，0=不限速
+    onBytes = null,     // 字节上报（全局带宽统计）
+    resumeDir = null,   // 断点续传缓存目录
+    allowPartial = false, // 缺片时是否仍返回不完整文件
   } = options;
 
   // ⭐ 简易速率限制器
@@ -195,7 +277,7 @@ export async function downloadWithJs(m3u8Url, headers, outputDir, outputName, on
   const m3u8Content = await m3u8Res.text();
 
   // 2. 解析 m3u8
-  const { segments, isMaster, variants, encKeys } = parseM3u8(m3u8Content, m3u8Url);
+  const { segments, isMaster, variants, encKeys, mapUri } = parseM3u8(m3u8Content, m3u8Url);
 
   if (isMaster && variants.length > 0) {
     // 如果是 master playlist，选择第一个 variant（或者最高带宽的）
@@ -215,7 +297,7 @@ export async function downloadWithJs(m3u8Url, headers, outputDir, outputName, on
     const currentKeyInfo = encKeys[0]; // 目前只支持单一密钥
     if (currentKeyInfo.method === 'AES-128') {
       onProgress({ percent: 7, speed: null, message: 'JS下载器: 检测到 AES-128 加密，获取密钥...' });
-      encKeyBuffer = await fetchEncryptionKey(currentKeyInfo.keyUri);
+      encKeyBuffer = await fetchEncryptionKey(currentKeyInfo.keyUri, headers);
       // IV: 使用 key 标签指定的 IV，否则使用序列号（从0开始）
       const ivHex = currentKeyInfo.ivHex;
       decryptOpts = {
@@ -231,14 +313,23 @@ export async function downloadWithJs(m3u8Url, headers, outputDir, outputName, on
 
   onProgress({ percent: 10, speed: null, message: `JS下载器: 共 ${segments.length} 个分片，开始并行下载...` });
 
-  // 3. 创建临时目录
-  const tmpDir = path.join(outputDir, `${outputName}_js_tmp`);
+  // 3. 创建临时目录（支持断点续传）
+  const tmpDir = resumeDir || path.join(outputDir, `${outputName}_js_tmp`);
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+  prepareResumeDir(tmpDir, m3u8Content, m3u8Url);
+
+  // fMP4 init segment
+  let initBuffer = null;
+  if (mapUri) {
+    onProgress({ percent: 9, speed: null, message: 'JS下载器: 检测到 fMP4，下载 init segment...' });
+    initBuffer = await downloadInitSegment(mapUri, headers, tmpDir, onBytes);
+  }
 
   // 4. 并行下载所有分片
   let completedSegments = 0;
   let totalBytes = 0;
   const startTime = Date.now();
+  const errors = [];
 
   // 分片并发控制 — 信号量模式（同时最多 maxConcurrency 个请求）
   // ⭐ 修复：改用信号量替代 batch 模式，避免大 batch 中单个慢分片拖垮整批
@@ -251,11 +342,24 @@ export async function downloadWithJs(m3u8Url, headers, outputDir, outputName, on
       ivBuf.writeUInt32BE(segIdx, 12);
       segDecryptOpts.iv = ivBuf;
     }
+    // ⭐ 断点续传：已有缓存分片直接跳过
+    const cached = cachedSegmentSize(tmpDir, segIdx);
+    if (cached > 0) {
+      completedSegments++;
+      totalBytes += cached;
+      onProgress({
+        percent: Math.min(90, Math.round(10 + (completedSegments / segments.length) * 80)),
+        speed: null,
+        message: `JS下载器: ${completedSegments}/${segments.length} 分片（续传）`,
+      });
+      return;
+    }
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
-        const bytes = await downloadSegment(segUrl, path.join(tmpDir, `${segIdx}.ts`), headers, retries, segDecryptOpts);
+        const bytes = await downloadSegment(segUrl, segmentCachePath(tmpDir, segIdx), headers, retries, segDecryptOpts);
         completedSegments++;
         totalBytes += bytes;
+        if (onBytes) onBytes(bytes);
         const percent = Math.round(10 + (completedSegments / segments.length) * 80);
         const elapsed = (Date.now() - startTime) / 1000;
         const speed = elapsed > 0 ? `${(totalBytes / 1024 / 1024 / elapsed).toFixed(1)} MB/s` : null;
@@ -268,7 +372,7 @@ export async function downloadWithJs(m3u8Url, headers, outputDir, outputName, on
       } catch (err) {
         if (attempt === retries - 1) {
           console.error(`[JS-Downloader] 分片 #${segIdx} 下载失败（重试${retries}次后）: ${err.message}`);
-          completedSegments++; // 失败也计数，避免永远卡住
+          errors.push({ idx: segIdx, err: err.message });
           return;
         }
         // 重试前等待
@@ -300,23 +404,31 @@ export async function downloadWithJs(m3u8Url, headers, outputDir, outputName, on
     }
   }
 
-  // 5. 合并分片为单个 ts 文件
+  if (errors.length > 0 && !allowPartial) {
+    throw new Error(
+      `JS下载器: ${errors.length}/${segments.length} 分片下载失败，已保留缓存可重试`
+    );
+  }
+
+  // 5. 合并分片（fMP4 先写 init segment；.part 收尾后原子改名）
   onProgress({ percent: 92, speed: null, message: 'JS下载器: 合并分片中...' });
 
-  const outputFile = path.join(outputDir, `${outputName}.ts`);
-  const writeStream = fs.createWriteStream(outputFile);
+  const isFmp4 = !!initBuffer;
+  const outputFile = path.join(outputDir, `${outputName}.${isFmp4 ? 'mp4' : 'ts'}`);
+  const partFile = `${outputFile}.part`;
+  const writeStream = fs.createWriteStream(partFile);
 
+  if (isFmp4) writeStream.write(initBuffer);
   for (let i = 0; i < segments.length; i++) {
-    const segFile = path.join(tmpDir, `${i}.ts`);
-    if (fs.existsSync(segFile)) {
-      const data = fs.readFileSync(segFile);
-      writeStream.write(data);
-    }
+    const segFile = segmentCachePath(tmpDir, i);
+    if (fs.existsSync(segFile)) writeStream.write(fs.readFileSync(segFile));
   }
 
   await new Promise((resolve, reject) => {
-    writeStream.end(resolve);
+    writeStream.on('error', reject);
+    writeStream.end(() => resolve());
   });
+  fs.renameSync(partFile, outputFile);
 
   // 6. 清理临时目录
   fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -421,6 +533,9 @@ export async function downloadSegmentsParallel(m3u8Url, outputPath, options = {}
     maxSpeed = 0,
     onProgress = () => {},
     headers = {},
+    onBytes = null,
+    resumeDir = null,
+    allowPartial = false,
   } = options;
 
   onProgress({ percent: 0, speed: null, message: '并行下载: 解析 m3u8...' });
@@ -431,7 +546,7 @@ export async function downloadSegmentsParallel(m3u8Url, outputPath, options = {}
   }, 30000);
   if (!m3u8Res.ok) throw new Error(`下载 m3u8 失败: HTTP ${m3u8Res.status}`);
   const m3u8Content = await m3u8Res.text();
-  const { segments, isMaster, variants, encKeys } = parseM3u8(m3u8Content, m3u8Url);
+  const { segments, isMaster, variants, encKeys, mapUri } = parseM3u8(m3u8Content, m3u8Url);
 
   // master playlist → 选最高码率
   if (isMaster && variants.length > 0) {
@@ -446,7 +561,7 @@ export async function downloadSegmentsParallel(m3u8Url, outputPath, options = {}
   let decryptOpts = null;
   if (encKeys.length > 0 && encKeys[0].method === 'AES-128') {
     onProgress({ percent: 7, speed: null, message: '并行下载: 检测到 AES-128 加密，获取密钥...' });
-    const encKeyBuffer = await fetchEncryptionKey(encKeys[0].keyUri);
+    const encKeyBuffer = await fetchEncryptionKey(encKeys[0].keyUri, headers);
     const ivHex = encKeys[0].ivHex;
     decryptOpts = {
       key: encKeyBuffer,
@@ -456,10 +571,17 @@ export async function downloadSegmentsParallel(m3u8Url, outputPath, options = {}
     onProgress({ percent: 8, speed: null, message: '并行下载: 密钥获取成功' });
   }
 
-  const outputDir = path.dirname(outputPath);
-  const baseName = path.basename(outputPath, path.extname(outputPath));
-  const tmpDir = path.join(outputDir, `${baseName}_parallel_tmp`);
+  // 3. 断点续传目录
+  const tmpDir = resumeDir || path.join(path.dirname(outputPath), `${path.basename(outputPath)}_parallel_tmp`);
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
+  prepareResumeDir(tmpDir, m3u8Content, m3u8Url);
+
+  // fMP4 init segment
+  let initBuffer = null;
+  if (mapUri) {
+    onProgress({ percent: 9, speed: null, message: '并行下载: 检测到 fMP4，下载 init segment...' });
+    initBuffer = await downloadInitSegment(mapUri, headers, tmpDir, onBytes);
+  }
 
   // 2. 并发分片下载（信号量模式：同时跑 maxConcurrency 个，不 batch 等待）
   let completedSegments = 0;
@@ -478,6 +600,18 @@ export async function downloadSegmentsParallel(m3u8Url, outputPath, options = {}
       const ivBuf = Buffer.alloc(16, 0);
       ivBuf.writeUInt32BE(idx, 12);
       segDecryptOpts.iv = ivBuf;
+    }
+    // ⭐ 断点续传：已有缓存分片直接跳过
+    const cached = cachedSegmentSize(tmpDir, idx);
+    if (cached > 0) {
+      completedSegments++;
+      totalBytes += cached;
+      onProgress({
+        percent: Math.min(90, Math.round(10 + (completedSegments / segments.length) * 80)),
+        speed: null,
+        message: `并行: ${completedSegments}/${segments.length} 分片（续传）`,
+      });
+      return;
     }
     for (let attempt = 0; attempt < retries; attempt++) {
       try {
@@ -509,10 +643,11 @@ export async function downloadSegmentsParallel(m3u8Url, outputPath, options = {}
           }
         }
 
-        fs.writeFileSync(path.join(tmpDir, `${idx}.ts`), buffer);
+        fs.writeFileSync(segmentCachePath(tmpDir, idx), buffer);
 
         completedSegments++;
         totalBytes += buffer.length;
+        if (onBytes) onBytes(buffer.length);
         if (maxSpeed > 0) bytesThisWindow += buffer.length;
 
         const percent = Math.round(10 + (completedSegments / segments.length) * 80);
@@ -523,8 +658,6 @@ export async function downloadSegmentsParallel(m3u8Url, outputPath, options = {}
       } catch (err) {
         if (attempt === retries - 1) {
           errors.push({ idx, err: err.message });
-          // 跳过失败分片，继续下载
-          completedSegments++;
           return;
         }
         await new Promise(r => setTimeout(r, 1000 * (attempt + 1)));
@@ -565,19 +698,29 @@ export async function downloadSegmentsParallel(m3u8Url, outputPath, options = {}
     }
   }
 
-  if (errors.length > 0) {
-    console.warn(`[Parallel] ${errors.length}/${segments.length} 分片下载失败，尝试合并已有分片`);
+  if (errors.length > 0 && !allowPartial) {
+    throw new Error(
+      `并行下载: ${errors.length}/${segments.length} 分片下载失败，已保留缓存可重试`
+    );
   }
 
   // 3. 合并分片
   onProgress({ percent: 92, speed: null, message: '并行下载: 合并分片中...' });
-  const outputFile = `${outputPath}.ts`;
-  const writeStream = fs.createWriteStream(outputFile);
+  const isFmp4 = !!initBuffer;
+  const outputFile = `${outputPath}.${isFmp4 ? 'mp4' : 'ts'}`;
+  const partFile = `${outputFile}.part`;
+  const writeStream = fs.createWriteStream(partFile);
+
+  if (isFmp4) writeStream.write(initBuffer);
   for (let i = 0; i < segments.length; i++) {
-    const segFile = path.join(tmpDir, `${i}.ts`);
+    const segFile = segmentCachePath(tmpDir, i);
     if (fs.existsSync(segFile)) writeStream.write(fs.readFileSync(segFile));
   }
-  await new Promise(resolve => writeStream.end(resolve));
+  await new Promise((resolve, reject) => {
+    writeStream.on('error', reject);
+    writeStream.end(() => resolve());
+  });
+  fs.renameSync(partFile, outputFile);
 
   // 4. 清理
   fs.rmSync(tmpDir, { recursive: true, force: true });
