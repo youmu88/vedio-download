@@ -56,11 +56,45 @@ class ListStore {
     }
   }
 
+  _load() {
+    try {
+      if (!fs.existsSync(LISTS_FILE)) {
+        // 主文件不存在：尝试从 .bak 恢复（防误删/损坏导致数据丢失）
+        if (fs.existsSync(`${LISTS_FILE}.bak`)) {
+          console.log('[ListStore] 主文件不存在，从 .bak 恢复');
+          fs.copyFileSync(`${LISTS_FILE}.bak`, LISTS_FILE);
+        } else {
+          return;
+        }
+      }
+      const raw = fs.readFileSync(LISTS_FILE, 'utf-8');
+      let parsed;
+      try {
+        parsed = JSON.parse(raw);
+      } catch (parseErr) {
+        // JSON 损坏：尝试从 .bak 恢复
+        console.error(`[ListStore] JSON 损坏: ${parseErr.message}`);
+        if (fs.existsSync(`${LISTS_FILE}.bak`)) {
+          console.log('[ListStore] 从 .bak 恢复');
+          fs.copyFileSync(`${LISTS_FILE}.bak`, LISTS_FILE);
+          parsed = JSON.parse(fs.readFileSync(LISTS_FILE, 'utf-8'));
+        } else {
+          throw parseErr;
+        }
+      }
+      if (parsed && Array.isArray(parsed.lists)) this.lists = parsed.lists;
+    } catch (err) {
+      console.error('[ListStore] 列表加载失败:', err.message);
+    }
+  }
+
   _save() {
     try {
       const tmpFile = `${LISTS_FILE}.tmp`;
       fs.writeFileSync(tmpFile, JSON.stringify({ lists: this.lists }, null, 2), 'utf-8');
       fs.renameSync(tmpFile, LISTS_FILE);
+      // 同时保留 .bak 备份，供主文件丢失/损坏时恢复
+      fs.copyFileSync(LISTS_FILE, `${LISTS_FILE}.bak`);
     } catch (err) {
       console.error('[ListStore] 列表保存失败:', err.message);
     }

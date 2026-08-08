@@ -1425,15 +1425,12 @@ function renderBrowse() {
   const grid = $('libraryGrid');
   const folderEl = $('folderGrid');
   const crumb = $('browseCrumb');
-  const isPrivateHome = browseFolder && browseFolder.home === 'private';
   const isList = browseFolder && browseFolder.id;
   const view = settings.libraryView || 'grid';
 
   // 面包屑
   if (isList) {
     crumb.innerHTML = `<button class="folder-back" onclick="backToRoot()">‹ 返回</button> ${escapeHtml(browseFolder.name)}`;
-  } else if (isPrivateHome) {
-    crumb.innerHTML = `<button class="folder-back" onclick="backToRoot()">‹ 返回</button> 🔒 私密列表`;
   } else {
     crumb.innerHTML = '视频库';
   }
@@ -1442,11 +1439,6 @@ function renderBrowse() {
   if (isList) {
     folderEl.hidden = true;
     renderFolderVideos(browseFolder);
-  } else if (isPrivateHome) {
-    folderEl.hidden = false;
-    renderPrivateFolders();
-    grid.innerHTML = '';
-    $('libraryCount').textContent = '';
   } else {
     folderEl.hidden = false;
     renderRootFolders();
@@ -1493,7 +1485,7 @@ function renderBrowse() {
   }
 }
 
-/** 根视图文件夹：公开列表 + 私密列表入口 */
+/** 根视图文件夹：仅展示公开列表（私密列表入口在设置界面，浏览页不展示） */
 function renderRootFolders() {
   const el = $('folderGrid');
   const pubs = myLists.map((l) => `
@@ -1501,69 +1493,57 @@ function renderRootFolders() {
       <div class="folder-icon">📁</div>
       <div class="folder-name">${escapeHtml(l.name)}</div>
       <div class="folder-meta">${l.items.length} 个视频</div>
+      <button class="list-item-del" data-del-list="${l.id}" onclick="event.stopPropagation();removeList('${l.id}')">删除列表</button>
     </div>`).join('');
-  const priv = `
-    <div class="folder-card" data-enter="private">
-      <div class="folder-icon private">🔒</div>
-      <div class="folder-name">私密列表</div>
-      <div class="folder-meta">需要密码</div>
-    </div>`;
-  el.innerHTML = (pubs || '<div class="folder-card" style="cursor:default;"><div class="folder-meta">暂无公开列表</div></div>') + priv;
+  el.innerHTML = pubs || '<div class="folder-card" style="cursor:default;"><div class="folder-meta">暂无公开列表<br>下载视频后可创建列表</div></div>';
 }
 
-/** 私密文件夹视图：解锁后展示各私密列表 */
-function renderPrivateFolders() {
-  const el = $('folderGrid');
-  if (!myPrivateLists.length) {
-    el.innerHTML = '<div class="empty"><div class="big">🔒</div>暂无私有列表<br>可在浏览页选择视频后创建</div>';
-    return;
-  }
-  el.innerHTML = myPrivateLists.map((l) => `
-    <div class="folder-card" data-enter="list" data-id="${l.id}" data-name="${escapeHtml(l.name)}" data-private="1">
-      <div class="folder-icon private">🔒</div>
-      <div class="folder-name">${escapeHtml(l.name)}</div>
-      <div class="folder-meta">${l.items.length} 个视频</div>
-    </div>`).join('');
-}
-
-/** 列表内视频视图（进入文件夹后） */
-function renderFolderVideos(folder) {
+/** 列表内视频视图（进入文件夹后）：async 获取文件信息（大小/时间/进度），与浏览页一致 */
+async function renderFolderVideos(folder) {
   const grid = $('libraryGrid');
   const view = settings.libraryView || 'grid';
   grid.className = view === 'list' ? 'library-list' : 'library-grid';
   $('libraryCount').textContent = '';
-  const list = (folder.isPrivate ? myPrivateLists : myLists).find(l => l.id === folder.id);
-  if (!list || !list.items.length) {
+  // 从后端获取补充了 size/mtime 的列表详情（缓存 items 缺文件信息）
+  let items = [];
+  try {
+    const res = await fetch(`/api/lists/${folder.id}`);
+    if (res.ok) {
+      const list = await res.json();
+      items = list.items || [];
+    }
+  } catch (_) {}
+  if (!items.length) {
     grid.innerHTML = '<div class="empty"><div class="big">📂</div>列表为空<br>在浏览页选择视频后可加入</div>';
     return;
   }
-  grid.innerHTML = list.items.map((i) => view === 'list'
-    ? `
+  grid.innerHTML = items.map((i) => {
+    const pct = libraryProgress(i.name);
+    const progressHtml = pct === null ? '' : view === 'list'
+      ? `<div class="video-progress">${pct}%<span class="bar" style="width:${pct}%"></span></div>`
+      : `<span class="video-progress">${pct}%</span>`;
+    const meta = [i.size ? formatBytes(i.size) : '', i.mtime ? formatDate(i.mtime) : '', i.addedAt ? formatDate(i.addedAt) + ' 加入' : ''].filter(Boolean).join(' · ');
+    return view === 'list'
+      ? `
       <div class="video-card" data-name="${escapeHtml(i.name)}">
-        <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span></div>
+        <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span>${progressHtml}</div>
         <div class="video-info">
           <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
-          <div class="video-meta">${i.size ? formatBytes(i.size) : ''}${i.addedAt ? ' · ' + formatDate(i.addedAt) + ' 加入' : ''}</div>
+          <div class="video-meta">${meta}</div>
         </div>
         <button class="video-delete" data-rm-list="${folder.id}|${escapeHtml(i.name)}" title="从列表移除">${icon('trash', 15)}</button>
       </div>`
-    : `
+      : `
       <div class="video-card" data-name="${escapeHtml(i.name)}">
         <div class="video-thumb">
           <span class="play-badge">${icon('play', 20)}</span>
+          ${progressHtml}
           <button class="video-delete" data-rm-list="${folder.id}|${escapeHtml(i.name)}" title="从列表移除">${icon('trash', 14)}</button>
         </div>
         <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
-        <div class="video-meta">${i.size ? formatBytes(i.size) : ''}${i.addedAt ? ' · ' + formatDate(i.addedAt) + ' 加入' : ''}</div>
-      </div>`).join('');
-}
-
-/** 进入私密文件夹（需解锁） */
-function enterPrivateHome() {
-  ensurePrivateUnlock(() => {
-    browseFolder = { home: 'private' };
-    renderBrowse();
-  });
+        <div class="video-meta">${meta}</div>
+      </div>`;
+  }).join('');
 }
 
 /** 进入具体列表（公开直接进；私密先解锁） */
@@ -1925,7 +1905,10 @@ function openAddToList(isPrivate = false) {
     </div>`).join('');
   openModal(`
     <div class="modal-head"><span class="modal-title">加入列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">${items || '<div class="empty">暂无列表</div>'}</div>`);
+    <div class="modal-body">
+      ${items || '<div class="empty">暂无列表</div>'}
+      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="closeModal();openCreateList(false)">＋ 新建列表</button>
+    </div>`);
 }
 
 /** 打开私密列表面板（仅当 token 已验证通过时由 ensurePrivateUnlock 调用） */
@@ -2018,28 +2001,9 @@ async function submitCreateList(isPrivate) {
   } catch (err) { showToast(err.message, true); }
 }
 
-// ── 我的列表面板 ────────────────────────────────
-function openMyLists() {
-  const rows = myLists.map(listTileHtml).join('') ||
-    '<div class="empty"><div class="big">📂</div>暂无公开列表</div>';
-  openModal(`
-    <div class="modal-head"><span class="modal-title">我的列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">
-      ${rows}
-      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="openCreateList(false)">＋ 新建公开列表</button>
-    </div>`);
-}
-function listTileHtml(list) {
-  return `
-    <div class="list-tile" onclick="openListDetail('${list.id}')">
-      <span class="list-tile-icon">📁</span>
-      <span class="list-tile-main">
-        <span class="list-tile-name">${escapeHtml(list.name)}</span>
-        <span class="list-tile-meta">${list.items.length} 项 · ${formatDate(list.createdAt)}</span>
-      </span>
-      <button class="list-item-del" onclick="event.stopPropagation();removeList('${list.id}')">删除</button>
-    </div>`;
-}
+// ═══════════════════════════════════════════════════════
+// 公开列表删除（文件夹视图内入口）
+// ═══════════════════════════════════════════════════════
 async function removeList(listId) {
   showActionSheet({
     title: '删除列表',
@@ -2057,31 +2021,6 @@ async function removeList(listId) {
       } catch (err) { showToast(err.message, true); }
     },
   });
-}
-function openListDetail(listId) {
-  const list = myLists.find(l => l.id === listId);
-  if (!list) return;
-  const items = list.items.length ? list.items.map(i => `
-    <div class="list-item-row">
-      <span class="list-item-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</span>
-      <button class="list-item-del" onclick="removeListItem('${listId}','${i.name.replace(/'/g, "\\'")}')">移除</button>
-    </div>`).join('') : '<div class="empty">列表为空</div>';
-  openModal(`
-    <div class="modal-head"><span class="modal-title">${escapeHtml(list.name)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
-    <div class="modal-body">${items}</div>`);
-}
-async function removeListItem(listId, name) {
-  try {
-    const res = await fetch(`/api/lists/${listId}/items`, {
-      method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [name] }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || '移除失败');
-    showToast('已移除');
-    openListDetail(listId);
-    loadLists();
-    loadLibrary(); // 从列表移除后，浏览页恢复显示该视频
-  } catch (err) { showToast(err.message, true); }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -2268,21 +2207,37 @@ function openPrivateSetup() {
 
 // ── 验证密码解锁（4/6 位自适应） ──────────────
 function openPrivateVerify() {
+  // 第一级认证：输入密码
   openPinScreen({
-    title: '输入密码', sub: '输入私密密码解锁（4 或 6 位）', len: 6, autoBoth: true,
-    onDone: async (p) => {
+    title: '输入密码', sub: '第 1 次 · 输入私密密码（4 或 6 位）', len: 6, autoBoth: true,
+    onDone: async (p1) => {
       try {
-        const res = await fetch('/api/private/verify', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p }),
+        const res1 = await fetch('/api/private/verify', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p1 }),
         });
-        const data = await res.json().catch(() => ({}));
-        if (!res.ok) throw new Error(data.error || '密码错误');
-        setPrivateToken(data.token);
-        showToast('解锁成功');
-        closeModal();
-        afterPrivateUnlock();
-      } catch (e) {
-        pinSetError(e.message + '，请重试');
+        const data1 = await res1.json().catch(() => ({}));
+        if (!res1.ok) throw new Error(data1.error || '密码错误');
+        // 第二级认证：再次输入确认（防止误触/中间人）
+        openPinScreen({
+          title: '确认密码', sub: '第 2 次 · 再次输入以确认（4 或 6 位）', len: 6, autoBoth: true,
+          onDone: async (p2) => {
+            try {
+              const res2 = await fetch('/api/private/verify', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: p2 }),
+              });
+              const data2 = await res2.json().catch(() => ({}));
+              if (!res2.ok) throw new Error(data2.error || '密码错误');
+              setPrivateToken(data2.token);
+              showToast('解锁成功');
+              closeModal();
+              afterPrivateUnlock();
+            } catch (e2) {
+              pinSetError(e2.message + '，请重试');
+            }
+          },
+        });
+      } catch (e1) {
+        pinSetError(e1.message + '，请重试');
       }
     },
   });
@@ -2341,16 +2296,23 @@ function openPrivateDetail(listId) {
   const list = myPrivateLists.find(l => l.id === listId);
   if (!list) return;
   privateCtx = true;
-  // 与浏览页一致的卡片网格：点击卡片播放，右上角移除
-  const items = list.items.length ? list.items.map(i => `
+  // 与浏览页一致的卡片网格：点击卡片播放，右上角移除；显示大小/时间/进度
+  const view = settings.libraryView || 'grid';
+  const items = list.items.length ? list.items.map(i => {
+    const pct = libraryProgress(i.name);
+    const progressHtml = pct === null ? '' : `<span class="video-progress">${pct}%</span>`;
+    const meta = [i.size ? formatBytes(i.size) : '', i.mtime ? formatDate(i.mtime) : '', i.addedAt ? formatDate(i.addedAt) + ' 加入' : ''].filter(Boolean).join(' · ');
+    return `
     <div class="video-card" data-name="${escapeHtml(i.name)}" onclick="playPrivateVideo('${i.name.replace(/'/g, "\\'")}')">
       <div class="video-thumb">
         <span class="play-badge">${icon('play', 20)}</span>
+        ${progressHtml}
         <button class="video-delete" onclick="event.stopPropagation();removePrivateItem('${listId}','${i.name.replace(/'/g, "\\'")}')" title="从列表移除">${icon('trash', 14)}</button>
       </div>
       <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
-      <div class="video-meta">${i.addedAt ? formatDate(i.addedAt) + ' 加入' : ''}</div>
-    </div>`).join('') : '<div class="empty">列表为空</div>';
+      <div class="video-meta">${meta}</div>
+    </div>`;
+  }).join('') : '<div class="empty">列表为空</div>';
   openModal(`
     <div class="modal-head"><span class="modal-title">🔒 ${escapeHtml(list.name)}</span><button class="modal-close" onclick="closeModal()">✕</button></div>
     <div class="modal-body">
@@ -2462,13 +2424,12 @@ $('libraryGrid').addEventListener('click', (e) => {
   }
 });
 
-// 文件夹点击委托：进入列表 / 进入私密
+// 文件夹点击委托：进入公开列表
 $('folderGrid').addEventListener('click', (e) => {
   const card = e.target.closest('.folder-card');
   if (!card) return;
   const enter = card.dataset.enter;
-  if (enter === 'private') enterPrivateHome();
-  else if (enter === 'list') enterListFolder(card.dataset.id, card.dataset.name, card.dataset.private === '1');
+  if (enter === 'list') enterListFolder(card.dataset.id, card.dataset.name, card.dataset.private === '1');
 });
 
 // 网格/列表视图切换

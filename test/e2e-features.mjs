@@ -119,8 +119,8 @@ try {
   await page.waitForTimeout(400);
   const folderVisible = await page.$eval('#folderGrid', el => !el.hidden).catch(() => false);
   check('浏览页以文件夹方式呈现列表', folderVisible);
-  const folderHasPrivate = await page.$eval('#folderGrid', el => el.textContent.includes('私密列表')).catch(() => false);
-  check('文件夹区含私密列表入口', folderHasPrivate);
+  const folderHasPrivate = await page.$eval('#folderGrid', el => !el.textContent.includes('私密列表')).catch(() => false);
+  check('浏览页不显示私密列表入口（设置界面唯一入口）', folderHasPrivate);
   // 进入公开列表文件夹 → 应显示列表视图（含返回）
   const pubFolder = await page.$('#folderGrid [data-enter="list"]').catch(() => null);
   if (pubFolder) {
@@ -168,7 +168,7 @@ try {
   await page.click('#modalMask .modal-close');
   await page.waitForTimeout(200);
 
-  // 再次进入：仅需输入密码（iOS PIN 验证）
+  // 再次进入：仅需输入密码（iOS PIN 验证，双重认证）
   await page.click('#privateEntryBtn');
   await page.waitForTimeout(400);
   const verifyTitle = await page.$eval('#modalCard .pin-screen-title', el => el.textContent).catch(() => '');
@@ -180,11 +180,16 @@ try {
   const errText = await page.$eval('#pinError', el => el.textContent).catch(() => '');
   check('错误密码提示', errText.includes('密码错误'), errText);
 
-  // 输入正确密码 1234 解锁（管理面板特有内容：新建私密列表）
+  // 输入正确密码 1234：第 1 次 → 进入第 2 次确认（双重认证）
+  for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(500);
+  const confirmTitle2 = await page.$eval('#modalCard .pin-screen-title', el => el.textContent).catch(() => '');
+  check('双重认证：第 1 次通过后进入第 2 次确认', confirmTitle2.includes('确认密码'), `title=${confirmTitle2}`);
+  // 第 2 次输入正确密码 → 解锁进入管理
   for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
   await page.waitForTimeout(800);
   const manageAgainText = await page.$eval('#modalCard', el => el.textContent).catch(() => '');
-  check('正确密码解锁进入私密列表管理', manageAgainText.includes('新建私密列表'), manageAgainText.slice(0, 60));
+  check('双重认证：两次密码通过后进入私密列表管理', manageAgainText.includes('新建私密列表'), manageAgainText.slice(0, 60));
 
   // ── 4.5 删除视频：iOS Action Sheet 确认菜单（替代原生 confirm） ──
   await page.click('#modalMask .modal-close');
@@ -227,11 +232,13 @@ try {
   await page.waitForTimeout(500);
   const pinShown = await page.$eval('#modalCard .pin-screen', el => !!el).catch(() => false);
   check('动态菜单加入私密列表自动弹出 PIN 解锁界面', pinShown);
-  // 输入正确密码解锁 → 自动继续加入流程（PIN 界面关闭）
+  // 输入正确密码解锁（双重认证：第 1 次 + 第 2 次确认）→ 自动继续加入流程（PIN 界面关闭）
+  for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(400);
   for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
   await page.waitForTimeout(800);
   const pinClosed = await page.$eval('#modalCard .pin-screen', el => !el).catch(() => true);
-  check('解锁后自动继续加入流程（PIN 界面关闭）', pinClosed);
+  check('双重认证后自动继续加入流程（PIN 界面关闭）', pinClosed);
   // 退出选择模式，清理状态
   await page.click('#batchCancelBtn').catch(() => {});
   await page.waitForTimeout(200);
@@ -252,11 +259,13 @@ try {
   await page.waitForTimeout(600);
   const pinShownB = await page.$eval('#modalCard .pin-screen', el => !!el).catch(() => false);
   check('过期 token 触发加入私密列表时自动引导重新解锁（而非报错）', pinShownB);
-  // 输入正确密码完成重验 → 自动续接加入流程
+  // 输入正确密码完成重验（双重认证：第 1 次 + 第 2 次确认）→ 自动续接加入流程
+  for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(400);
   for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
   await page.waitForTimeout(800);
   const pinClosedB = await page.$eval('#modalCard .pin-screen', el => !el).catch(() => true);
-  check('重新解锁后自动续接加入私密列表流程', pinClosedB);
+  check('重新解锁（双重认证）后自动续接加入私密列表流程', pinClosedB);
   await page.click('#batchCancelBtn').catch(() => {});
   await page.waitForTimeout(200);
 
@@ -294,6 +303,9 @@ try {
   await page.waitForTimeout(400);
   const pinVerifyTitle = await page.$eval('#modalCard .pin-screen-title', el => el.textContent).catch(() => '');
   if (pinVerifyTitle.includes('输入密码')) {
+    // 双重认证：第 1 次 + 第 2 次确认
+    for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+    await page.waitForTimeout(400);
     for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
     await page.waitForTimeout(800);
   }
