@@ -1066,6 +1066,11 @@ function closeApp(name) {
   updateDock();
   updateNoDock();
   updateDesktopHint();
+  // ⭐ 关闭窗口联动关闭内嵌播放器（保存进度 + 停止播放）
+  try {
+    if (name === 'browse' && $('inlinePlayer') && !$('inlinePlayer').hidden) closePlayer('browse');
+    else if (name === 'private' && $('privateInlinePlayer') && !$('privateInlinePlayer').hidden) closePrivatePlayerOnly();
+  } catch (_) {}
   // 私密临时 App 关闭即销毁：隐藏 dock 入口、清除 token
   if (name === 'private') {
     $('privateDockIcon').hidden = true;
@@ -1084,6 +1089,11 @@ function minimizeApp(name) {
   updateDock();
   updateNoDock();
   updateDesktopHint();
+  // ⭐ 最小化窗口联动关闭内嵌播放器（保存进度 + 停止播放）
+  try {
+    if (name === 'browse' && $('inlinePlayer') && !$('inlinePlayer').hidden) closePlayer('browse');
+    else if (name === 'private' && $('privateInlinePlayer') && !$('privateInlinePlayer').hidden) closePrivatePlayerOnly();
+  } catch (_) {}
 }
 
 function clearFullscreenState(name) {
