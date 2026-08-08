@@ -645,6 +645,21 @@
     font-size: 24px; box-shadow: var(--shadow);
   }
   .folder-card .folder-icon.private { background: linear-gradient(145deg, #FF9F0A, #FF6482); }
+  .folder-badge {
+    position: absolute; top: -6px; right: -6px;
+    min-width: 20px; height: 20px; padding: 0 5px;
+    border-radius: 10px; background: var(--red); color: #fff;
+    font-size: 11px; font-weight: 700; line-height: 20px; text-align: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+  }
+  .folder-card .folder-icon { position: relative; }
+  .folder-badge {
+    position: absolute; top: -6px; right: -6px;
+    min-width: 20px; height: 20px; padding: 0 5px;
+    border-radius: 10px; background: var(--red); color: #fff;
+    font-size: 11px; font-weight: 700; line-height: 20px; text-align: center;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.25);
+  }
   .folder-card .folder-name {
     font-size: 13px; font-weight: 600; text-align: center;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
@@ -1606,6 +1621,9 @@ function enterListFolder(id, name, isPrivate) {
 /** 返回根视图 */
 function backToRoot() {
   browseFolder = null;
+  // 关闭列表同时关闭内嵌视频（避免列表关闭后视频仍在播放）
+  const box = $('inlinePlayer');
+  if (box && !box.hidden) closePlayer();
   renderBrowse();
 }
 
@@ -1727,16 +1745,23 @@ function openPlayer(title, src, id, target = 'browse') {
   video.onerror = () => showToast('播放失败：请确认链接可访问且格式受支持', true);
 }
 
-function closePlayer() {
-  const video = $('inlinePlayerVideo');
+function closePlayer(target = 'browse') {
+  const pfx = target === 'private' ? 'private' : '';
+  const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+  const video = $(pfx ? 'privateInlinePlayerVideo' : 'inlinePlayerVideo');
   if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
   currentPlay = null;
   if (hls) { hls.destroy(); hls = null; }
   video.pause();
   video.removeAttribute('src');
   video.load();
-  $('inlinePlayer').hidden = true;
-  loadLibrary();
+  box.hidden = true;
+  if (target === 'browse') loadLibrary();
+}
+
+/** 关闭私密播放器（返回私密列表首页时调用，保存进度并停止音频） */
+function closePrivatePlayerOnly() {
+  closePlayer('private');
 }
 
 function playLibrary(name) {
@@ -2327,6 +2352,12 @@ function renderPrivateBrowse() {
     : '私密列表';
   $('privateCount').textContent = '';
 
+  // 返回私密列表首页时，关闭内嵌视频（避免列表关闭后视频仍在播放）
+  if (!isList) {
+    const pbox = $('privateInlinePlayer');
+    if (pbox && !pbox.hidden) closePrivatePlayerOnly();
+  }
+
   if (isList) {
     folderEl.hidden = true;
     renderPrivateFolderVideos(privateFolder);
@@ -2334,15 +2365,20 @@ function renderPrivateBrowse() {
   }
   // 首页：私密列表文件夹网格
   folderEl.hidden = false;
+  const newBtn = `<div class="folder-card" data-pnew="1" style="border:1.5px dashed var(--separator);background:transparent;box-shadow:none;">
+        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">＋</div>
+        <div class="folder-name" style="color:var(--accent);">新建私密列表</div>
+        <div class="folder-meta">创建后即可加入视频</div>
+      </div>`;
   if (!myPrivateLists.length) {
-    folderEl.innerHTML = '<div class="empty"><div class="big">🔒</div>暂无私密列表<br>可在浏览页选择视频后创建</div>';
+    folderEl.innerHTML = '<div class="empty"><div class="big">🔒</div>暂无私密列表<br>点击右上角新建</div>' + newBtn;
   } else {
     folderEl.innerHTML = myPrivateLists.map((l) => `
       <div class="folder-card" data-pfolder="${l.id}" data-pname="${escapeHtml(l.name)}">
-        <div class="folder-icon private">🔒</div>
+        <div class="folder-icon private">🔒<span class="folder-badge">${l.items.length}</span></div>
         <div class="folder-name">${escapeHtml(l.name)}</div>
         <div class="folder-meta">${l.items.length} 个视频</div>
-      </div>`).join('');
+      </div>`).join('') + newBtn;
   }
   grid.innerHTML = '';
 }
@@ -2560,6 +2596,34 @@ $('refreshHealth').addEventListener('click', loadHealth);
 $('parallelDownloadsInput').addEventListener('change', saveServerSettings);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('inlinePlayer').hidden) closePlayer(); });
 
+// ── 播放器快捷键：空格=暂停/继续，←/→=后退/前进 30 秒 ──
+document.addEventListener('keydown', (e) => {
+  // 输入框/文本域内不拦截
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  // 定位当前激活的播放器（浏览 / 私密）
+  const browseBox = $('inlinePlayer');
+  const privBox = $('privateInlinePlayer');
+  let video = null, box = null, target = 'browse';
+  if (browseBox && !browseBox.hidden) { video = $('inlinePlayerVideo'); box = browseBox; }
+  else if (privBox && !privBox.hidden) { video = $('privateInlinePlayerVideo'); box = privBox; target = 'private'; }
+  if (!video || !box) return;
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    if (video.paused) video.play().catch(() => {});
+    else video.pause();
+    // 保存进度（与本轮需求3一致：关闭/暂停时写入 history）
+    if (currentPlay) upsertHistory({ ...currentPlay, time: video.currentTime || 0, duration: video.duration || 0, updatedAt: Date.now() });
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    video.currentTime = Math.max(0, (video.currentTime || 0) - 30);
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    video.currentTime = Math.min(video.duration || Infinity, (video.currentTime || 0) + 30);
+  }
+});
+
 // ── 新功能绑定：一键清理 / 选择模式 / 批量操作 / 列表 / 私密 ──
 $('cleanCompletedBtn').addEventListener('click', cleanCompleted);
 $('selectModeBtn').addEventListener('click', () => { selectionMode ? exitSelectionMode() : enterSelectionMode(); });
@@ -2586,7 +2650,10 @@ $('privateViewToggle').addEventListener('click', (e) => {
 // 私密文件夹进入
 $('privateFolderGrid').addEventListener('click', (e) => {
   const card = e.target.closest('.folder-card');
-  if (!card || !card.dataset.pfolder) return;
+  if (!card) return;
+  // 新建私密列表快捷入口
+  if (card.dataset.pnew) { openCreateList(true); return; }
+  if (!card.dataset.pfolder) return;
   privateFolder = { id: card.dataset.pfolder, name: card.dataset.pname };
   renderPrivateBrowse();
 });

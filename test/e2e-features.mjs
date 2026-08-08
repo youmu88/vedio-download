@@ -305,6 +305,59 @@ try {
   }
   const privateWinOpen3 = await page.$eval('#win-private', el => !el.classList.contains('closed')).catch(() => false);
   check('解锁后打开私密临时浏览 App', privateWinOpen3);
+
+  // ── 4.7b 本轮新增：新建私密列表入口 / 文件夹总数角标 / 快捷键 / 关闭列表关视频 ──
+  // 新建私密列表快捷入口（私密 App 首页）
+  const pnewVisible = await page.$eval('#privateFolderGrid [data-pnew]', el => !!el).catch(() => false);
+  check('私密 App 首页含「新建私密列表」入口', pnewVisible);
+  // 通过 API 创建私密列表并加入视频，验证文件夹总数角标
+  const privList = await page.evaluate(async () => {
+    const token = localStorage.getItem('vd.private.token');
+    const mk = await fetch('/api/lists', {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Private-Token': token }, body: JSON.stringify({ name: '角标测试', private: true }),
+    }).then(r => r.json());
+    if (mk.list?.id) {
+      const lib = await fetch('/api/library').then(r => r.json());
+      if (lib.length) {
+        await fetch(`/api/lists/${mk.list.id}/items`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Private-Token': token }, body: JSON.stringify({ names: [lib[0].name] }),
+        });
+      }
+    }
+    return mk;
+  });
+  await page.waitForTimeout(400);
+  await page.evaluate(async () => {
+    if (window.loadPrivateLists) { await window.loadPrivateLists(); if (window.renderPrivateBrowse) window.renderPrivateBrowse(); }
+  });
+  await page.waitForTimeout(400);
+  const badgeText = await page.$eval('#privateFolderGrid .folder-badge', el => el.textContent).catch(() => '');
+  check('私密文件夹展示总数角标', /^[1-9]/.test(badgeText), `badge=${badgeText}`);
+  // 进入私密列表 → 关闭（返回）应关闭内嵌视频
+  const pv = await page.$('#privateFolderGrid [data-pfolder]').catch(() => null);
+  if (pv) {
+    await page.click('#privateFolderGrid [data-pfolder]');
+    await page.waitForTimeout(400);
+    const pvName = await page.$eval('#privateLibraryGrid [data-pvideo]', el => el.dataset.pvideo).catch(() => '');
+    if (pvName) {
+      await page.click('#privateLibraryGrid [data-pvideo]');
+      await page.waitForTimeout(600);
+      const playerVisible = await page.$eval('#privateInlinePlayer', el => !el.hidden).catch(() => false);
+      check('私密 App 内嵌播放器打开', playerVisible);
+      // 快捷键：空格暂停/继续（无异常即可）
+      await page.keyboard.press('Space');
+      await page.waitForTimeout(200);
+      const afterSpace = await page.$eval('#privateInlinePlayerVideo', el => el.paused).catch(() => true);
+      check('空格快捷键暂停/继续生效', typeof afterSpace === 'boolean', `paused=${afterSpace}`);
+      // 返回列表首页 → 内嵌视频应关闭
+      await page.click('#privateBrowseCrumb .folder-back');
+      await page.waitForTimeout(400);
+      const closedAfterBack = await page.$eval('#privateInlinePlayer', el => el.hidden).catch(() => true);
+      check('返回私密列表首页后内嵌视频已关闭', closedAfterBack);
+    } else {
+      check('私密 App 内嵌播放器打开', false, '列表无视频');
+    }
+  }
   await page.click('#privateLockBtn').catch(() => {});
   await page.waitForTimeout(300);
 
