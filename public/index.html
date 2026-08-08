@@ -187,7 +187,15 @@
     font-size: 13px; font-weight: 600; color: var(--text2);
     text-transform: uppercase; letter-spacing: 0.4px;
     margin: 20px 16px 6px;
+    display: flex; align-items: center; gap: 8px;
   }
+  .view-toggle { margin-left: auto; display: flex; gap: 2px; padding: 2px; background: var(--fill); border-radius: 8px; }
+  .view-toggle button {
+    width: 30px; height: 26px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 15px; color: var(--text2); transition: all 0.15s ease;
+  }
+  .view-toggle button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
   .group { background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
   .row {
     display: flex; align-items: center; gap: 12px;
@@ -264,13 +272,6 @@
   .task-status.cancelled { color: var(--orange); }
 
   /* ── 浏览页：继续观看 / 视频库 ───────────────── */
-  .history-row { padding: 13px 16px; }
-  .history-main { flex: 1; min-width: 0; cursor: pointer; }
-  .history-title { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .history-meta { font-size: 12px; color: var(--text2); margin-top: 4px; }
-  .history-bar { height: 4px; border-radius: 2px; background: var(--fill); margin-top: 8px; overflow: hidden; }
-  .history-bar > i { display: block; height: 100%; background: var(--accent); border-radius: 2px; }
-
   .library-grid {
     display: grid; gap: 14px;
     grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
@@ -294,6 +295,39 @@
   .video-card:nth-child(4n+4) .video-thumb { background: linear-gradient(135deg, #BF5AF2, #6E5BFF); }
   .video-name { font-size: 13px; font-weight: 600; margin-top: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .video-meta { font-size: 12px; color: var(--text2); margin-top: 2px; }
+  .video-progress {
+    position: absolute; left: 8px; bottom: 8px;
+    background: rgba(0,0,0,0.72); color: #fff;
+    font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 20px;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  }
+  .video-delete {
+    position: absolute; top: 8px; right: 8px;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: rgba(0,0,0,0.55); color: #fff;
+    display: flex; align-items: center; justify-content: center;
+    backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+    opacity: 0; transition: opacity 0.15s ease;
+  }
+  .video-card:hover .video-delete { opacity: 1; }
+  @media (max-width: 700px) { .video-delete { opacity: 1; } }
+
+  /* 列表视图 */
+  .library-list .video-card {
+    display: flex; align-items: center; gap: 12px;
+    padding: 10px 14px; margin-bottom: 8px;
+    background: var(--card); border-radius: var(--radius); box-shadow: var(--shadow);
+  }
+  .library-list .video-thumb { width: 92px; aspect-ratio: 16/9; border-radius: 9px; flex-shrink: 0; }
+  .library-list .video-thumb .play-badge { width: 30px; height: 30px; }
+  .library-list .video-info { flex: 1; min-width: 0; }
+  .library-list .video-name { margin-top: 0; }
+  .library-list .video-progress {
+    position: static; width: 110px; margin-top: 6px;
+    background: var(--fill); color: var(--text2); text-align: center;
+  }
+  .library-list .video-progress .bar { display: block; height: 4px; border-radius: 2px; background: var(--accent); margin-top: 3px; }
+  .library-list .video-delete { position: static; opacity: 1; background: var(--fill); color: var(--red); width: 32px; height: 32px; }
 
   .empty {
     text-align: center; color: var(--text3); padding: 42px 20px;
@@ -361,6 +395,15 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .inline-player video { display: block; width: 100%; max-height: 360px; background: #000; }
+  .inline-player-close {
+    width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+    background: #28C840; color: rgba(0,0,0,0.65);
+    font-size: 15px; font-weight: 700; line-height: 1;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.12), 0 1px 3px rgba(0,0,0,0.18);
+    transition: transform 0.12s ease, filter 0.12s ease;
+  }
+  .inline-player-close:hover { transform: scale(1.08); filter: brightness(1.06); }
 
   /* ── 壁纸选择器 ──────────────────────────────── */
   .wallpaper-picker { display: flex; gap: 10px; flex-shrink: 0; }
@@ -445,13 +488,9 @@
         <div class="inline-player" id="inlinePlayer" hidden>
           <div class="inline-player-bar">
             <span class="inline-player-title" id="inlinePlayerTitle"></span>
-            <button class="icon-btn danger" id="inlinePlayerClose" title="关闭播放">×</button>
+            <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放">×</button>
           </div>
           <video id="inlinePlayerVideo" controls playsinline></video>
-        </div>
-        <div class="group-title" style="margin-top:12px;">继续观看</div>
-        <div class="group" id="historyList">
-          <div class="empty"><div class="big">▶️</div>暂无播放记录</div>
         </div>
 
         <div class="group-title">在线播放</div>
@@ -462,7 +501,12 @@
           </div>
         </div>
 
-        <div class="group-title">视频库 <span id="libraryCount" style="text-transform:none;"></span></div>
+        <div class="group-title">视频库 <span id="libraryCount" style="text-transform:none;"></span>
+          <span class="view-toggle" id="libraryViewToggle">
+            <button data-view="grid" class="active" title="网格视图">▦</button>
+            <button data-view="list" title="列表视图">☰</button>
+          </span>
+        </div>
         <div class="library-grid" id="libraryGrid">
           <div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>
         </div>
@@ -689,7 +733,7 @@ function focusApp(name) {
   activeApp = name;
   updateDock();
   updateDesktopHint();
-  if (name === 'browse') { renderHistory(); loadLibrary(); }
+  if (name === 'browse') { loadLibrary(); }
   if (name === 'settings') { loadServerSettings(); loadHealth(); }
 }
 
@@ -851,7 +895,7 @@ window.addEventListener('resize', () => {
 const SETTINGS_KEY = 'vd.settings.v2';
 const defaultSettings = {
   theme: 'auto', wallpaper: 'default', engine: 'auto', format: 'auto',
-  parallel: false, parallelCount: 4, maxSpeedMB: 0, timeoutMin: 30,
+  parallel: false, parallelCount: 4, maxSpeedMB: 0, timeoutMin: 30, libraryView: 'grid',
 };
 function loadSettings() {
   try { return { ...defaultSettings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
@@ -949,12 +993,10 @@ function upsertHistory(entry) {
   history = history.filter(h => h.id !== entry.id);
   history.unshift(entry);
   saveHistory();
-  renderHistory();
 }
 function removeHistory(id) {
   history = history.filter(h => h.id !== id);
   saveHistory();
-  renderHistory();
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1102,50 +1144,79 @@ function updateTaskCard(task) {
 // ═══════════════════════════════════════════════════════
 // 浏览页：视频库 + 播放
 // ═══════════════════════════════════════════════════════
+let libraryFiles = [];
+
 async function loadLibrary() {
   try {
     const res = await fetch('/api/library');
     if (!res.ok) throw new Error();
-    renderLibrary(await res.json());
+    libraryFiles = await res.json();
+    renderLibrary(libraryFiles);
   } catch {
     $('libraryGrid').innerHTML = '<div class="empty"><div class="big">⚠️</div>视频库读取失败</div>';
   }
 }
 
+function libraryProgress(name) {
+  const h = history.find(x => x.id === 'file:' + name);
+  if (!h || !h.duration) return null;
+  return Math.min(100, Math.round((h.time / h.duration) * 100));
+}
+
 function renderLibrary(files) {
   const grid = $('libraryGrid');
+  const view = settings.libraryView || 'grid';
+  grid.className = view === 'list' ? 'library-list' : 'library-grid';
   $('libraryCount').textContent = files.length ? `(${files.length})` : '';
+  document.querySelectorAll('#libraryViewToggle button').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   if (!files.length) {
     grid.innerHTML = '<div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>';
     return;
   }
-  grid.innerHTML = files.map((f) => `
-    <div class="video-card" data-name="${escapeHtml(f.name)}" onclick="playLibrary(this.dataset.name)">
-      <div class="video-thumb"><span class="play-badge">${icon('play', 20)}</span></div>
+  grid.innerHTML = files.map((f) => {
+    const pct = libraryProgress(f.name);
+    const progressHtml = pct === null
+      ? ''
+      : view === 'list'
+        ? `<div class="video-progress">${pct}%<span class="bar" style="width:${pct}%"></span></div>`
+        : `<span class="video-progress">${pct}%</span>`;
+    if (view === 'list') {
+      return `
+      <div class="video-card" data-name="${escapeHtml(f.name)}">
+        <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span></div>
+        <div class="video-info">
+          <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+          <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
+          ${progressHtml}
+        </div>
+        <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" title="删除视频">${icon('trash', 15)}</button>
+      </div>`;
+    }
+    return `
+    <div class="video-card" data-name="${escapeHtml(f.name)}">
+      <div class="video-thumb">
+        <span class="play-badge">${icon('play', 20)}</span>
+        ${progressHtml}
+        <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" title="删除视频">${icon('trash', 14)}</button>
+      </div>
       <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
       <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
-    </div>`).join('');
-}
-
-function renderHistory() {
-  const list = $('historyList');
-  if (!history.length) {
-    list.innerHTML = '<div class="empty"><div class="big">▶️</div>暂无播放记录<br>播放过的视频会出现在这里，下次自动续播</div>';
-    return;
-  }
-  list.innerHTML = history.map(h => {
-    const pct = h.duration ? Math.min(100, (h.time / h.duration) * 100) : 0;
-    return `
-    <div class="row history-row">
-      <div class="task-icon">${icon('playRect', 17)}</div>
-      <div class="history-main" data-history-id="${escapeHtml(h.id)}">
-        <div class="history-title">${escapeHtml(h.title)}</div>
-        <div class="history-meta">${formatTime(h.time)} / ${formatTime(h.duration)} · ${formatDate(h.updatedAt)}</div>
-        <div class="history-bar"><i style="width:${pct}%"></i></div>
-      </div>
-      <button class="icon-btn danger" title="删除记录" data-remove-id="${escapeHtml(h.id)}">${icon('xmark', 16)}</button>
     </div>`;
   }).join('');
+}
+
+async function deleteVideo(name) {
+  if (!confirm(`确定删除「${name}」？删除后无法恢复。`)) return;
+  try {
+    const res = await fetch(`/api/library/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '删除失败');
+    removeHistory('file:' + name);
+    showToast('已删除');
+    loadLibrary();
+  } catch (err) {
+    showToast(err.message, true);
+  }
 }
 
 // ── 播放器核心 ──────────────────────────────────
@@ -1228,11 +1299,6 @@ function playLibrary(name) {
   openPlayer(name, `/downloads/${encodeURIComponent(name)}`, `file:${name}`);
 }
 
-function playHistory(id) {
-  const h = history.find(x => x.id === id);
-  if (h) openPlayer(h.title, h.src, h.id);
-}
-
 function playUrl() {
   const url = $('playUrlInput').value.trim();
   if (!/^https?:\/\//i.test(url)) { showToast('请输入有效的 http(s) 链接', true); return; }
@@ -1290,15 +1356,25 @@ $('refreshHealth').addEventListener('click', loadHealth);
 $('parallelDownloadsInput').addEventListener('change', saveServerSettings);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('inlinePlayer').hidden) closePlayer(); });
 
-// 播放记录事件委托
-$('historyList').addEventListener('click', (e) => {
-  const main = e.target.closest('.history-main');
-  if (main && main.dataset.historyId) {
-    playHistory(main.dataset.historyId);
+// 视频库事件委托：播放 / 删除
+$('libraryGrid').addEventListener('click', (e) => {
+  const del = e.target.closest('[data-delete-name]');
+  if (del) {
+    e.stopPropagation();
+    deleteVideo(del.dataset.deleteName);
     return;
   }
-  const del = e.target.closest('[data-remove-id]');
-  if (del) removeHistory(del.dataset.removeId);
+  const card = e.target.closest('.video-card');
+  if (card && card.dataset.name) playLibrary(card.dataset.name);
+});
+
+// 网格/列表视图切换
+$('libraryViewToggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  settings.libraryView = btn.dataset.view;
+  saveSettings();
+  renderLibrary(libraryFiles);
 });
 
 // Dock 图标

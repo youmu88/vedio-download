@@ -47,6 +47,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DOWNLOADS_DIR = path.resolve(__dirname, '../downloads');
 
 const PORT = process.env.PORT || 3456;
 const MAX_GLOBAL_BANDWIDTH = process.env.MAX_BANDWIDTH ? parseInt(process.env.MAX_BANDWIDTH, 10) : 0; // 0 = 无限制
@@ -284,7 +285,6 @@ app.get('/api/tasks', (_req, res) => {
  * GET /api/library — 已下载视频库（供“浏览”页播放）
  */
 app.get('/api/library', (_req, res) => {
-  const dir = path.join(__dirname, '../downloads');
   const runningIds = new Set(
     taskManager.listAll()
       .filter(t => [TaskStatus.CREATED, TaskStatus.RUNNING].includes(t.status))
@@ -292,18 +292,18 @@ app.get('/api/library', (_req, res) => {
   );
   let files = [];
   try {
-    files = fs.readdirSync(dir)
+    files = fs.readdirSync(DOWNLOADS_DIR)
       .filter((name) => {
         if (name.startsWith('.')) return false;
         if (name.endsWith('.part')) return false;
         if (runningIds.has(name) || [...runningIds].some(id => name.startsWith(`${id}.`))) return false;
-        const p = path.join(dir, name);
+        const p = path.join(DOWNLOADS_DIR, name);
         let stat;
         try { stat = fs.statSync(p); } catch { return false; }
         return stat.isFile();
       })
       .map((name) => {
-        const p = path.join(dir, name);
+        const p = path.join(DOWNLOADS_DIR, name);
         const stat = fs.statSync(p);
         return { name, size: stat.size, mtime: stat.mtimeMs };
       })
@@ -312,6 +312,39 @@ app.get('/api/library', (_req, res) => {
     return res.status(500).json({ error: `读取视频库失败: ${err.message}` });
   }
   res.json(files);
+});
+
+/**
+ * DELETE /api/library/:name — 删除视频库中的文件
+ * 仅允许删除 downloads 根目录下的普通文件，且不允许删除运行中任务的文件
+ */
+app.delete('/api/library/:name', (req, res) => {
+  const name = path.basename(req.params.name || '');
+  if (!name || name === '.' || name === '..') {
+    return res.status(400).json({ error: '非法文件名' });
+  }
+  const filePath = path.join(DOWNLOADS_DIR, name);
+  if (!filePath.startsWith(DOWNLOADS_DIR + path.sep)) {
+    return res.status(400).json({ error: '非法文件名' });
+  }
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  const runningIds = new Set(
+    taskManager.listAll()
+      .filter(t => [TaskStatus.CREATED, TaskStatus.RUNNING].includes(t.status))
+      .map(t => t.id)
+  );
+  if ([...runningIds].some(id => name.startsWith(`${id}.`))) {
+    return res.status(409).json({ error: '该文件属于运行中的任务，请先停止任务' });
+  }
+  try {
+    fs.unlinkSync(filePath);
+    log.info({ name }, '删除视频库文件');
+    res.json({ ok: true, name });
+  } catch (err) {
+    res.status(500).json({ error: `删除失败: ${err.message}` });
+  }
 });
 
 /**
@@ -556,6 +589,8 @@ async function processTask(taskId) {
 
     const streamUrl = captureResult.m3u8Url;
     const streamFormat = captureResult.format || 'm3u8';
+    // ⭐ 用页面标题/链接提取可读文件名，而不是 taskId
+    const outputName = resolveOutputName(task, captureResult, streamUrl);
 
     // ⭐ SSRF 全链路：捕获到的流地址同样做字面量 + DNS + 重定向校验
     await assertPublicUrl(streamUrl);
@@ -598,6 +633,7 @@ async function processTask(taskId) {
       parallelCount: task.parallelCount || 4,
       preferredCodec: task.preferredCodec || null,
       timeoutMs: task.timeoutMs || null,
+      outputName,
     };
 
     // ⭐ 修复：参数顺序必须匹配 startDownload(m3u8Url, headers, taskId, onProgress, options)
@@ -667,6 +703,38 @@ function pickStreamHeaders(headers = {}) {
     if (v) result[k] = v;
   }
   return result;
+}
+
+/**
+ * 清理文件名中的非法字符
+ */
+function sanitizeFileBase(name) {
+  return String(name || '')
+    .replace(/[\\/:*?"<>|\r\n\t]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 80);
+}
+
+/**
+ * 从捕获结果/流地址推导可读输出文件名
+ * 优先页面标题；直链/流地址取路径文件名；均不可用时退回 taskId
+ */
+function resolveOutputName(task, captureResult, streamUrl) {
+  let base = '';
+  if (captureResult.pageTitle) base = sanitizeFileBase(captureResult.pageTitle);
+  else if (captureResult.title) base = sanitizeFileBase(captureResult.title);
+  else {
+    try {
+      const file = path.basename(new URL(streamUrl).pathname);
+      const clean = file.replace(/\.(m3u8|mpd|mp4|mkv|webm|ts)$/i, '');
+      if (clean && !/^(index|playlist|master)$/i.test(clean)) base = sanitizeFileBase(clean);
+    } catch (_) {}
+  }
+  if (!base) return task.id;
+  // 存在同名文件时追加短任务号，避免覆盖其他任务
+  const conflict = ['.mp4', '.ts', '.mkv'].some(ext => fs.existsSync(path.join(DOWNLOADS_DIR, base + ext)));
+  return conflict ? `${base}_${task.id.slice(-6)}` : base;
 }
 
 // ═══════════════════════════════════════════════════════

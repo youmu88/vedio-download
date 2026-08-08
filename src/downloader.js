@@ -274,8 +274,8 @@ const bandwidthLimiter = new BandwidthLimiter();
  */
 export function startDownload(m3u8Url, headers, taskId, onProgress, options = {}) {
   return new Promise((resolve, reject) => {
-    // 稳定输出名：同任务多次尝试共享同一缓存/输出，支持断点续跑
-    const outputName = taskId;
+    // 可读输出名（默认 taskId，实际由 index.js 根据页面标题生成）
+    const outputName = options.outputName || taskId;
     const outputPath = path.join(DOWNLOADS_DIR, outputName);
 
     // 注册带宽
