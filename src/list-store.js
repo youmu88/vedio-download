@@ -1,9 +1,14 @@
 /**
  * 列表存储 — 公开列表 + 私密列表 + 私密密码
  *
- * 数据文件：
- *   data/lists.json        → { lists: [{ id, name, private, createdAt, items: [{ name, size, mtime, addedAt }] }] }
- *   data/private-pass.json → { salt, hash }（scrypt 哈希，仅存 4/6 位数字 PIN 的摘要）
+ * ⭐ 持久化方案：SQLite 数据库（node:sqlite，WAL 模式）
+ *   data/vd.db → 表 lists（列表 + 条目 JSON）+ 表 private_pass（scrypt 密码摘要）
+ *
+ * 选择 SQLite 而非 JSON 文件的原因：
+ *   - 事务性写入：每次变更原子落盘，崩溃/断电不损坏、不丢失
+ *   - WAL 模式：读写在独立日志中提交，天然抗损坏
+ *   - 单文件：备份/迁移简单，且不依赖"文件恰好存在"的脆弱假设
+ *   - 旧 JSON（lists.json/private-pass.json）首次启动自动迁移导入
  *
  * 私密列表默认不可见：listAll() 仅返回公开列表；
  * 私密列表通过 token 访问（验证密码后签发，默认 30 分钟有效，内存存储）。
@@ -19,13 +24,16 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ⭐ 数据目录支持环境变量覆盖：测试/隔离环境可用 VD_DATA_DIR 指向独立目录，避免污染真实数据
 const DATA_DIR = process.env.VD_DATA_DIR ? path.resolve(process.env.VD_DATA_DIR) : path.resolve(__dirname, '../data');
-const LISTS_FILE = path.join(DATA_DIR, 'lists.json');
-const PASS_FILE = path.join(DATA_DIR, 'private-pass.json');
+const DB_FILE = path.join(DATA_DIR, 'vd.db');
+// 旧 JSON 文件：仅用于首次迁移（历史数据导入）
+const LEGACY_LISTS_FILE = path.join(DATA_DIR, 'lists.json');
+const LEGACY_PASS_FILE = path.join(DATA_DIR, 'private-pass.json');
 
 const TOKEN_TTL_MS = 30 * 60 * 1000; // token 有效期 30 分钟
 const PIN_RE = /^(\d{4}|\d{6})$/;    // 4 位或 6 位数字密码
@@ -36,77 +44,112 @@ function ensureDataDir() {
 
 class ListStore {
   constructor() {
-    this.lists = [];       // 全部列表（含私密）
     this.tokens = new Map(); // token → { expiresAt }
     ensureDataDir();
-    this._load();
+    this.db = new DatabaseSync(DB_FILE);
+    this._initSchema();
+    this._importLegacy();
   }
 
   // ═══════════════════════════════════════════
-  // 持久化
+  // 数据库初始化
   // ═══════════════════════════════════════════
 
-  _load() {
-    try {
-      if (!fs.existsSync(LISTS_FILE)) return;
-      const raw = JSON.parse(fs.readFileSync(LISTS_FILE, 'utf-8'));
-      if (raw && Array.isArray(raw.lists)) this.lists = raw.lists;
-    } catch (err) {
-      console.error('[ListStore] 列表加载失败:', err.message);
-    }
+  _initSchema() {
+    this.db.exec('PRAGMA journal_mode = WAL;');
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS lists (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        is_private INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        items TEXT NOT NULL DEFAULT '[]'
+      );
+      CREATE TABLE IF NOT EXISTS private_pass (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        salt TEXT NOT NULL,
+        hash TEXT NOT NULL
+      );
+    `);
   }
 
-  _load() {
+  /** 旧 JSON 数据迁移导入（仅首次执行，DB 为空列表且旧文件存在时） */
+  _importLegacy() {
     try {
-      if (!fs.existsSync(LISTS_FILE)) {
-        // 主文件不存在：尝试从 .bak 恢复（防误删/损坏导致数据丢失）
-        if (fs.existsSync(`${LISTS_FILE}.bak`)) {
-          console.log('[ListStore] 主文件不存在，从 .bak 恢复');
-          fs.copyFileSync(`${LISTS_FILE}.bak`, LISTS_FILE);
-        } else {
-          return;
+      const count = this.db.prepare('SELECT COUNT(*) AS n FROM lists').get().n;
+      if (count > 0) return; // 已有数据，不覆盖
+      // 迁移列表
+      if (fs.existsSync(LEGACY_LISTS_FILE)) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(LEGACY_LISTS_FILE, 'utf-8'));
+          if (raw && Array.isArray(raw.lists) && raw.lists.length) {
+            const ins = this.db.prepare('INSERT INTO lists (id, name, is_private, created_at, items) VALUES (?,?,?,?,?)');
+            for (const l of raw.lists) {
+              if (!l || !l.id) continue;
+              try {
+                ins.run(l.id, String(l.name || '').slice(0, 40), l.private ? 1 : 0, l.createdAt || new Date().toISOString(), JSON.stringify(l.items || []));
+              } catch (_) {}
+            }
+            console.log(`[ListStore] 已从旧 JSON 迁移 ${raw.lists.length} 个列表`);
+          }
+        } catch (err) {
+          console.error('[ListStore] 旧列表 JSON 解析失败（跳过迁移）:', err.message);
         }
       }
-      const raw = fs.readFileSync(LISTS_FILE, 'utf-8');
-      let parsed;
-      try {
-        parsed = JSON.parse(raw);
-      } catch (parseErr) {
-        // JSON 损坏：尝试从 .bak 恢复
-        console.error(`[ListStore] JSON 损坏: ${parseErr.message}`);
-        if (fs.existsSync(`${LISTS_FILE}.bak`)) {
-          console.log('[ListStore] 从 .bak 恢复');
-          fs.copyFileSync(`${LISTS_FILE}.bak`, LISTS_FILE);
-          parsed = JSON.parse(fs.readFileSync(LISTS_FILE, 'utf-8'));
-        } else {
-          throw parseErr;
+      // 迁移私密密码
+      if (fs.existsSync(LEGACY_PASS_FILE)) {
+        try {
+          const { salt, hash } = JSON.parse(fs.readFileSync(LEGACY_PASS_FILE, 'utf-8'));
+          if (salt && hash && typeof salt === 'string' && typeof hash === 'string' && hash.length >= 64) {
+            this.db.prepare('INSERT OR REPLACE INTO private_pass (id, salt, hash) VALUES (1,?,?)').run(salt, hash);
+            console.log('[ListStore] 已从旧 JSON 迁移私密密码');
+          }
+        } catch (err) {
+          console.error('[ListStore] 旧密码 JSON 解析失败（跳过迁移）:', err.message);
         }
       }
-      if (parsed && Array.isArray(parsed.lists)) this.lists = parsed.lists;
     } catch (err) {
-      console.error('[ListStore] 列表加载失败:', err.message);
-    }
-  }
-
-  _save() {
-    try {
-      const tmpFile = `${LISTS_FILE}.tmp`;
-      fs.writeFileSync(tmpFile, JSON.stringify({ lists: this.lists }, null, 2), 'utf-8');
-      fs.renameSync(tmpFile, LISTS_FILE);
-      // 同时保留 .bak 备份，供主文件丢失/损坏时恢复
-      fs.copyFileSync(LISTS_FILE, `${LISTS_FILE}.bak`);
-    } catch (err) {
-      console.error('[ListStore] 列表保存失败:', err.message);
+      console.error('[ListStore] 旧数据迁移失败:', err.message);
     }
   }
 
   // ═══════════════════════════════════════════
-  // 列表 CRUD
+  // 内部读写（SQLite 事务性落盘）
+  // ═══════════════════════════════════════════
+
+  _rowToList(r) {
+    if (!r) return null;
+    let items = [];
+    try { items = JSON.parse(r.items || '[]'); } catch (_) {}
+    return {
+      id: r.id,
+      name: r.name,
+      private: !!r.is_private,
+      createdAt: r.created_at,
+      items: Array.isArray(items) ? items : [],
+    };
+  }
+
+  _allRows() {
+    return this.db.prepare('SELECT * FROM lists').all().map((r) => this._rowToList(r));
+  }
+
+  _upsert(list) {
+    this.db.prepare('INSERT OR REPLACE INTO lists (id, name, is_private, created_at, items) VALUES (?,?,?,?,?)')
+      .run(list.id, list.name, list.private ? 1 : 0, list.createdAt, JSON.stringify(list.items || []));
+  }
+
+  _getPass() {
+    return this.db.prepare('SELECT salt, hash FROM private_pass WHERE id = 1').get() || null;
+  }
+
+  // ═══════════════════════════════════════════
+  // 列表查询
   // ═══════════════════════════════════════════
 
   /** 公开列表（私密列表默认不可见） */
   listAll() {
-    return this.lists
+    return this._allRows()
       .filter((l) => !l.private)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
@@ -114,14 +157,14 @@ class ListStore {
   /** 私密列表（需 token 验证） */
   listPrivate(token) {
     this._requireToken(token);
-    return this.lists
+    return this._allRows()
       .filter((l) => l.private)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
 
   /** 是否有私密列表（供前端显示锁图标） */
   hasPrivateList() {
-    return this.lists.some((l) => l.private);
+    return this._allRows().some((l) => l.private);
   }
 
   /**
@@ -130,7 +173,7 @@ class ListStore {
    */
   allItemNames() {
     const set = new Set();
-    for (const l of this.lists) {
+    for (const l of this._allRows()) {
       for (const i of l.items) set.add(i.name);
     }
     return set;
@@ -142,8 +185,12 @@ class ListStore {
   }
 
   get(id) {
-    return this.lists.find((l) => l.id === id) || null;
+    return this._rowToList(this.db.prepare('SELECT * FROM lists WHERE id = ?').get(id));
   }
+
+  // ═══════════════════════════════════════════
+  // 列表 CRUD（每次变更立即事务落盘）
+  // ═══════════════════════════════════════════
 
   /**
    * 创建列表
@@ -163,8 +210,7 @@ class ListStore {
       createdAt: new Date().toISOString(),
       items: [],
     };
-    this.lists.push(list);
-    this._save();
+    this._upsert(list);
     return list;
   }
 
@@ -175,8 +221,7 @@ class ListStore {
     const list = this.get(id);
     if (!list) return false;
     if (list.private) this._requireToken(token);
-    this.lists = this.lists.filter((l) => l.id !== id);
-    this._save();
+    this.db.prepare('DELETE FROM lists WHERE id = ?').run(id);
     return true;
   }
 
@@ -197,7 +242,7 @@ class ListStore {
       list.items.push({ name: clean, size: null, mtime: null, addedAt: now });
       exist.add(clean);
     }
-    this._save();
+    this._upsert(list);
     return list;
   }
 
@@ -211,28 +256,21 @@ class ListStore {
     if (!Array.isArray(names) || names.length === 0) throw new Error('缺少视频条目');
     const drop = new Set(names.map((n) => String(n).trim()));
     list.items = list.items.filter((i) => !drop.has(i.name));
-    this._save();
+    this._upsert(list);
     return list;
   }
 
   // ═══════════════════════════════════════════
-  // 私密密码（4/6 位数字）
+  // 私密密码（4/6 位数字，SQLite 存储）
   // ═══════════════════════════════════════════
 
   hasPassword() {
-    try {
-      if (!fs.existsSync(PASS_FILE)) return false;
-      const { salt, hash } = JSON.parse(fs.readFileSync(PASS_FILE, 'utf-8'));
-      // 文件存在但内容无效（空/损坏/缺字段）时视为未设置，避免进入验证分支后永远报密码错误
-      if (!salt || !hash || typeof salt !== 'string' || typeof hash !== 'string' || hash.length < 64) {
-        console.error('[ListStore] 密码文件损坏，视为未设置密码:', PASS_FILE);
-        return false;
-      }
-      return true;
-    } catch (err) {
-      console.error('[ListStore] 密码文件解析失败，视为未设置密码:', err.message);
+    const p = this._getPass();
+    // 内容无效（缺字段）时视为未设置，避免进入验证分支后永远报密码错误
+    if (!p || !p.salt || !p.hash || typeof p.salt !== 'string' || typeof p.hash !== 'string' || p.hash.length < 64) {
       return false;
     }
+    return true;
   }
 
   /**
@@ -244,8 +282,7 @@ class ListStore {
     }
     const salt = crypto.randomBytes(16).toString('hex');
     const hash = crypto.scryptSync(String(pin), salt, 64).toString('hex');
-    ensureDataDir();
-    fs.writeFileSync(PASS_FILE, JSON.stringify({ salt, hash }, null, 2), 'utf-8');
+    this.db.prepare('INSERT OR REPLACE INTO private_pass (id, salt, hash) VALUES (1,?,?)').run(salt, hash);
   }
 
   /**
@@ -254,16 +291,12 @@ class ListStore {
    */
   verifyPassword(pin) {
     if (!this.hasPassword()) throw new Error('尚未设置私密密码');
-    try {
-      const { salt, hash } = JSON.parse(fs.readFileSync(PASS_FILE, 'utf-8'));
-      const expected = Buffer.from(hash, 'hex');
-      const actual = crypto.scryptSync(String(pin || ''), salt, 64);
-      if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
-        throw new Error('密码错误');
-      }
-    } catch (err) {
-      if (err.message === '密码错误') throw err;
-      throw new Error('密码验证失败');
+    const p = this._getPass();
+    if (!p) throw new Error('密码验证失败');
+    const expected = Buffer.from(p.hash, 'hex');
+    const actual = crypto.scryptSync(String(pin || ''), p.salt, 64);
+    if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+      throw new Error('密码错误');
     }
     const token = crypto.randomBytes(24).toString('hex');
     const expiresAt = Date.now() + TOKEN_TTL_MS;
@@ -278,10 +311,10 @@ class ListStore {
    */
   changePassword(token, oldPin, newPin) {
     this._requireToken(token);
-    // 复用 verifyPassword 校验旧密码（不签发新 token）
-    const { salt, hash } = JSON.parse(fs.readFileSync(PASS_FILE, 'utf-8'));
-    const expected = Buffer.from(hash, 'hex');
-    const actual = crypto.scryptSync(String(oldPin || ''), salt, 64);
+    const p = this._getPass();
+    if (!p) throw new Error('密码验证失败');
+    const expected = Buffer.from(p.hash, 'hex');
+    const actual = crypto.scryptSync(String(oldPin || ''), p.salt, 64);
     if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
       throw new Error('原密码错误');
     }
