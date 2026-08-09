@@ -25,17 +25,20 @@
   --tabbar-h: 49px;
   --safe-b: env(safe-area-inset-bottom, 0px);
   --safe-t: env(safe-area-inset-top, 0px);
-  --radius: 12px;
-  --shadow: 0 1px 2px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08);
+  --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px;
+  --shadow: 0 0.5px 1px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03);
   --touch-min: 44px;
+  --back-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='21' viewBox='0 0 13 21'%3E%3Cpath d='M11 2L3 10.5L11 19' fill='none' stroke='%23007AFF' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 [data-theme="dark"] {
   color-scheme: dark;
-  --bg: #000000; --card: #1C1C1E;
+      --bg: #000000; --card: #1C1C1E;
   --fill: rgba(120,120,128,0.24); --fill-strong: rgba(120,120,128,0.34);
   --separator: rgba(84,84,88,0.6);
   --text: #FFFFFF; --text2: rgba(235,235,245,0.6); --text3: rgba(235,235,245,0.45);
   --nav-bg: rgba(18,18,20,0.82);
+  --accent: #0A84FF;
+  --back-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='13' height='21' viewBox='0 0 13 21'%3E%3Cpath d='M11 2L3 10.5L11 19' fill='none' stroke='%230A84FF' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
@@ -61,8 +64,8 @@ input, select { font-family: inherit; font-size: 16px; }
 }
 .navbar-inner { display: flex; align-items: center; min-height: 44px; padding: 0 8px; }
 .nav-back {
-  min-width: 44px; min-height: 44px; display: flex; align-items: center;
-  font-size: 17px; color: var(--accent); flex-shrink: 0;
+  min-width: 44px; min-height: 44px; display: flex; align-items: center; gap: 2px;
+  font-size: 17px; color: var(--accent); flex-shrink: 0; padding: 0 8px;
 }
 .nav-title {
   flex: 1; font-size: 34px; font-weight: 700; letter-spacing: -0.5px;
@@ -105,7 +108,8 @@ main {
   color: var(--gray); font-size: 10px; font-weight: 500;
   transition: color 0.15s ease;
 }
-.tab .tab-icon { font-size: 22px; line-height: 1; }
+.tab .tab-icon { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; }
+.tab .tab-icon svg { display: block; }
 .tab.active { color: var(--accent); }
 
 /* ── 分组列表（inset grouped） ───────────────── */
@@ -115,7 +119,7 @@ main {
   margin: 20px 20px 6px;
   display: flex; align-items: center; gap: 8px;
 }
-.group { background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.group { background: var(--card); border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow); }
 .row {
   display: flex; align-items: center; gap: 12px;
   padding: 12px 16px; min-height: 52px;
@@ -127,7 +131,7 @@ main {
 .form-row { display: flex; gap: 10px; padding: 16px; }
 .text-input {
   flex: 1; min-width: 0;
-  background: var(--fill); border-radius: 10px;
+  background: var(--fill); border-radius: var(--radius-sm);
   padding: 14px 16px; font-size: 16px; color: var(--text);
   border: 1px solid transparent; outline: none;
   transition: border 0.15s ease, background 0.15s ease;
@@ -141,7 +145,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .btn-primary {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   background: var(--accent); color: #fff; font-size: 16px; font-weight: 600;
-  padding: 15px 24px; border-radius: 12px; white-space: nowrap; min-height: var(--touch-min);
+  padding: 15px 24px; border-radius: var(--radius-md); white-space: nowrap; min-height: var(--touch-min);
   transition: opacity 0.15s ease, transform 0.08s ease;
 }
 .btn-primary:active { opacity: 0.7; transform: scale(0.97); }
@@ -149,12 +153,12 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .btn-secondary {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   background: var(--fill); color: var(--text); font-size: 16px; font-weight: 600;
-  padding: 15px 16px; border-radius: 12px; white-space: nowrap; min-height: var(--touch-min);
+  padding: 15px 16px; border-radius: var(--radius-md); white-space: nowrap; min-height: var(--touch-min);
 }
 .btn-secondary.danger { color: var(--red); }
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
-  width: var(--touch-min); height: var(--touch-min); border-radius: 10px; color: var(--accent);
+  width: var(--touch-min); height: var(--touch-min); border-radius: var(--radius-sm); color: var(--accent);
 }
 .icon-btn.danger { color: var(--red); }
 .icon-btn.green { color: var(--green); }
@@ -162,7 +166,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 /* ── 任务列表 ────────────────────────────────── */
 .task-row { align-items: flex-start; padding: 16px; min-height: 0; }
 .task-icon {
-  width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
+  width: 40px; height: 40px; border-radius: var(--radius-sm); flex-shrink: 0;
   display: flex; align-items: center; justify-content: center;
   background: var(--fill); color: var(--text2); font-size: 17px;
 }
@@ -192,10 +196,10 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 @media (min-width: 480px) { .library-grid { grid-template-columns: repeat(3, 1fr); } }
 .video-card {
   position: relative; cursor: pointer; user-select: none;
-  background: var(--card); border-radius: var(--radius); overflow: hidden;
+  background: var(--card); border-radius: var(--radius-md); overflow: hidden;
   box-shadow: var(--shadow); padding-bottom: 10px;
 }
-.video-card.selected::after { content: ''; position: absolute; inset: 0; border-radius: var(--radius); border: 2.5px solid var(--accent); pointer-events: none; }
+.video-card.selected::after { content: ''; position: absolute; inset: 0; border-radius: var(--radius-md); border: 2.5px solid var(--accent); pointer-events: none; }
 .sel-check {
   position: absolute; top: 8px; left: 8px; z-index: 3;
   width: 26px; height: 26px; border-radius: 50%;
@@ -239,7 +243,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 @media (min-width: 480px) { .folder-grid { grid-template-columns: repeat(3, 1fr); } }
 .folder-card {
   cursor: pointer; user-select: none;
-  border-radius: var(--radius); padding: 18px 12px;
+  border-radius: var(--radius-md); padding: 18px 12px;
   background: var(--card); box-shadow: var(--shadow);
   display: flex; flex-direction: column; align-items: center; gap: 8px;
   transition: transform 0.15s ease, background 0.15s ease;
@@ -252,6 +256,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
   font-size: 26px; box-shadow: var(--shadow); position: relative;
 }
 .folder-card .folder-icon.private { background: linear-gradient(145deg, #FF9F0A, #FF6482); }
+[data-theme="dark"] .folder-card .folder-icon.private { background: linear-gradient(145deg, #CC8400, #CC5068); }
 .folder-badge {
   position: absolute; top: -6px; right: -6px;
   min-width: 20px; height: 20px; border-radius: 999px;
@@ -265,7 +270,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .empty .big { font-size: 44px; margin-bottom: 10px; }
 
 /* ── 内嵌播放器 ──────────────────────────────── */
-.inline-player { margin-top: 12px; background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.inline-player { margin-top: 12px; background: var(--card);   border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow); }
 .inline-player-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 0.5px solid var(--separator); }
 .inline-player-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inline-player video { display: block; width: 100%; max-height: 40vh; background: #000; }
@@ -369,22 +374,23 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .pin-error { text-align: center; font-size: 13px; color: var(--red); min-height: 20px; }
 
 /* ── 列表选择器 ──────────────────────────────── */
-.list-tile { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-bottom: 8px; background: var(--card); border-radius: 12px; box-shadow: var(--shadow); cursor: pointer; min-height: 56px; }
+.list-tile { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-bottom: 8px;   background: var(--card); border-radius: var(--radius-md); box-shadow: var(--shadow); cursor: pointer; min-height: 56px; }
 .list-tile:active { background: var(--fill); }
-.list-tile-icon { width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--fill); color: var(--accent); font-size: 17px; }
+.list-tile-icon {   width: 40px; height: 40px; border-radius: var(--radius-sm); flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--fill); color: var(--accent); }
 .list-tile-icon.private { color: var(--orange); }
 .list-tile-main { flex: 1; min-width: 0; }
 .list-tile-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-tile-meta { font-size: 12px; color: var(--text2); margin-top: 3px; }
-.list-item-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; background: var(--fill); }
+.list-item-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px;   border-radius: var(--radius-sm); margin-bottom: 8px; background: var(--fill); }
 .list-item-name { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .list-item-del { color: var(--red); font-size: 13px; padding: 10px; border-radius: 8px; flex-shrink: 0; min-height: var(--touch-min); }
 
 /* ── 登录 ────────────────────────────────────── */
 #loginScreen { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 24px; }
 #loginScreen.hidden { display: none; }
-.login-card { width: 100%; max-width: 380px; background: var(--card); border-radius: 18px; padding: 32px 28px 24px; box-shadow: var(--shadow); text-align: center; }
-.login-avatar { width: 72px; height: 72px; border-radius: 50%; background: var(--fill); font-size: 36px; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
+.login-card { width: 100%; max-width: 380px; background: var(--card); border-radius: var(--radius-lg); padding: 32px 28px 24px; box-shadow: var(--shadow); text-align: center; }
+.login-avatar { width: 72px; height: 72px; border-radius: 50%; background: var(--fill); display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; color: var(--accent); }
+.login-avatar svg { display: block; }
 .login-title { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
 .login-sub { font-size: 14px; color: var(--text2); margin-bottom: 18px; }
 .login-error { color: var(--red); font-size: 13px; min-height: 20px; margin-bottom: 6px; }
@@ -407,7 +413,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 <!-- 登录页 -->
 <div id="loginScreen">
   <div class="login-card">
-    <div class="login-avatar">👤</div>
+    <div class="login-avatar"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4 21c0-5 3.6-9 8-9s8 4 8 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
     <div class="login-title">视频下载器</div>
     <div class="login-sub">登录后访问全部功能</div>
     <input class="text-input" id="loginUser" placeholder="用户名" autocomplete="username" style="width:100%;margin-bottom:10px;">
@@ -427,7 +433,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
   <!-- 顶部导航 -->
   <div class="navbar">
     <div class="navbar-inner">
-      <button class="nav-back" id="navBack" hidden><span>‹ 返回</span></button>
+      <button class="nav-back" id="navBack" hidden><svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> 返回</button>
       <div class="nav-title" id="navTitle">下载</div>
       <div class="nav-right">
         <span class="nav-conn off" id="navConn"></span>
@@ -448,7 +454,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
         <button class="nav-btn danger" id="cleanCompletedBtn" style="margin-left:auto;min-height:32px;">清理已完成</button>
       </div>
       <div class="group" id="taskList">
-        <div class="empty"><div class="big">📥</div>还没有下载任务</div>
+        <div class="empty"><div class="big">${icon('download', 44)}</div>还没有下载任务</div>
       </div>
     </section>
 
@@ -457,8 +463,8 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
       <div class="inline-player" id="inlinePlayer" hidden>
         <div class="inline-player-bar">
           <span class="inline-player-title" id="inlinePlayerTitle"></span>
-          <button class="nav-btn" id="cacheMenuBtn" style="min-height:32px;">⋯</button>
-          <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放">×</button>
+          <button class="nav-btn" id="cacheMenuBtn" style="min-height:32px;">${icon('ellipsis', 20)}</button>
+          <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放">${icon('xmark', 16)}</button>
         </div>
         <video id="inlinePlayerVideo" controls playsinline></video>
       </div>
@@ -471,15 +477,15 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
       </div>
       <div class="group-title">视频库 <span id="browseCrumb" style="text-transform:none;"></span><span id="libraryCount" style="text-transform:none;"></span>
         <span class="segmented" id="libraryViewToggle" style="margin-left:auto;">
-          <button data-view="grid" class="active" title="网格">▦</button>
-          <button data-view="list" title="列表">☰</button>
+          <button data-view="grid" class="active" title="网格">${icon('square-grid', 16)}</button>
+          <button data-view="list" title="列表">${icon('list-bullet', 16)}</button>
         </span>
         <button class="nav-btn" id="selectModeBtn" style="min-height:32px;">选择</button>
         <button class="nav-btn" id="openListsBtn" style="min-height:32px;">我的列表</button>
       </div>
       <div class="folder-grid" id="folderGrid" hidden></div>
       <div class="library-grid" id="libraryGrid">
-        <div class="empty" style="grid-column:1/-1;"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>
+        <div class="empty" style="grid-column:1/-1;"><div class="big">${icon('film', 44)}</div>视频库为空<br>下载完成后会出现在这里</div>
       </div>
     </section>
 
@@ -581,8 +587,8 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
       <div class="inline-player" id="privateInlinePlayer" hidden>
         <div class="inline-player-bar">
           <span class="inline-player-title" id="privateInlinePlayerTitle"></span>
-          <button class="nav-btn" id="privateCacheMenuBtn" style="min-height:32px;">⋯</button>
-          <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放">×</button>
+          <button class="nav-btn" id="privateCacheMenuBtn" style="min-height:32px;">${icon('ellipsis', 20)}</button>
+          <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放">${icon('xmark', 16)}</button>
         </div>
         <video id="privateInlinePlayerVideo" controls playsinline></video>
       </div>
@@ -591,16 +597,16 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
       </div>
       <div class="folder-grid" id="privateFolderGrid" hidden></div>
       <div class="library-grid" id="privateLibraryGrid">
-        <div class="empty" style="grid-column:1/-1;"><div class="big">🔒</div>私密列表为空<br>认证后此处显示私密内容</div>
+        <div class="empty" style="grid-column:1/-1;"><div class="big">${icon('lock', 44)}</div>私密列表为空<br>认证后此处显示私密内容</div>
       </div>
     </section>
   </main>
 
   <!-- 底部 Tab Bar -->
   <nav class="tabbar" id="tabbar">
-    <button class="tab active" data-tab="downloads"><span class="tab-icon">📥</span><span>下载</span></button>
-    <button class="tab" data-tab="browse"><span class="tab-icon">🎬</span><span>浏览</span></button>
-    <button class="tab" data-tab="settings"><span class="tab-icon">⚙️</span><span>设置</span></button>
+    <button class="tab active" data-tab="downloads"><span class="tab-icon">${icon('download', 22)}</span><span>下载</span></button>
+    <button class="tab" data-tab="browse"><span class="tab-icon">${icon('film', 22)}</span><span>浏览</span></button>
+    <button class="tab" data-tab="settings"><span class="tab-icon">${icon('gear', 22)}</span><span>设置</span></button>
   </nav>
 </div>
 
@@ -608,7 +614,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 <div class="batch-bar" id="batchBar" hidden>
   <button class="title-btn" id="batchSelectAllBtn">全选</button>
   <span class="batch-count" id="batchCount">已选 0 项</span>
-  <button class="title-btn danger" id="batchOpsBtn">操作 ▾</button>
+  <button class="title-btn danger" id="batchOpsBtn">操作 ${icon('chevron-down', 14)}</button>
   <button class="title-btn" id="batchCancelBtn">取消</button>
 </div>
 
@@ -665,6 +671,26 @@ function icon(name, size = 18) {
     trash: '<path d="M4.5 6.5h15M9 6.5V4.8a1.3 1.3 0 011.3-1.3h3.4A1.3 1.3 0 0115 4.8v1.7m3 0l-.8 11a1.6 1.6 0 01-1.6 1.5H8.4a1.6 1.6 0 01-1.6-1.5l-.8-11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
     dlFile: '<path d="M12 4v10m0 0l-3.4-3.4M12 14l3.4-3.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15.5V18a2 2 0 002 2h12a2 2 0 002-2v-2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
     xmark: '<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    // SF Symbols style additions
+    person: '<circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4 21c0-5 3.6-9 8-9s8 4 8 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    folder: '<path d="M2.5 6.5V19c0 .8.7 1.5 1.5 1.5h16c.8 0 1.5-.7 1.5-1.5V8.5c0-.8-.7-1.5-1.5-1.5h-7l-2-3h-7c-.8 0-1.5.7-1.5 1.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
+    'folder-plus': '<path d="M2.5 6.5V19c0 .8.7 1.5 1.5 1.5h16c.8 0 1.5-.7 1.5-1.5V8.5c0-.8-.7-1.5-1.5-1.5h-7l-2-3h-7c-.8 0-1.5.7-1.5 1.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M12 11v6M9 14h6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    lock: '<rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 11V7a4 4 0 118 0v4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    'lock-open': '<rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 11V7a4 4 0 018 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    square: '<rect x="3" y="3" width="18" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+    'square-grid': '<rect x="3" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+    'list-bullet': '<path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="4" cy="6" r="1.5" fill="currentColor"/><circle cx="4" cy="12" r="1.5" fill="currentColor"/><circle cx="4" cy="18" r="1.5" fill="currentColor"/>',
+    'chevron-left': '<path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'chevron-down': '<path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    plus: '<path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    'xmark-circle': '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    ellipsis: '<circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/>',
+    'arrow-up': '<path d="M12 20V4M5 11l7-7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    'arrow-down': '<path d="M12 4v16M5 13l7 7 7-7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
+    film: '<rect x="2" y="3" width="20" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M2 8h20M2 16h20" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="12" r="2" fill="none" stroke="currentColor" stroke-width="1.4"/>',
+    checkmark: '<path d="M6 12l4 4 8-8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'backspace': '<path d="M7 7l10 10M17 7L7 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    magnifying: '<circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16 16l4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
   };
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">${paths[name] || paths.play}</svg>`;
 }
@@ -931,7 +957,7 @@ function renderTasks(tasks) {
   $('taskCount').textContent = tasks.length ? `(${tasks.length})` : '';
   $('cleanCompletedBtn').hidden = !tasks.some(t => t.status === 'completed');
   if (!tasks.length) {
-    list.innerHTML = '<div class="empty"><div class="big">📥</div>还没有下载任务</div>';
+    list.innerHTML = '<div class="empty"><div class="big">${icon('download', 44)}</div>还没有下载任务</div>';
     return;
   }
   const sorted = [...tasks].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -968,7 +994,7 @@ async function loadLibrary() {
     libraryFiles = await res.json();
     renderBrowse();
   } catch {
-    $('libraryGrid').innerHTML = '<div class="empty"><div class="big">⚠️</div>视频库读取失败</div>';
+    $('libraryGrid').innerHTML = '<div class="empty"><div class="big">' + icon('xmark-circle', 44) + '</div>视频库读取失败</div>';
   }
 }
 
@@ -980,7 +1006,7 @@ function renderBrowse() {
   const view = settings.libraryView || 'grid';
 
   if (isList) {
-    crumb.innerHTML = `<button class="folder-back" onclick="backToRoot()">‹ 返回</button> ${escapeHtml(browseFolder.name)}`;
+    crumb.innerHTML = `<button class="folder-back" onclick="backToRoot()">${icon('chevron-left', 16)} 返回</button> ${escapeHtml(browseFolder.name)}`;
     folderEl.hidden = true;
     renderListVideos({
       grid, count: $('libraryCount'), folder: browseFolder,
@@ -999,12 +1025,12 @@ function renderRootFolders() {
   const el = $('folderGrid');
   const pubs = myLists.map((l) => `
     <div class="folder-card" data-enter="list" data-id="${l.id}" data-name="${escapeHtml(l.name)}" onclick="enterListFolder('${l.id}','${escapeHtml(l.name).replace(/'/g, "\\'")}',false)">
-      <div class="folder-icon">📁</div>
+      <div class="folder-icon">${icon('folder', 24)}</div>
       <div class="folder-name">${escapeHtml(l.name)}</div>
       <div class="folder-meta">${l.items.length} 个视频</div>
     </div>`).join('');
   const newCard = `<div class="folder-card" data-new="1" onclick="openCreateList(false)">
-        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">＋</div>
+        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">${icon('plus', 24)}</div>
         <div class="folder-name" style="color:var(--accent);">新建列表</div>
         <div class="folder-meta">按主题创建列表，将视频加入</div>
       </div>`;
@@ -1014,7 +1040,7 @@ function renderRootFolders() {
 function renderLibraryGrid(files, grid, view) {
   grid.className = view === 'list' ? 'library-list' : 'library-grid';
   if (!files.length) {
-    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>';
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">${icon('film', 44)}</div>视频库为空<br>下载完成后会出现在这里</div>';
     return;
   }
   grid.innerHTML = files.map((f) => {
@@ -1022,7 +1048,7 @@ function renderLibraryGrid(files, grid, view) {
     const progressHtml = pct === null ? '' : view === 'list'
       ? `<div class="video-progress">${pct}%</div>`
       : `<span class="video-progress">${pct}%</span>`;
-    const sel = selectionMode ? `<span class="sel-check">✓</span>` : '';
+    const sel = selectionMode ? `<span class="sel-check">${icon('checkmark', 14)}</span>` : '';
     const selCls = selectionMode && selectedSet.has(f.name) ? ' selected' : '';
     if (view === 'list') {
       return `
@@ -1073,7 +1099,7 @@ async function renderListVideos({ grid, count, folder, nameAttr, rmAttr, isPriva
     }
   } catch (_) {}
   if (!items.length) {
-    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">📂</div>列表为空<br>在浏览页选择视频后可加入</div>';
+    grid.innerHTML = '    <div class="empty" style="grid-column:1/-1;"><div class="big">${icon('folder', 44)}</div>列表为空<br>在浏览页选择视频后可加入</div>';
     return;
   }
   grid.innerHTML = items.map((i) => {
@@ -1441,7 +1467,7 @@ function openAddToList(isPrivate = false) {
   if (!listArr.length) { showToast('暂无列表，请先创建', true); return; }
   const items = listArr.map(l => `
     <div class="list-tile" onclick="addSelectedTo('${l.id}', false)">
-      <span class="list-tile-icon">📁</span>
+      <span class="list-tile-icon">${icon('folder', 20)}</span>
       <span class="list-tile-main">
         <span class="list-tile-name">${escapeHtml(l.name)}</span>
         <span class="list-tile-meta">${l.items.length} 项</span>
@@ -1451,7 +1477,7 @@ function openAddToList(isPrivate = false) {
     <div class="sheet-head"><span class="sheet-title">加入列表</span></div>
     <div class="sheet-body">
       ${items || '<div class="empty">暂无列表</div>'}
-      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="closeSheet();openCreateList(false)">＋ 新建列表</button>
+      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="closeSheet();openCreateList(false)">${icon('plus', 18)} 新建列表</button>
     </div>`);
 }
 
@@ -1460,7 +1486,7 @@ async function openPrivateListPicker() {
   if (!listArr.length) { showToast('暂无私密列表，请先创建', true); return; }
   const items = listArr.map(l => `
     <div class="list-tile" onclick="addSelectedTo('${l.id}', true)">
-      <span class="list-tile-icon private">🔒</span>
+      <span class="list-tile-icon private">${icon('lock', 20)}</span>
       <span class="list-tile-main">
         <span class="list-tile-name">${escapeHtml(l.name)}</span>
         <span class="list-tile-meta">${l.items.length} 项</span>
@@ -1492,10 +1518,10 @@ async function addSelectedTo(listId, isPrivate) {
 
 function openCreateList(isPrivate = false) {
   openSheet(`
-    <div class="sheet-head"><span class="sheet-title">创建${isPrivate ? '私密' : ''}列表</span><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-head"><span class="sheet-title">${isPrivate ? icon('lock', 18)+' ' : ''}创建${isPrivate ? '私密' : ''}列表</span><button class="sheet-close" onclick="closeSheet()">${icon('xmark', 16)}</button></div>
     <div class="sheet-body">
       <input class="text-input" id="newListName" placeholder="列表名称" maxlength="40" style="width:100%;">
-      ${isPrivate ? '<p class="pin-tip">🔒 私密列表仅凭密码可见</p>' : ''}
+      ${isPrivate ? '<p class="pin-tip">' + icon('lock', 14) + ' 私密列表仅凭密码可见</p>' : ''}
     </div>
     <div class="sheet-foot">
       <button class="btn-secondary" onclick="closeSheet()">取消</button>
@@ -1607,7 +1633,7 @@ function renderPinScreen() {
       <button class="${s.len === 6 ? 'active' : ''}" onclick="pinSetLen(6)">6 位</button>
     </div>` : '';
   openSheet(`
-    <div class="sheet-head"><span class="sheet-title">🔒 私密列表</span><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-head"><span class="sheet-title">${icon('lock', 18)} 私密列表</span><button class="sheet-close" onclick="closeSheet()">${icon('xmark', 16)}</button></div>
     <div class="sheet-body">
       <div class="pin-screen">
         <div class="pin-screen-title">${s.title}</div>
@@ -1616,7 +1642,7 @@ function renderPinScreen() {
         <div class="pin-dots">${dots}</div>
         <div class="numpad">
           ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button onclick="pinKey(${n})">${n}</button>`).join('')}
-          <button class="key-del" onclick="pinKey('del')">⌫</button>
+          <button class="key-del" onclick="pinKey('del')">${icon('backspace', 22)}</button>
           <button onclick="pinKey(0)">0</button>
           <button style="visibility:hidden"></button>
         </div>
@@ -1765,7 +1791,7 @@ function renderPrivateBrowse() {
   const isList = privateFolder && privateFolder.id;
 
   crumb.innerHTML = isList
-    ? `<button class="folder-back" onclick="privateFolder=null;renderPrivateBrowse()">‹ 私密列表</button> ${escapeHtml(privateFolder.name)}`
+    ? `<button class="folder-back" onclick="privateFolder=null;renderPrivateBrowse()">${icon('chevron-left', 16)} 私密列表</button> ${escapeHtml(privateFolder.name)}`
     : '私密列表';
   $('privateCount').textContent = '';
 
@@ -1781,16 +1807,16 @@ function renderPrivateBrowse() {
   }
   folderEl.hidden = false;
   const newBtn = `<div class="folder-card" data-pnew="1" onclick="openCreateList(true)">
-        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">＋</div>
+        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">${icon('plus', 24)}</div>
         <div class="folder-name" style="color:var(--accent);">新建私密列表</div>
         <div class="folder-meta">创建后即可加入视频</div>
       </div>`;
   if (!myPrivateLists.length) {
-    folderEl.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">🔒</div>暂无私密列表<br>点击下方新建</div>' + newBtn;
+    folderEl.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">' + icon('lock', 44) + '</div>暂无私密列表<br>点击下方新建</div>' + newBtn;
   } else {
     folderEl.innerHTML = myPrivateLists.map((l) => `
       <div class="folder-card" data-pfolder="${l.id}" data-pname="${escapeHtml(l.name)}" onclick="enterPrivateFolder('${l.id}','${escapeHtml(l.name).replace(/'/g, "\\'")}')">
-        <div class="folder-icon private">🔒<span class="folder-badge">${l.items.length}</span></div>
+        <div class="folder-icon private">${icon('lock', 24)}<span class="folder-badge">${l.items.length}</span></div>
         <div class="folder-name">${escapeHtml(l.name)}</div>
         <div class="folder-meta">${l.items.length} 个视频</div>
       </div>`).join('') + newBtn;
@@ -1961,7 +1987,7 @@ async function updateCacheBtnState(target, src) {
   try {
     const cache = await caches.open(VIDEO_CACHE);
     const hit = await cache.match(src);
-    btn.textContent = hit ? '✓' : '⋯';
+    btn.innerHTML = hit ? icon('checkmark', 16) : icon('ellipsis', 16);
     btn.classList.toggle('cached', !!hit);
   } catch (_) {}
 }
