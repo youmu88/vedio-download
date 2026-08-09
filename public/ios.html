@@ -156,7 +156,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
   transition: opacity 0.15s cubic-bezier(0.4,0,0.2,1), transform 0.08s cubic-bezier(0.4,0,0.2,1);
 }
 .btn-primary:active { opacity: 0.7; transform: scale(0.97); }
-  .btn-primary:disabled { opacity: 0.5; }
+.btn-primary:disabled { opacity: 0.5; }
 .btn-primary.loading { opacity: 0.7; pointer-events: none; }
 .btn-secondary {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
@@ -295,6 +295,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .switch input:checked + .track { background: var(--green); }
 .switch input:checked + .track + .thumb { transform: translateX(20px); }
 .num-input { width: 76px; text-align: center; background: var(--fill); border: none; border-radius: var(--radius-sm); padding: 10px 4px; font-size: 16px; color: var(--text); outline: none; }
+.chevron-right { width: 8px; height: 8px; border-right: 1.5px solid var(--text3); border-top: 1.5px solid var(--text3); transform: rotate(45deg); flex-shrink: 0; margin-right: 4px; }
 .status-row { justify-content: space-between; }
 .status-value { display: flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 500; }
 .status-dot { width: 8px; height: 8px; border-radius: 50%; }
@@ -408,12 +409,13 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .toast {
   position: fixed; bottom: calc(var(--tabbar-h) + var(--safe-b) + 24px); left: 50%;
   transform: translateX(-50%) translateY(12px);
-  background: rgba(28,28,30,0.78); color: #fff; font-size: 14px;
-  padding: 12px 20px; border-radius: var(--radius-full); z-index: 700;
+  background: rgba(28,28,30,0.72); color: #fff; font-size: 14px; font-weight: 500;
+  padding: 10px 18px; border-radius: var(--radius-md); z-index: 700;
   opacity: 0; pointer-events: none; transition: opacity 0.25s cubic-bezier(0,0,0.2,1), transform 0.25s cubic-bezier(0,0,0.2,1);
   max-width: 86vw; text-align: center;
-  backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%);
-  border: 0.5px solid rgba(255,255,255,0.12);
+  backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border: 0.5px solid rgba(255,255,255,0.14);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
 }
 .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 .toast.error { background: rgba(255,59,48,0.92); }
@@ -526,16 +528,16 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 
       <div class="group-title">隐私</div>
       <div class="group">
-        <div class="row setting-row">
+        <div class="row setting-row" style="cursor:pointer;" onclick="openPrivateEntry()">
           <div class="row-label">私密列表<small>4/6 位数字密码保护，默认不可见</small></div>
-          <button class="btn-secondary" id="privateEntryBtn">进入</button>
+          <span class="chevron-right"></span>
         </div>
       </div>
 
       <div class="group-title">缓存管理</div>
       <div class="group">
         <div class="row status-row"><span class="row-label">缓存占用</span><span class="status-value" id="cacheStats">—</span></div>
-        <div class="row"><button class="row-label" id="clearCacheBtn" style="color:var(--red);text-align:left;">一键清理全部缓存</button></div>
+        <div class="row" style="cursor:pointer;" onclick="clearAllCache()"><span class="row-label" style="color:var(--red);text-align:left;">一键清理全部缓存</span></div>
       </div>
 
       <div class="group-title">下载默认设置</div>
@@ -588,7 +590,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
         <div class="row status-row"><span class="row-label">ffmpeg / ffprobe</span><span class="status-value" id="healthEngines">—</span></div>
         <div class="row status-row"><span class="row-label">N_m3u8DL-RE</span><span class="status-value" id="healthNre">—</span></div>
         <div class="row status-row"><span class="row-label">磁盘空间</span><span class="status-value" id="healthDisk">—</span></div>
-        <div class="row"><button class="row-label" id="refreshHealth" style="color:var(--accent);text-align:left;">刷新状态</button></div>
+        <div class="row" style="cursor:pointer;" onclick="loadHealth()"><span class="row-label" style="color:var(--accent);text-align:left;">刷新状态</span></div>
       </div>
       <div class="footer-note">视频下载器 v2.1 · iOS 版</div>
     </section>
@@ -2153,10 +2155,10 @@ $('batchSelectAllBtn').addEventListener('click', toggleSelectAll);
 $('batchOpsBtn').addEventListener('click', openBatchOps);
 $('batchCancelBtn').addEventListener('click', exitSelectionMode);
 $('openListsBtn').addEventListener('click', () => { browseFolder = null; renderBrowse(); });
-$('privateEntryBtn').addEventListener('click', openPrivateEntry);
+// 私密列表入口已改为行点击（onclick="openPrivateEntry()"）
 $('privateLockBtn').addEventListener('click', closePrivateApp);
-$('clearCacheBtn').addEventListener('click', clearAllCache);
-$('refreshHealth').addEventListener('click', loadHealth);
+// 清理缓存已改为行点击（onclick="clearAllCache()"）
+// 刷新状态已改为行点击（onclick="loadHealth()"）
 $('parallelDownloadsInput').addEventListener('change', saveServerSettings);
 $('navBack').addEventListener('click', () => {
   if (privatePageActive) {
@@ -2170,6 +2172,7 @@ $('loginBtn').addEventListener('click', doLogin);
 $('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 $('loginUser').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
 $('logoutBtn')?.addEventListener('click', (e) => { e.preventDefault(); doLogout(); });
+// 设置页行点击（元素已改为 div+onclick 直接绑定，无需此处 addEventListener）
 
 bindSettingsForm();
 applyTheme();
