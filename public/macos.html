@@ -703,6 +703,10 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
           <div class="row status-row"><span class="row-label">磁盘空间</span><span class="status-value" id="healthDisk">—</span></div>
           <div class="row"><button class="row-label" id="refreshHealth" style="color:var(--accent);text-align:left;">刷新状态</button></div>
         </div>
+        <div class="group-title">账户</div>
+        <div class="group">
+          <div class="row" style="cursor:pointer;" onclick="doLogout()"><span class="row-label" style="color:var(--red);text-align:left;">退出登录</span></div>
+        </div>
         <div class="footer-note">视频下载器 v2.2 · Playwright 流拦截 + 多引擎下载</div>
       </div>
     </section>
@@ -1725,7 +1729,6 @@ function openModal(html) {
 function closeModal() {
   modalMask.hidden = true;
   modalCard.innerHTML = '';
-  if (privateCtx) { privateCtx = false; setPrivateToken(''); }
 }
 modalMask.addEventListener('click', (e) => { if (e.target === modalMask) closeModal(); });
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modalMask.hidden) closeModal(); });
@@ -2417,6 +2420,8 @@ function hideLogin() { const s = $('loginScreen'); if (s) s.classList.add('hidde
 async function doLogout() {
   try { await _origFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
   setAuthToken(''); setAuthUser('');
+  // 退出登录同时清除私密状态（安全）
+  setPrivateToken(''); privateCtx = false;
   socket.disconnect();
   showLogin();
   showToast('已退出登录');

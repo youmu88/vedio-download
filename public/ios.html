@@ -592,6 +592,11 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
         <div class="row status-row"><span class="row-label">磁盘空间</span><span class="status-value" id="healthDisk">—</span></div>
         <div class="row" style="cursor:pointer;" onclick="loadHealth()"><span class="row-label" style="color:var(--accent);text-align:left;">刷新状态</span></div>
       </div>
+
+      <div class="group-title">账户</div>
+      <div class="group">
+        <div class="row" style="cursor:pointer;" onclick="doLogout()"><span class="row-label" style="color:var(--red);text-align:left;">退出登录</span></div>
+      </div>
       <div class="footer-note">视频下载器 v2.1 · iOS 版</div>
     </section>
 
@@ -1367,7 +1372,6 @@ function openSheet(html) {
 function closeSheet() {
   sheetMask.hidden = true;
   sheetCard.innerHTML = '';
-  if (privateCtx) { privateCtx = false; setPrivateToken(''); }
 }
 sheetMask.addEventListener('click', (e) => { if (e.target === sheetMask) closeSheet(); });
 
@@ -2062,6 +2066,8 @@ function hideLogin() {
 async function doLogout() {
   try { await _origFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
   setAuthToken(''); setAuthUser('');
+  // 退出登录同时清除私密状态（安全）
+  setPrivateToken(''); privateCtx = false; privatePageActive = false;
   socket.disconnect();
   showLogin();
   showToast('已退出登录');
