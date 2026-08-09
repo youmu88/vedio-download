@@ -1245,7 +1245,9 @@ function closePlayer(target = 'browse') {
 function closePrivatePlayerOnly() { closePlayer('private'); }
 
 function playLibrary(name) {
-  openPlayer(name, `/downloads/${encodeURIComponent(name)}`, `file:${name}`);
+  const tk = getAuthToken();
+  const q = tk ? `?token=${encodeURIComponent(tk)}` : '';
+  openPlayer(name, `/downloads/${encodeURIComponent(name)}${q}`, `file:${name}`);
 }
 
 /** 私密 App 内播放：保持私密上下文（私密播放器） */

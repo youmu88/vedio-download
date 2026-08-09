@@ -90,6 +90,7 @@ function resolveToken(req) {
   return req.headers.authorization?.replace(/^Bearer\s+/i, '')
     || req.headers['x-auth-token']
     || parseCookies(req)[AUTH_COOKIE]
+    || req.query.token
     || null;
 }
 
@@ -120,9 +121,11 @@ app.post('/api/auth/login', (req, res) => {
     const token = crypto.randomBytes(32).toString('hex');
     listStore.createSession(token, user.username, SESSION_TTL_MS);
     // ⭐ 同时下发 cookie：video 标签播放 /downloads 时无法带 Authorization header
+    // SameSite=None; Secure 确保 video 子资源请求携带 cookie
     res.cookie(AUTH_COOKIE, token, {
       httpOnly: false,
-      sameSite: 'lax',
+      sameSite: 'none',
+      secure: true,
       maxAge: SESSION_TTL_MS,
       path: '/',
     });
