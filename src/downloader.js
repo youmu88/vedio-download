@@ -274,9 +274,12 @@ const bandwidthLimiter = new BandwidthLimiter();
  */
 export function startDownload(m3u8Url, headers, taskId, onProgress, options = {}) {
   return new Promise((resolve, reject) => {
-    // 可读输出名（默认 taskId，实际由 index.js 根据页面标题生成）
+    // ⭐ 可读输出名（默认 taskId，实际由 index.js 根据页面标题生成）
     const outputName = options.outputName || taskId;
-    const outputPath = path.join(DOWNLOADS_DIR, outputName);
+    // ⭐ 用户隔离：outputDir 由调用方传入（downloads/<username>/），缺省回退全局目录
+    const downloadBaseDir = options.outputDir || DOWNLOADS_DIR;
+    if (!fs.existsSync(downloadBaseDir)) fs.mkdirSync(downloadBaseDir, { recursive: true });
+    const outputPath = path.join(downloadBaseDir, outputName);
 
     // 注册带宽
     bandwidthLimiter.register(taskId, options.maxSpeed || null);
@@ -308,7 +311,7 @@ export function startDownload(m3u8Url, headers, taskId, onProgress, options = {}
       engine: options.engine || 'auto',
       formatType,
       onBytes: reportBytes,
-      resumeDir: path.join(DOWNLOADS_DIR, '.cache', taskId),
+      resumeDir: path.join(downloadBaseDir, '.cache', taskId),
       allowPartial: options.allowPartial || false,
     };
 
@@ -656,7 +659,7 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
 
     const args = [
       m3u8Url,
-      '--save-dir', DOWNLOADS_DIR,
+      '--save-dir', path.dirname(outputPath),
       '--save-name', path.basename(outputPath),
       '--thread-count', '4',
       '--auto-select',
@@ -683,7 +686,11 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
 
     onProgress({ percent: 0, speed: null, message: '启动 N_m3u8DL-RE 下载...' });
 
-    const proc = spawn(binPath, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    // ⭐ 结构性优化：将 N_m3u8DL-RE 的工作目录指定到用户下载目录（downloads/<user>/），
+    // 避免在项目根目录生成 task_xxx/ 中间产物；下载完成后清理残留
+    const workDir = path.dirname(outputPath);
+    if (!fs.existsSync(workDir)) fs.mkdirSync(workDir, { recursive: true });
+    const proc = spawn(binPath, args, { stdio: ['ignore', 'pipe', 'pipe'], cwd: workDir });
     let lastPercent = 0;
 
     const onData = (text) => {
@@ -713,6 +720,8 @@ function downloadWithN_m3u8DL_RE(m3u8Url, headers, outputPath, taskId, onProgres
 
         // 完整性校验统一在 startDownload 层执行
         cleanupTempDir(outputPath);
+        // ⭐ 清理 N_m3u8DL-RE 在工作目录残留的中间产物（meta.json/raw.m3u8/meta_selected.json 等）
+        cleanupNreWorkDir(workDir, outputPath);
         onProgress({ percent: 100, speed: null, message: '下载完成！' });
         resolve(finalPath);
       } else {
@@ -831,7 +840,7 @@ async function fixCctvVideo(videoPath, m3u8Url, outputPath, taskId, onProgress) 
   console.log(`[CCTV-Fix] 检测到 CCTV 视频: ${m3u8Url.slice(0, 80)}...`);
 
   const saveName = path.basename(outputPath);
-  const tsDir = path.join(DOWNLOADS_DIR, `${saveName}_tmp`);
+  const tsDir = path.join(path.dirname(outputPath), `${saveName}_tmp`);
 
   let fixed = false;
   let fixedFile = null;
@@ -870,10 +879,41 @@ async function fixCctvVideo(videoPath, m3u8Url, outputPath, taskId, onProgress) 
 
 function cleanupTempDir(outputPath) {
   const saveName = path.basename(outputPath);
-  const tmpDir = path.join(DOWNLOADS_DIR, `${saveName}_tmp`);
+  const tmpDir = path.join(path.dirname(outputPath), `${saveName}_tmp`);
   if (fs.existsSync(tmpDir)) {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     console.log(`[Cleanup] 已删除临时碎片目录: ${tmpDir}`);
+  }
+}
+
+/**
+ * 清理 N_m3u8DL-RE 在用户下载目录生成的中间产物
+ * （meta.json / meta_selected.json / raw.m3u8 / 分片临时文件等，仅下载期间存在）
+ * 只删除与本次任务输出同名的中间文件，绝不触碰已完成的视频文件
+ * @param {string} workDir - 本次任务的下载工作目录（downloads/<user>/）
+ * @param {string} outputPath - 本次任务的输出路径（含扩展名以外的部分）
+ */
+function cleanupNreWorkDir(workDir, outputPath) {
+  if (!workDir || !outputPath) return;
+  const base = path.basename(outputPath);
+  const intermediates = ['meta.json', 'meta_selected.json', 'raw.m3u8'];
+  const patterns = [
+    `${base}.meta.json`, `${base}.meta_selected.json`, `${base}.raw.m3u8`,
+    `${base}.mp4.meta.json`, `${base}.mp4.meta_selected.json`, `${base}.mp4.raw.m3u8`,
+    `${base}.ts.meta.json`, `${base}.ts.meta_selected.json`, `${base}.ts.raw.m3u8`,
+  ];
+  for (const f of patterns) {
+    const p = path.join(workDir, f);
+    if (fs.existsSync(p)) {
+      try { fs.unlinkSync(p); console.log(`[Cleanup] 已删除 N_m3u8DL-RE 中间产物: ${f}`); } catch (_) {}
+    }
+  }
+  // 兼容 N_m3u8DL-RE 直接生成到工作目录根的同名中间文件
+  for (const f of intermediates) {
+    const p = path.join(workDir, f);
+    if (fs.existsSync(p)) {
+      try { fs.unlinkSync(p); console.log(`[Cleanup] 已删除 N_m3u8DL-RE 中间产物: ${f}`); } catch (_) {}
+    }
   }
 }
 

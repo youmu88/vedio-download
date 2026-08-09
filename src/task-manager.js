@@ -69,6 +69,7 @@ class TaskManager extends EventEmitter {
     const task = {
       id: taskId,
       url,
+      owner: opts.owner || 'wilsonwen', // ⭐ 任务归属用户（用户隔离）
       status: TaskStatus.CREATED,
       m3u8Url: null,
       outputFile: null,
@@ -119,6 +120,17 @@ class TaskManager extends EventEmitter {
     return [...this.tasks.values()].sort(
       (a, b) => new Date(b.createdAt) - new Date(a.createdAt)
     );
+  }
+
+  /**
+   * 获取指定用户的任务（用户隔离）
+   * @param {string} owner - 用户名
+   * @returns {object[]}
+   */
+  listByOwner(owner) {
+    return [...this.tasks.values()]
+      .filter((t) => t.owner === owner)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
   }
 
   // ═══════════════════════════════════════════════════
@@ -393,7 +405,8 @@ class TaskManager extends EventEmitter {
     this.tasks.delete(taskId);
 
     this._saveToDisk();
-    this.emit('task-removed', taskId);
+    // ⭐ 用户隔离：携带 owner 供 socket 按用户广播
+    this.emit('task-removed', { taskId, owner: task.owner || 'wilsonwen' });
     return true;
   }
 

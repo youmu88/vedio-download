@@ -1,0 +1,2582 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#F2F2F7">
+<title>视频下载器 · macOS</title>
+<script src="/vendor/socket.io/socket.io.min.js"></script>
+<script src="/vendor/hls.js/hls.min.js"></script>
+<style>
+/* ═══════════════════════════════════════════════
+   macOS 设计系统（独立一套，不复用 iOS 变体）
+   ═══════════════════════════════════════════════ */
+:root {
+  color-scheme: light;
+  /* macOS Sonoma 系统色 */
+  --accent: #007AFF; --accent-press: #0062CC;
+  --green: #34C759; --red: #FF3B30; --orange: #FF9500; --gray: #8E8E93;
+  --bg: #F2F2F7; --card: #FFFFFF;
+  --fill: rgba(120,120,128,0.12); --fill-strong: rgba(120,120,128,0.22);
+  --separator: rgba(60,60,67,0.16);
+  --text: #000000; --text2: rgba(60,60,67,0.6); --text3: rgba(60,60,67,0.38);
+  --toolbar: rgba(246,246,250,0.78);
+  --desktop-bg: linear-gradient(180deg, #F4F4F6 0%, #DEDEE4 100%);
+  --shadow: 0 1px 2px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08);
+  --window-shadow: 0 18px 60px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.12);
+  --radius: 12px;
+  --tl-red: #FF5F57; --tl-yellow: #FEBC2E; --tl-green: #28C840;
+  --icon-sm: 36px; --touch-min: 44px;
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000; --card: #1C1C1E;
+  --fill: rgba(120,120,128,0.24); --fill-strong: rgba(120,120,128,0.34);
+  --separator: rgba(84,84,88,0.6);
+  --text: #FFFFFF; --text2: rgba(235,235,245,0.6); --text3: rgba(235,235,245,0.45);
+  --toolbar: rgba(18,18,20,0.78);
+  --desktop-bg: linear-gradient(180deg, #1C1C20 0%, #0A0A0C 100%);
+  --window-shadow: 0 18px 60px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font);
+  background: var(--bg); color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  transition: background 0.25s ease, color 0.25s ease;
+}
+button { font-family: inherit; border: none; background: none; color: inherit; cursor: pointer; }
+input, select { font-family: inherit; }
+::placeholder { color: var(--text3); }
+
+/* ── 菜单栏（macOS 顶部） ─────────────────────── */
+.menubar {
+  position: fixed; top: 0; left: 0; right: 0; height: 28px; z-index: 900;
+  display: flex; align-items: center; gap: 4px; padding: 0 10px;
+  background: var(--toolbar);
+  backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-bottom: 0.5px solid var(--separator);
+  font-size: 13px; user-select: none;
+}
+.mb-brand { font-weight: 700; padding: 0 8px; margin-right: 4px; }
+.mb-item { padding: 4px 10px; border-radius: 5px; cursor: default; }
+.mb-item:hover { background: var(--fill); }
+.mb-spacer { flex: 1; }
+.mb-right { display: flex; align-items: center; gap: 10px; padding: 0 8px; font-size: 12px; color: var(--text2); }
+.menu-pop {
+  position: fixed; z-index: 950; min-width: 210px;
+  background: var(--card); border: 0.5px solid var(--separator); border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.25);
+  padding: 5px; animation: menuFade 0.12s ease;
+}
+@keyframes menuFade { from { opacity: 0; transform: translateY(-4px); } }
+.menu-pop .mi {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 10px; border-radius: 5px; font-size: 13px; cursor: default;
+}
+.menu-pop .mi:hover { background: var(--accent); color: #fff; }
+.menu-pop .mi .kbd { margin-left: auto; font-size: 11px; color: var(--text3); }
+.menu-pop .mi:hover .kbd { color: rgba(255,255,255,0.7); }
+.menu-pop .sep { height: 1px; background: var(--separator); margin: 5px 8px; }
+
+/* ── 桌面舞台 ─────────────────────────────────── */
+.desktop { position: fixed; inset: 0; top: 28px; background: var(--desktop-bg); overflow: hidden; }
+.desktop-hint {
+  position: absolute; inset: 0; z-index: 0;
+  display: flex; align-items: center; justify-content: center;
+  text-align: center; color: var(--text3); font-size: 15px; line-height: 2;
+  pointer-events: none; transition: opacity 0.3s ease;
+}
+.desktop-hint.hidden { opacity: 0; }
+.desktop.wallpaper-aurora { background: linear-gradient(160deg, #E0EAFC 0%, #CFDEF3 100%); }
+[data-theme="dark"] .desktop.wallpaper-aurora { background: linear-gradient(160deg, #0F2027 0%, #203A43 55%, #2C5364 100%); }
+.desktop.wallpaper-sunset { background: linear-gradient(160deg, #FAD0C4 0%, #FFD1FF 100%); }
+[data-theme="dark"] .desktop.wallpaper-sunset { background: linear-gradient(160deg, #3A1C2E 0%, #6B2D4E 55%, #2C1B3D 100%); }
+.desktop.wallpaper-ocean { background: linear-gradient(160deg, #A1C4FD 0%, #C2E9FB 100%); }
+[data-theme="dark"] .desktop.wallpaper-ocean { background: linear-gradient(160deg, #0B486B 0%, #175D78 55%, #0E2F44 100%); }
+.desktop.wallpaper-graphite { background: linear-gradient(160deg, #E3E3E6 0%, #C7C7CC 100%); }
+[data-theme="dark"] .desktop.wallpaper-graphite { background: linear-gradient(160deg, #2A2A2E 0%, #161618 100%); }
+.desktop.wallpaper-landscape { background: linear-gradient(165deg, #7FB2E5 0%, #A8D0E6 30%, #D9E8EC 55%, #8FAE8B 100%); }
+[data-theme="dark"] .desktop.wallpaper-landscape { background: linear-gradient(165deg, #1B3A5C 0%, #2E5A7A 35%, #4A7A6A 70%, #2C3E50 100%); }
+.desktop.wallpaper-forest { background: linear-gradient(160deg, #C8E6C9 0%, #A5D6A7 40%, #6FA97B 100%); }
+[data-theme="dark"] .desktop.wallpaper-forest { background: linear-gradient(160deg, #1B3A2A 0%, #2E5C3E 55%, #1A2E22 100%); }
+.desktop.wallpaper-alpine { background: linear-gradient(165deg, #E3ECF5 0%, #B8CCE0 40%, #8FA8C8 70%, #6B82A0 100%); }
+[data-theme="dark"] .desktop.wallpaper-alpine { background: linear-gradient(165deg, #16202E 0%, #2B3A50 45%, #3E4F68 70%, #1B2430 100%); }
+.windows-layer { position: absolute; inset: 0; z-index: 1; }
+
+/* ── App 窗口 ─────────────────────────────────── */
+.window {
+  position: absolute; display: flex; flex-direction: column;
+  min-width: 300px; min-height: 220px;
+  background: var(--bg); border: 0.5px solid var(--separator);
+  border-radius: 12px; box-shadow: var(--window-shadow); overflow: hidden;
+}
+.window.closed { display: none; }
+.window.maximized { border-radius: 0; box-shadow: none; }
+.window.fullscreen {
+  inset: 0 !important; width: auto !important; height: auto !important;
+  border-radius: 0; box-shadow: none; z-index: 990;
+}
+.window.fullscreen[hidden] { display: none; }
+.titlebar {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px;
+  background: var(--toolbar);
+  backdrop-filter: blur(24px) saturate(180%); -webkit-backdrop-filter: blur(24px) saturate(180%);
+  border-bottom: 0.5px solid var(--separator);
+  user-select: none; cursor: default; flex-shrink: 0;
+}
+.traffic { display: flex; gap: 8px; flex-shrink: 0; }
+.tl {
+  width: 12px; height: 12px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 9px; font-weight: 700; line-height: 1; color: transparent;
+  transition: color 0.12s ease;
+}
+.tl.red { background: var(--tl-red); }
+.tl.yellow { background: var(--tl-yellow); }
+.tl.green { background: var(--tl-green); }
+.titlebar:hover .tl { color: rgba(0,0,0,0.55); }
+.tl.green.active { color: rgba(0,0,0,0.55); }
+.win-title { flex: 1; text-align: center; font-size: 13px; font-weight: 600; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.win-conn { flex-shrink: 0; }
+.win-content { flex: 1; overflow-y: auto; padding: 6px 18px 24px; overscroll-behavior: contain; }
+
+/* ── Dock ─────────────────────────────────────── */
+.dock {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 800;
+  display: flex; justify-content: center;
+  padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  pointer-events: none; transition: opacity 0.22s ease, transform 0.22s ease;
+}
+body.no-dock .dock { opacity: 0; transform: translateY(18px); pointer-events: none; }
+.dock-inner {
+  pointer-events: auto;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px;
+  background: var(--toolbar);
+  backdrop-filter: blur(30px) saturate(180%); -webkit-backdrop-filter: blur(30px) saturate(180%);
+  border: 0.5px solid var(--separator); border-radius: 20px;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.25);
+}
+.dock-icon {
+  position: relative; width: 54px; height: 54px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center; color: #fff;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.22);
+  transition: transform 0.18s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+.dock-icon:hover { transform: translateY(-6px) scale(1.1); }
+.dock-icon.active::after {
+  content: ''; position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%);
+  width: 5px; height: 5px; border-radius: 50%; background: var(--text2);
+}
+.dock-icon .label {
+  position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  background: rgba(28,28,30,0.92); color: #fff; font-size: 12px; font-weight: 500;
+  padding: 4px 12px; border-radius: 8px; opacity: 0; pointer-events: none;
+  transition: opacity 0.15s ease; white-space: nowrap;
+}
+.dock-icon:hover .label { opacity: 1; }
+.dock-icon.app-downloads { background: linear-gradient(145deg, #5AC8FA, #007AFF); }
+.dock-icon.app-browse { background: linear-gradient(145deg, #30D158, #0B9D4C); }
+.dock-icon.app-settings { background: linear-gradient(145deg, #98989D, #5E5E63); }
+.dock-icon.app-private { background: linear-gradient(145deg, #FF9F0A, #FF6482); }
+.dock-sep { width: 1px; height: 38px; background: var(--separator); margin: 0 4px; flex-shrink: 0; }
+.dock-conn { padding: 0 6px; flex-shrink: 0; }
+.conn-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--gray); box-shadow: 0 0 0 3px var(--fill); }
+.conn-dot.on { background: var(--green); }
+.conn-dot.off { background: var(--red); }
+
+/* ── 分组列表（macOS 设置风格） ───────────────── */
+.group-title {
+  font-size: 13px; font-weight: 600; color: var(--text2);
+  text-transform: uppercase; letter-spacing: 0.4px;
+  margin: 20px 16px 6px; display: flex; align-items: center; gap: 8px;
+}
+.view-toggle { margin-left: auto; display: flex; gap: 2px; padding: 2px; background: var(--fill); border-radius: 8px; }
+.view-toggle button {
+  width: 32px; height: 28px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 15px; color: var(--text2); transition: all 0.15s ease;
+}
+.view-toggle button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+.group { background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; min-height: 50px; border-bottom: 0.5px solid var(--separator);
+}
+.row:last-child { border-bottom: none; }
+.row-label { flex: 1; font-size: 15px; }
+.row-hint { font-size: 13px; color: var(--text2); }
+.form-row { display: flex; gap: 12px; padding: 16px; }
+.text-input {
+  flex: 1; min-width: 0; background: var(--fill); border-radius: 10px;
+  padding: 12px 16px; font-size: 15px; color: var(--text);
+  border: 1px solid transparent; outline: none;
+  transition: border 0.15s ease, background 0.15s ease;
+}
+.text-input:focus { border-color: var(--accent); background: var(--card); }
+select.text-input { appearance: none; -webkit-appearance: none; padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text3) 50%), linear-gradient(135deg, var(--text3) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+  background-size: 5px 5px; background-repeat: no-repeat;
+}
+.btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--accent); color: #fff; font-size: 15px; font-weight: 600;
+  padding: 12px 24px; border-radius: 10px; white-space: nowrap;
+  transition: background 0.15s ease, transform 0.08s ease;
+}
+.btn-primary:active { background: var(--accent-press); transform: scale(0.97); }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-secondary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--fill); color: var(--text); font-size: 14px; font-weight: 600;
+  padding: 12px 16px; border-radius: 10px; white-space: nowrap;
+  transition: background 0.15s ease, transform 0.08s ease;
+}
+.btn-secondary:active { transform: scale(0.97); }
+.btn-secondary.danger { color: var(--red); }
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--icon-sm); height: var(--icon-sm); border-radius: 10px; color: var(--accent);
+  transition: background 0.15s ease;
+}
+.icon-btn:hover { background: var(--fill); }
+.icon-btn.danger { color: var(--red); }
+.icon-btn.green { color: var(--green); }
+
+/* ── 任务列表 ─────────────────────────────────── */
+.task-row { align-items: flex-start; padding: 16px; }
+.task-icon {
+  width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--fill); color: var(--text2); font-size: 16px;
+}
+.task-icon.running { background: rgba(0,122,255,0.14); color: var(--accent); animation: pulse 1.2s infinite; }
+.task-icon.completed { background: rgba(52,199,89,0.14); color: var(--green); }
+.task-icon.failed { background: rgba(255,59,48,0.14); color: var(--red); }
+.task-icon.cancelled { background: rgba(255,149,0,0.14); color: var(--orange); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+.task-main { flex: 1; min-width: 0; }
+.task-url { font-size: 14px; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-meta { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 12px; color: var(--text2); flex-wrap: wrap; }
+.task-message { margin-top: 5px; font-size: 12px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-progress { height: 5px; border-radius: 3px; background: var(--fill); margin-top: 8px; overflow: hidden; }
+.task-progress > i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.25s ease; }
+.task-progress > i.done { background: var(--green); }
+.task-progress > i.failed { background: var(--red); }
+.task-error { margin-top: 8px; font-size: 12px; color: var(--red); background: rgba(255,59,48,0.08); border-radius: 8px; padding: 8px 10px; word-break: break-all; }
+.task-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.task-status { font-size: 11px; font-weight: 600; color: var(--text2); }
+.task-status.running { color: var(--accent); }
+.task-status.completed { color: var(--green); }
+.task-status.failed { color: var(--red); }
+.task-status.cancelled { color: var(--orange); }
+
+/* ── 视频库网格 ───────────────────────────────── */
+.library-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); padding: 0 4px 4px; }
+.video-card {
+  position: relative; border-radius: var(--radius); overflow: hidden;
+  background: var(--card); box-shadow: var(--shadow); cursor: pointer;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.video-card:hover { transform: translateY(-2px); box-shadow: 0 4px 16px rgba(0,0,0,0.12); }
+.video-thumb { position: relative; aspect-ratio: 16/9; background: linear-gradient(135deg, #5AC8FA, #007AFF); display: flex; align-items: center; justify-content: center; }
+.video-thumb .play-badge {
+  width: 40px; height: 40px; border-radius: 50%; background: rgba(255,255,255,0.85);
+  color: #007AFF; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.18); transition: transform 0.15s ease;
+}
+.video-card:hover .play-badge { transform: scale(1.1); }
+.video-name { font-size: 13px; font-weight: 600; padding: 10px 12px 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.video-meta { font-size: 11px; color: var(--text2); padding: 0 12px 12px; }
+.video-progress { position: absolute; top: 8px; right: 8px; background: rgba(0,0,0,0.55); color: #fff; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; backdrop-filter: blur(4px); }
+.video-delete {
+  position: absolute; top: 8px; left: 8px; width: 30px; height: 30px; border-radius: 8px;
+  background: rgba(0,0,0,0.45); color: #fff; display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 0.15s ease; backdrop-filter: blur(6px);
+}
+.video-card:hover .video-delete { opacity: 1; }
+@media (max-width: 700px) { .video-delete { opacity: 1; } }
+.library-list .video-card { display: flex; align-items: center; gap: 12px; padding: 10px 14px; margin-bottom: 8px; }
+.library-list .video-thumb { width: 92px; aspect-ratio: 16/9; border-radius: 9px; flex-shrink: 0; }
+.library-list .video-thumb .play-badge { width: 30px; height: 30px; }
+.library-list .video-info { flex: 1; min-width: 0; }
+.library-list .video-name { margin-top: 0; }
+.library-list .video-progress { position: static; width: 110px; margin-top: 6px; background: var(--fill); color: var(--text2); text-align: center; }
+.library-list .video-progress .bar { display: block; height: 4px; border-radius: 2px; background: var(--accent); margin-top: 3px; }
+.library-list .video-delete { position: static; opacity: 1; background: var(--fill); color: var(--red); width: 32px; height: 32px; }
+.empty { text-align: center; color: var(--text3); padding: 40px 20px; font-size: 14px; line-height: 1.7; }
+.empty .big { font-size: 42px; margin-bottom: 8px; }
+
+/* ── 设置页控件 ───────────────────────────────── */
+.setting-row { min-height: 52px; }
+.setting-row .row-label small { display: block; font-size: 12px; color: var(--text2); margin-top: 2px; font-weight: 400; }
+.switch { position: relative; width: 51px; height: 31px; flex-shrink: 0; }
+.switch input { display: none; }
+.switch .track { position: absolute; inset: 0; background: var(--fill-strong); border-radius: 16px; transition: background 0.2s ease; }
+.switch .thumb { position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.25); transition: transform 0.2s cubic-bezier(0.3, 1.2, 0.5, 1); }
+.switch input:checked + .track { background: var(--green); }
+.switch input:checked + .track + .thumb { transform: translateX(20px); }
+.num-input { width: 68px; text-align: center; background: var(--fill); border: none; border-radius: 8px; padding: 8px 4px; font-size: 14px; color: var(--text); outline: none; }
+.num-input:focus { box-shadow: 0 0 0 3px rgba(0,122,255,0.25); }
+.status-row { justify-content: space-between; }
+.status-value { display: flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 500; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; }
+.status-dot.ok { background: var(--green); }
+.status-dot.no { background: var(--red); }
+.status-dot.mid { background: var(--orange); }
+.footer-note { text-align: center; font-size: 12px; color: var(--text3); margin-top: 26px; }
+.segmented { display: flex; gap: 2px; padding: 2px; background: var(--fill); border-radius: 9px; }
+.segmented button { padding: 6px 12px; border-radius: 7px; font-size: 13px; font-weight: 600; color: var(--text2); transition: all 0.18s ease; }
+.segmented button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+
+/* ── 内嵌播放器 ───────────────────────────────── */
+.inline-player { margin-top: 12px; background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.inline-player-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 0.5px solid var(--separator); }
+.inline-player-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inline-player video { display: block; width: 100%; max-height: 360px; background: #000; }
+.inline-player-close { width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0; background: #28C840; color: rgba(0,0,0,0.65); font-size: 15px; font-weight: 700; line-height: 1; display: flex; align-items: center; justify-content: center; box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.12), 0 1px 3px rgba(0,0,0,0.18); transition: transform 0.12s ease, filter 0.12s ease; }
+.inline-player-close:hover { transform: scale(1.08); filter: brightness(1.06); }
+.title-btn.cached { color: var(--green); opacity: 0.7; }
+
+/* ── 壁纸选择器 ───────────────────────────────── */
+.wallpaper-picker { display: flex; gap: 10px; flex-shrink: 0; }
+.swatch { width: 40px; height: 40px; border-radius: 11px; border: 2px solid transparent; position: relative; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1); transition: transform 0.15s ease, border-color 0.15s ease; }
+.swatch:hover { transform: scale(1.08); }
+.swatch.active { border-color: var(--accent); }
+.swatch.s-default { background: linear-gradient(160deg, #E8E8ED, #C9C9D2); }
+[data-theme="dark"] .swatch.s-default { background: linear-gradient(160deg, #2C2C31, #101012); }
+.swatch.s-aurora { background: linear-gradient(160deg, #E0EAFC, #CFDEF3); }
+[data-theme="dark"] .swatch.s-aurora { background: linear-gradient(160deg, #0F2027, #2C5364); }
+.swatch.s-sunset { background: linear-gradient(160deg, #FAD0C4, #FFD1FF); }
+[data-theme="dark"] .swatch.s-sunset { background: linear-gradient(160deg, #3A1C2E, #6B2D4E); }
+.swatch.s-ocean { background: linear-gradient(160deg, #A1C4FD, #C2E9FB); }
+[data-theme="dark"] .swatch.s-ocean { background: linear-gradient(160deg, #0B486B, #175D78); }
+.swatch.s-graphite { background: linear-gradient(160deg, #E3E3E6, #C7C7CC); }
+[data-theme="dark"] .swatch.s-graphite { background: linear-gradient(160deg, #2A2A2E, #161618); }
+.swatch.s-landscape { background: linear-gradient(165deg, #7FB2E5, #A8D0E6 30%, #D9E8EC 55%, #8FAE8B); }
+[data-theme="dark"] .swatch.s-landscape { background: linear-gradient(165deg, #1B3A5C, #2E5A7A 35%, #4A7A6A 70%, #2C3E50); }
+.swatch.s-forest { background: linear-gradient(160deg, #C8E6C9, #A5D6A7 40%, #6FA97B); }
+[data-theme="dark"] .swatch.s-forest { background: linear-gradient(160deg, #1B3A2A, #2E5C3E 55%, #1A2E22); }
+.swatch.s-alpine { background: linear-gradient(165deg, #E3ECF5, #B8CCE0 40%, #8FA8C8 70%, #6B82A0); }
+[data-theme="dark"] .swatch.s-alpine { background: linear-gradient(165deg, #16202E, #2B3A50 45%, #3E4F68 70%, #1B2430); }
+.swatch .swatch-name { position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); font-size: 10px; color: var(--text2); white-space: nowrap; }
+
+/* ── 标题行小按钮 ─────────────────────────────── */
+.title-btn {
+  margin-left: auto; min-height: 32px; padding: 8px 12px; border-radius: 8px;
+  font-size: 12px; font-weight: 600; color: var(--accent);
+  background: var(--fill); transition: background 0.15s ease, color 0.15s ease; white-space: nowrap;
+}
+.title-btn:hover { background: var(--fill-strong); }
+.title-btn.danger { color: var(--red); }
+.title-btn.active { background: var(--accent); color: #fff; }
+.group-title > .view-toggle + .title-btn { margin-left: 0; }
+
+/* ── 选择模式 ─────────────────────────────────── */
+.sel-check {
+  position: absolute; top: 8px; left: 8px; z-index: 3;
+  width: 24px; height: 24px; border-radius: 50%;
+  background: rgba(0,0,0,0.45); color: transparent;
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  border: 1.5px solid rgba(255,255,255,0.85);
+  transition: all 0.15s ease; pointer-events: none; font-size: 13px; font-weight: 700;
+}
+.video-card.selected .sel-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+.selecting .video-card { cursor: pointer; }
+.selecting .video-card.selected::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 2px var(--accent); }
+.batch-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; margin: 8px 0; border-radius: 10px;
+  background: var(--fill); backdrop-filter: blur(12px);
+}
+.batch-count { flex: 1; font-size: 13px; font-weight: 600; color: var(--text2); }
+
+/* ── 弹窗 ─────────────────────────────────────── */
+.modal-mask { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,0.35); display: flex; align-items: flex-end; justify-content: center; animation: modalFade 0.18s ease; }
+@media (min-width: 700px) { .modal-mask { align-items: center; } }
+@keyframes modalFade { from { opacity: 0; } to { opacity: 1; } }
+.modal-card {
+  width: min(440px, calc(100vw - 48px)); max-height: min(78vh, 680px);
+  display: flex; flex-direction: column;
+  background: var(--bg); border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(0,0,0,0.4); overflow: hidden;
+  animation: modalUp 0.22s cubic-bezier(0.3, 1.3, 0.5, 1);
+}
+@keyframes modalUp { from { transform: translateY(24px) scale(0.98); opacity: 0; } to { transform: none; opacity: 1; } }
+.modal-head { display: flex; align-items: center; gap: 12px; padding: 16px; border-bottom: 0.5px solid var(--separator); }
+.modal-title { flex: 1; font-size: 15px; font-weight: 700; }
+.modal-close { width: 28px; height: 28px; border-radius: 50%; background: var(--fill); color: var(--text2); font-size: 15px; display: flex; align-items: center; justify-content: center; transition: background 0.15s ease; }
+.modal-close:hover { background: var(--fill-strong); }
+.modal-body { flex: 1; overflow-y: auto; padding: 12px 16px; overscroll-behavior: contain; }
+.modal-foot { display: flex; gap: 12px; padding: 12px 16px; border-top: 0.5px solid var(--separator); }
+.modal-foot .btn-primary { flex: 1; }
+
+/* ── 列表面板 ─────────────────────────────────── */
+.list-tile { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 8px; background: var(--card); border-radius: 12px; box-shadow: var(--shadow); cursor: pointer; transition: background 0.15s ease; }
+.list-tile:hover { background: var(--fill); }
+.list-tile-icon { width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--fill); color: var(--accent); font-size: 16px; }
+.list-tile-icon.private { color: var(--orange); }
+.list-tile-main { flex: 1; min-width: 0; }
+.list-tile-name { font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-tile-meta { font-size: 12px; color: var(--text2); margin-top: 4px; }
+.list-items { padding: 2px 0 10px; }
+.list-item-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 10px; margin-bottom: 8px; background: var(--fill); }
+.list-item-name { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-item-del { color: var(--red); font-size: 12px; padding: 8px; border-radius: 8px; flex-shrink: 0; min-height: 32px; }
+.list-item-del:hover { background: rgba(255,59,48,0.12); }
+
+/* ── PIN 密码界面 ─────────────────────────────── */
+.pin-field { display: flex; gap: 12px; justify-content: center; padding: 16px 0 8px; }
+.pin-input { width: 60px; height: 64px; text-align: center; font-size: 28px; font-weight: 700; background: var(--card); border: 1.5px solid var(--fill-strong); border-radius: 12px; color: var(--text); outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease; -webkit-text-security: disc; }
+.pin-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,122,255,0.18); }
+.pin-tip { text-align: center; font-size: 13px; color: var(--text2); padding: 4px 0 12px; }
+.pin-error { text-align: center; font-size: 13px; color: var(--red); min-height: 20px; }
+.action-sheet { padding: 6px 0; display: flex; flex-direction: column; }
+.as-title { text-align: center; font-size: 13px; font-weight: 600; color: var(--text2); padding: 10px 16px 2px; }
+.as-message { text-align: center; font-size: 12px; color: var(--text3); padding: 2px 16px 14px; line-height: 1.5; }
+.as-btn { margin: 0 12px 8px; padding: 14px; border-radius: 12px; font-size: 16px; font-weight: 600; color: var(--text); background: var(--card); text-align: center; transition: background 0.15s ease, transform 0.08s ease; }
+.as-btn:hover { background: var(--fill); }
+.as-btn:active { transform: scale(0.98); }
+.as-btn.danger { color: var(--red); }
+.as-btn.cancel { background: var(--fill); color: var(--text2); font-weight: 500; margin-top: 4px; }
+.pin-screen { text-align: center; padding: 6px 0 2px; }
+.pin-screen-title { font-size: 20px; font-weight: 700; letter-spacing: 0.3px; }
+.pin-screen-sub { font-size: 13px; color: var(--text2); margin-top: 6px; }
+.pin-dots { display: flex; gap: 12px; justify-content: center; margin: 24px 0 20px; }
+.pin-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--fill-strong); transition: background 0.15s ease, transform 0.15s ease; }
+.pin-dot.filled { background: var(--accent); transform: scale(1.15); }
+.pin-seg { display: flex; gap: 2px; justify-content: center; padding: 2px; background: var(--fill); border-radius: 10px; margin: 0 auto 20px; width: fit-content; }
+.pin-seg button { padding: 8px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; color: var(--text2); transition: all 0.15s ease; }
+.pin-seg button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+.numpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 272px; margin: 0 auto 4px; }
+.numpad button { height: 64px; border-radius: 14px; font-size: 24px; font-weight: 500; background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 2px 6px rgba(0,0,0,0.05); transition: transform 0.08s ease, background 0.15s ease; }
+.numpad button:active { transform: scale(0.94); background: var(--fill); }
+.numpad button.key-del { font-size: 20px; color: var(--text2); }
+
+/* ── 文件夹网格 ───────────────────────────────── */
+.folder-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); padding: 0 4px 4px; }
+.folder-card { cursor: pointer; user-select: none; border-radius: 12px; padding: 16px 12px; background: var(--card); box-shadow: var(--shadow); display: flex; flex-direction: column; align-items: center; gap: 8px; transition: transform 0.15s ease, background 0.15s ease; }
+.folder-card:hover { transform: translateY(-2px); background: var(--fill); }
+.folder-card .folder-icon { width: 52px; height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center; background: linear-gradient(145deg, #5AC8FA, #007AFF); color: #fff; font-size: 24px; box-shadow: var(--shadow); }
+.folder-card .folder-icon.private { background: linear-gradient(145deg, #FF9F0A, #FF6482); }
+.folder-badge { position: absolute; top: -6px; right: -6px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--red); color: #fff; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
+.folder-name { font-size: 13px; font-weight: 600; text-align: center; }
+.folder-meta { font-size: 11px; color: var(--text2); text-align: center; }
+
+/* ── 登录 ─────────────────────────────────────── */
+#loginScreen { position: fixed; inset: 0; z-index: 1200; display: flex; align-items: center; justify-content: center; background: var(--desktop-bg); }
+#loginScreen.hidden { display: none; }
+.login-card { width: min(360px, calc(100vw - 48px)); background: var(--card); border-radius: 18px; padding: 32px 28px 24px; box-shadow: var(--window-shadow); text-align: center; }
+.login-avatar { width: 72px; height: 72px; border-radius: 50%; background: var(--fill); font-size: 36px; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
+.login-title { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+.login-sub { font-size: 13px; color: var(--text2); margin-bottom: 18px; }
+.login-error { color: var(--red); font-size: 13px; min-height: 20px; margin-bottom: 6px; }
+
+/* ── Toast ────────────────────────────────────── */
+.toast {
+  position: fixed; bottom: 96px; left: 50%; transform: translateX(-50%) translateY(12px);
+  background: rgba(28,28,30,0.85); color: #fff; font-size: 13px;
+  padding: 10px 18px; border-radius: 999px; z-index: 2000;
+  opacity: 0; pointer-events: none; transition: opacity 0.25s ease, transform 0.25s ease;
+  max-width: 86vw; text-align: center;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.error { background: rgba(255,59,48,0.92); }
+</style>
+</head>
+<body>
+<!-- macOS 菜单栏 -->
+<div class="menubar" id="menuBar">
+  <span class="mb-brand">视频下载器</span>
+  <span class="mb-item" data-menu="app">App</span>
+  <span class="mb-item" data-menu="file">文件</span>
+  <span class="mb-item" data-menu="edit">编辑</span>
+  <span class="mb-item" data-menu="view">显示</span>
+  <span class="mb-item" data-menu="window">窗口</span>
+  <span class="mb-spacer"></span>
+  <span class="mb-right"><span class="conn-dot" id="menuConnDot"></span><span id="menuUser"></span></span>
+</div>
+
+<!-- 登录遮罩 -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-avatar">👤</div>
+    <div class="login-title">视频下载器</div>
+    <div class="login-sub">登录后访问全部功能</div>
+    <input class="text-input" id="loginUser" placeholder="用户名" autocomplete="username" style="width:100%;margin-bottom:10px;">
+    <input class="text-input" id="loginPass" type="password" placeholder="密码" autocomplete="current-password" style="width:100%;margin-bottom:14px;">
+    <div class="login-error" id="loginError"></div>
+    <button class="btn-primary" id="loginBtn" style="width:100%;">登录</button>
+    <button class="btn-secondary" id="registerBtn" disabled style="width:100%;margin-top:10px;opacity:0.5;" title="暂不开放注册">注册（暂未开放）</button>
+    <div class="login-sub" id="loginHint" style="margin-top:14px;font-size:12px;">
+      <span id="currentUserLabel"></span>
+      <a href="#" id="logoutBtn" style="color:var(--red);float:right;">退出登录</a>
+    </div>
+  </div>
+</div>
+
+<div class="desktop" id="desktop">
+  <div class="windows-layer">
+    <div class="desktop-hint" id="desktopHint">
+      <div>点击底部 Dock 图标打开 App<br>📥 下载 · 🎬 浏览 · ⚙️ 设置</div>
+    </div>
+
+    <!-- ═══ App：下载 ═══ -->
+    <section class="window closed" id="win-downloads" data-app="downloads">
+      <div class="titlebar">
+        <div class="traffic">
+          <button class="tl red" data-act="close" title="关闭">×</button>
+          <button class="tl yellow" data-act="min" title="最小化">−</button>
+          <button class="tl green" data-act="full" title="全屏">⤢</button>
+        </div>
+        <div class="win-title">下载</div>
+        <span class="win-conn conn-dot off" title="连接状态"></span>
+      </div>
+      <div class="win-content">
+        <div class="group" style="margin-top:12px;">
+          <div class="form-row">
+            <input class="text-input" id="urlInput" type="url" placeholder="粘贴视频播放页 URL 或 m3u8/mp4 直链" autocomplete="url" spellcheck="false">
+            <button class="btn-primary" id="downloadBtn">下载</button>
+          </div>
+        </div>
+        <div class="group-title">任务列表 <span id="taskCount" style="text-transform:none;"></span>
+          <button class="title-btn danger" id="cleanCompletedBtn" title="清理所有已完成任务记录（保留已下载文件）">清理已完成</button>
+        </div>
+        <div class="group" id="taskList">
+          <div class="empty"><div class="big">📥</div>还没有下载任务</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ App：浏览 ═══ -->
+    <section class="window closed" id="win-browse" data-app="browse">
+      <div class="titlebar">
+        <div class="traffic">
+          <button class="tl red" data-act="close" title="关闭">×</button>
+          <button class="tl yellow" data-act="min" title="最小化">−</button>
+          <button class="tl green" data-act="full" title="全屏">⤢</button>
+        </div>
+        <div class="win-title">浏览</div>
+        <span class="win-conn conn-dot off" title="连接状态"></span>
+      </div>
+      <div class="win-content">
+        <div class="inline-player" id="inlinePlayer" hidden>
+          <div class="inline-player-bar">
+            <span class="inline-player-title" id="inlinePlayerTitle"></span>
+            <button class="title-btn" id="cacheMenuBtn" title="缓存到本地">⋯</button>
+            <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放">×</button>
+          </div>
+          <video id="inlinePlayerVideo" controls playsinline></video>
+        </div>
+        <div class="group-title">在线播放</div>
+        <div class="group">
+          <div class="form-row">
+            <input class="text-input" id="playUrlInput" type="url" placeholder="粘贴 m3u8 / mp4 链接直接播放" spellcheck="false">
+            <button class="btn-primary" id="playUrlBtn">播放</button>
+          </div>
+        </div>
+        <div class="group-title">视频库 <span id="browseCrumb" style="text-transform:none;"></span><span id="libraryCount" style="text-transform:none;"></span>
+          <span class="view-toggle" id="libraryViewToggle">
+            <button data-view="grid" class="active" title="网格视图">▦</button>
+            <button data-view="list" title="列表视图">☰</button>
+          </span>
+          <button class="title-btn" id="selectModeBtn" title="进入选择模式">选择</button>
+          <button class="title-btn" id="openListsBtn" title="查看我的列表">我的列表</button>
+        </div>
+        <div class="batch-bar" id="batchBar" hidden>
+          <button class="title-btn" id="batchSelectAllBtn">全选</button>
+          <span class="batch-count" id="batchCount">已选 0 项</span>
+          <button class="title-btn danger" id="batchOpsBtn">操作 ▾</button>
+          <button class="title-btn" id="batchCancelBtn">取消</button>
+        </div>
+        <div class="folder-grid" id="folderGrid" hidden></div>
+        <div class="library-grid" id="libraryGrid">
+          <div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══ App：设置 ═══ -->
+    <section class="window closed" id="win-settings" data-app="settings">
+      <div class="titlebar">
+        <div class="traffic">
+          <button class="tl red" data-act="close" title="关闭">×</button>
+          <button class="tl yellow" data-act="min" title="最小化">−</button>
+          <button class="tl green" data-act="full" title="全屏">⤢</button>
+        </div>
+        <div class="win-title">设置</div>
+        <span class="win-conn conn-dot off" title="连接状态"></span>
+      </div>
+      <div class="win-content">
+        <div class="group-title" style="margin-top:12px;">外观</div>
+        <div class="group">
+          <div class="row setting-row" style="flex-wrap:wrap;">
+            <div class="row-label">壁纸<small>桌面背景，随主题切换深浅色</small></div>
+            <div class="wallpaper-picker" id="wallpaperPicker">
+              <button class="swatch s-default active" data-wallpaper="default"><span class="swatch-name">默认</span></button>
+              <button class="swatch s-aurora" data-wallpaper="aurora"><span class="swatch-name">极光</span></button>
+              <button class="swatch s-sunset" data-wallpaper="sunset"><span class="swatch-name">落日</span></button>
+              <button class="swatch s-ocean" data-wallpaper="ocean"><span class="swatch-name">海洋</span></button>
+              <button class="swatch s-graphite" data-wallpaper="graphite"><span class="swatch-name">石墨</span></button>
+              <button class="swatch s-landscape" data-wallpaper="landscape"><span class="swatch-name">风景</span></button>
+              <button class="swatch s-forest" data-wallpaper="forest"><span class="swatch-name">森林</span></button>
+              <button class="swatch s-alpine" data-wallpaper="alpine"><span class="swatch-name">山峦</span></button>
+            </div>
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">主题<small>自动跟随系统 / 浅色 / 深色</small></div>
+            <div class="segmented" id="themeSeg">
+              <button data-theme="auto">自动</button>
+              <button data-theme="light">浅色</button>
+              <button data-theme="dark">深色</button>
+            </div>
+          </div>
+        </div>
+        <div class="group-title">隐私</div>
+        <div class="group">
+          <div class="row setting-row">
+            <div class="row-label">私密列表<small>4/6 位数字密码保护，默认不可见</small></div>
+            <button class="btn-secondary" id="privateEntryBtn">进入</button>
+          </div>
+        </div>
+        <div class="group-title">缓存管理</div>
+        <div class="group">
+          <div class="row status-row"><span class="row-label">缓存占用</span><span class="status-value" id="cacheStats">—</span></div>
+          <div class="row"><button class="row-label" id="clearCacheBtn" style="color:var(--red);text-align:left;">一键清理全部缓存</button></div>
+        </div>
+        <div class="group-title">下载默认设置</div>
+        <div class="group">
+          <div class="row setting-row">
+            <div class="row-label">并行下载数<small>同时下载的任务数量（1～10）</small></div>
+            <input class="num-input" id="parallelDownloadsInput" type="number" min="1" max="10" value="3">
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">下载引擎<small>N_m3u8DL-RE → ffmpeg → JS</small></div>
+            <select class="text-input" id="engineSelect" style="width:130px;">
+              <option value="auto">自动选择</option>
+              <option value="n_m3u8dl_re">N_m3u8DL-RE</option>
+              <option value="ffmpeg">ffmpeg</option>
+              <option value="js">JS 原生</option>
+            </select>
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">输出格式</div>
+            <select class="text-input" id="formatSelect" style="width:110px;">
+              <option value="auto">自动</option>
+              <option value="mp4">MP4</option>
+              <option value="ts">TS</option>
+              <option value="mkv">MKV</option>
+            </select>
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">并行分片下载<small>HLS 分片并发加速</small></div>
+            <label class="switch"><input type="checkbox" id="parallelSwitch"><span class="track"></span><span class="thumb"></span></label>
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">分片并发数</div>
+            <input class="num-input" id="parallelCountInput" type="number" min="1" max="16" value="4">
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">单任务限速<small>MB/s，0 表示不限速</small></div>
+            <input class="num-input" id="maxSpeedInput" type="number" min="0" step="0.5" value="0">
+          </div>
+          <div class="row setting-row">
+            <div class="row-label">下载超时<small>分钟</small></div>
+            <input class="num-input" id="timeoutInput" type="number" min="1" max="600" value="30">
+          </div>
+        </div>
+        <div class="group-title">服务状态</div>
+        <div class="group" id="healthGroup">
+          <div class="row status-row"><span class="row-label">服务版本</span><span class="status-value" id="healthVersion">—</span></div>
+          <div class="row status-row"><span class="row-label">运行时间</span><span class="status-value" id="healthUptime">—</span></div>
+          <div class="row status-row"><span class="row-label">队列 / 运行中</span><span class="status-value" id="healthQueue">—</span></div>
+          <div class="row status-row"><span class="row-label">ffmpeg / ffprobe</span><span class="status-value" id="healthEngines">—</span></div>
+          <div class="row status-row"><span class="row-label">N_m3u8DL-RE</span><span class="status-value" id="healthNre">—</span></div>
+          <div class="row status-row"><span class="row-label">磁盘空间</span><span class="status-value" id="healthDisk">—</span></div>
+          <div class="row"><button class="row-label" id="refreshHealth" style="color:var(--accent);text-align:left;">刷新状态</button></div>
+        </div>
+        <div class="footer-note">视频下载器 v2.2 · Playwright 流拦截 + 多引擎下载</div>
+      </div>
+    </section>
+
+    <!-- ═══ App：私密浏览（临时，认证后创建，退出即销毁） ═══ -->
+    <section class="window closed" id="win-private" data-app="private">
+      <div class="titlebar">
+        <div class="traffic">
+          <button class="tl red" data-act="close" title="关闭">×</button>
+          <button class="tl yellow" data-act="min" title="最小化">−</button>
+          <button class="tl green" data-act="full" title="全屏">⤢</button>
+        </div>
+        <div class="win-title">🔒 私密列表</div>
+        <span class="win-conn conn-dot off" title="连接状态"></span>
+      </div>
+      <div class="win-content">
+        <div class="inline-player" id="privateInlinePlayer" hidden>
+          <div class="inline-player-bar">
+            <span class="inline-player-title" id="privateInlinePlayerTitle"></span>
+            <button class="title-btn" id="privateCacheMenuBtn" title="缓存到本地">⋯</button>
+            <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放">×</button>
+          </div>
+          <video id="privateInlinePlayerVideo" controls playsinline></video>
+        </div>
+        <div class="group-title">私密视频库 <span id="privateBrowseCrumb" style="text-transform:none;"></span><span id="privateCount" style="text-transform:none;"></span>
+          <span class="view-toggle" id="privateViewToggle">
+            <button data-view="grid" class="active" title="网格视图">▦</button>
+            <button data-view="list" title="列表视图">☰</button>
+          </span>
+          <button class="title-btn danger" id="privateLockBtn" title="锁定并退出私密浏览">锁定</button>
+        </div>
+        <div class="folder-grid" id="privateFolderGrid" hidden></div>
+        <div class="library-grid" id="privateLibraryGrid">
+          <div class="empty"><div class="big">🔒</div>私密列表为空<br>认证后此处显示私密内容</div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- Dock -->
+  <div class="dock" id="dock">
+    <div class="dock-inner">
+      <button class="dock-icon app-downloads active" data-app="downloads" title="下载"><span class="label">下载</span></button>
+      <button class="dock-icon app-browse" data-app="browse" title="浏览"><span class="label">浏览</span></button>
+      <button class="dock-icon app-settings" data-app="settings" title="设置"><span class="label">设置</span></button>
+      <span class="dock-sep" id="privateDockSep" hidden></span>
+      <button class="dock-icon app-private" id="privateDockIcon" data-app="private" title="🔒 私密列表" hidden><span class="label">私密</span></button>
+      <span class="dock-sep"></span>
+      <span class="dock-conn conn-dot off" id="connDot" title="连接状态"></span>
+    </div>
+  </div>
+</div>
+
+<!-- 通用弹窗 -->
+<div class="modal-mask" id="modalMask" hidden>
+  <div class="modal-card" id="modalCard"></div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// 工具函数
+// ═══════════════════════════════════════════════════════
+const $ = (id) => document.getElementById(id);
+const escapeHtml = (s) => {
+  if (!s) return '';
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+};
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0, v = bytes;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+function formatTime(sec) {
+  if (!isFinite(sec) || sec < 0) return '00:00';
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const mm = String(m).padStart(2, '0'), ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+function formatDate(ts) {
+  const d = new Date(ts);
+  const diff = Date.now() - d;
+  if (diff < 60 * 1000) return '刚刚';
+  if (diff < 3600 * 1000) return `${Math.floor(diff / 60000)} 分钟前`;
+  if (diff < 24 * 3600 * 1000) return `${Math.floor(diff / 3600000)} 小时前`;
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+// ═══════════════════════════════════════════════════════
+// 图标（内联 SVG，Apple 风格）
+// ═══════════════════════════════════════════════════════
+function icon(name, size = 18) {
+  const paths = {
+    download: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 8.5v6m0 0l-2.4-2.4M12 14.5l2.4-2.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    play: '<path d="M8 5.5v13l11-6.5z" fill="currentColor"/>',
+    playRect: '<rect x="3" y="5" width="18" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 9.2v5.6l4.8-2.8z" fill="currentColor"/>',
+    gear: '<circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2.8l1 2.2 2.4-.6 1 2.1 2.3.8-.3 2.4 2 1.2-1.5 1.9 1.5 1.9-2 1.2.3 2.4-2.3.8-1 2.1-2.4-.6-1 2.2-1-2.2-2.4.6-1-2.1-2.3-.8.3-2.4-2-1.2 1.5-1.9L2.3 12l2-1.2-.3-2.4 2.3-.8 1-2.1 2.4.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
+    stop: '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/>',
+    retry: '<path d="M4.5 12a7.5 7.5 0 101.6-4.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M4.8 3.5v4.5h4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+    trash: '<path d="M4.5 6.5h15M9 6.5V4.8a1.3 1.3 0 011.3-1.3h3.4A1.3 1.3 0 0115 4.8v1.7m3 0l-.8 11a1.6 1.6 0 01-1.6 1.5H8.4a1.6 1.6 0 01-1.6-1.5l-.8-11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    dlFile: '<path d="M12 4v10m0 0l-3.4-3.4M12 14l3.4-3.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15.5V18a2 2 0 002 2h12a2 2 0 002-2v-2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+    xmark: '<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  };
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">${paths[name] || paths.play}</svg>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// 窗口管理器（macOS：菜单栏 + 多窗口 + Dock）
+// ═══════════════════════════════════════════════════════
+const APP_ORDER = ['downloads', 'browse', 'settings', 'private'];
+const winState = {};
+let activeApp = 'downloads';
+let zTop = 20;
+APP_ORDER.forEach((name) => { winState[name] = { open: false, minimized: false, maximized: false, fullscreen: false, rect: null, prevFull: null }; });
+
+function dockTop() { return $('dock').getBoundingClientRect().top; }
+function computeDefaultRect(name, idx) {
+  const maxH = Math.max(320, dockTop() - 40);
+  const w = Math.min(680, window.innerWidth - 80);
+  const h = Math.min(620, maxH);
+  const x = Math.max(24, (window.innerWidth - w) / 2 - 140 + idx * 48);
+  const y = Math.max(20, (maxH - h) / 2 - 20 + idx * 30);
+  return { x, y, w, h };
+}
+function applyRect(win, r) {
+  win.style.left = `${r.x}px`; win.style.top = `${r.y}px`;
+  win.style.width = `${r.w}px`; win.style.height = `${r.h}px`;
+  win.style.right = 'auto'; win.style.bottom = 'auto';
+}
+function currentRect(win) {
+  const r = win.getBoundingClientRect();
+  return { x: r.left, y: r.top, w: r.width, h: r.height };
+}
+function updateDock() {
+  document.querySelectorAll('.dock-icon').forEach((b) => b.classList.toggle('active', b.dataset.app === activeApp));
+}
+function updateNoDock() {
+  const anyFull = APP_ORDER.some((name) => winState[name].fullscreen);
+  document.body.classList.toggle('no-dock', anyFull);
+}
+function updateDesktopHint() {
+  const anyOpen = APP_ORDER.some((name) => winState[name].open && !winState[name].minimized);
+  $('desktopHint').classList.toggle('hidden', anyOpen);
+}
+function focusApp(name) {
+  const win = $('win-' + name);
+  win.classList.remove('closed');
+  winState[name].open = true;
+  winState[name].minimized = false;
+  win.style.zIndex = winState[name].fullscreen ? 999 : ++zTop;
+  activeApp = name;
+  updateDock();
+  updateDesktopHint();
+  if (name === 'browse') { loadLibrary(); loadLists(); }
+  if (name === 'settings') { loadServerSettings(); loadHealth(); }
+  if (name === 'private') { loadPrivateLists().then(renderPrivateBrowse); }
+}
+function ensureOpen(name) {
+  if (winState[name].open && !winState[name].minimized) { focusApp(name); return; }
+  if (!winState[name].rect) {
+    winState[name].rect = computeDefaultRect(name, APP_ORDER.indexOf(name));
+    applyRect($('win-' + name), winState[name].rect);
+  }
+  focusApp(name);
+}
+function closeApp(name) {
+  clearFullscreenState(name);
+  winState[name].open = false;
+  winState[name].minimized = false;
+  $('win-' + name).classList.add('closed');
+  if (activeApp === name) activeApp = null;
+  updateDock();
+  updateNoDock();
+  updateDesktopHint();
+  try {
+    if (name === 'browse' && $('inlinePlayer') && !$('inlinePlayer').hidden) closePlayer('browse');
+    else if (name === 'private' && $('privateInlinePlayer') && !$('privateInlinePlayer').hidden) closePrivatePlayerOnly();
+  } catch (_) {}
+  if (name === 'private') {
+    $('privateDockIcon').hidden = true;
+    $('privateDockSep').hidden = true;
+    setPrivateToken('');
+    privateCtx = false;
+    privateFolder = null;
+  }
+}
+function minimizeApp(name) {
+  clearFullscreenState(name);
+  winState[name].minimized = true;
+  $('win-' + name).classList.add('closed');
+  if (activeApp === name) activeApp = null;
+  updateDock();
+  updateNoDock();
+  updateDesktopHint();
+  try {
+    if (name === 'browse' && $('inlinePlayer') && !$('inlinePlayer').hidden) closePlayer('browse');
+    else if (name === 'private' && $('privateInlinePlayer') && !$('privateInlinePlayer').hidden) closePrivatePlayerOnly();
+  } catch (_) {}
+}
+function clearFullscreenState(name) {
+  const st = winState[name];
+  if (!st.fullscreen) return;
+  st.fullscreen = false;
+  const win = $('win-' + name);
+  win.classList.remove('fullscreen');
+  win.querySelector('.tl.green').classList.remove('active');
+}
+function maximizeApp(name) {
+  const st = winState[name];
+  const win = $('win-' + name);
+  if (st.fullscreen) { exitFullscreen(name); return; }
+  if (st.maximized) {
+    st.maximized = false;
+    win.classList.remove('maximized');
+    applyRect(win, st.rect || computeDefaultRect(name, APP_ORDER.indexOf(name)));
+  } else {
+    st.rect = currentRect(win);
+    st.maximized = true;
+    win.classList.add('maximized');
+    win.style.left = '0'; win.style.top = '0'; win.style.right = '0';
+    win.style.bottom = `${Math.max(0, window.innerHeight - dockTop())}px`;
+    win.style.width = 'auto'; win.style.height = 'auto';
+  }
+}
+function toggleFullscreen(name) {
+  const st = winState[name];
+  const win = $('win-' + name);
+  if (st.fullscreen) { exitFullscreen(name); return; }
+  st.prevFull = { maximized: st.maximized, rect: currentRect(win) };
+  st.fullscreen = true;
+  st.maximized = false;
+  win.classList.add('fullscreen');
+  win.classList.remove('maximized');
+  win.style.inset = '0';
+  win.style.width = 'auto'; win.style.height = 'auto';
+  win.style.zIndex = 999;
+  win.querySelector('.tl.green').classList.add('active');
+  activeApp = name;
+  updateNoDock();
+  updateDock();
+}
+function exitFullscreen(name) {
+  const st = winState[name];
+  const win = $('win-' + name);
+  st.fullscreen = false;
+  updateNoDock();
+  win.classList.remove('fullscreen');
+  win.querySelector('.tl.green').classList.remove('active');
+  win.style.zIndex = ++zTop;
+  if (st.prevFull?.maximized) {
+    st.maximized = true;
+    win.classList.add('maximized');
+    win.style.left = '0'; win.style.top = '0'; win.style.right = '0';
+    win.style.bottom = `${Math.max(0, window.innerHeight - dockTop())}px`;
+    win.style.width = 'auto'; win.style.height = 'auto';
+  } else {
+    applyRect(win, st.prevFull?.rect || st.rect || computeDefaultRect(name, APP_ORDER.indexOf(name)));
+  }
+}
+
+// 窗口事件（拖动 / 双击最大化 / 红黄绿按钮）
+APP_ORDER.forEach((name) => {
+  const win = $('win-' + name);
+  const bar = win.querySelector('.titlebar');
+  bar.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.traffic')) return;
+    const st = winState[name];
+    if (st.maximized || st.fullscreen) return;
+    const r = win.getBoundingClientRect();
+    const dx = e.clientX - r.left;
+    const dy = e.clientY - r.top;
+    const move = (ev) => {
+      const x = Math.min(window.innerWidth - 40, Math.max(0, ev.clientX - dx));
+      const y = Math.min(Math.max(0, dockTop() - 40), Math.max(0, ev.clientY - dy));
+      win.style.left = `${x}px`; win.style.top = `${y}px`;
+      win.style.right = 'auto'; win.style.bottom = 'auto';
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
+  bar.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.traffic')) return;
+    maximizeApp(name);
+  });
+  win.querySelectorAll('.traffic .tl').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const act = btn.dataset.act;
+      if (act === 'close') closeApp(name);
+      else if (act === 'min') minimizeApp(name);
+      else toggleFullscreen(name);
+    });
+  });
+});
+
+// Dock 图标点击
+document.querySelectorAll('.dock-icon').forEach((btn) => {
+  btn.addEventListener('click', () => ensureOpen(btn.dataset.app));
+});
+window.addEventListener('resize', () => {
+  APP_ORDER.forEach((name) => {
+    const st = winState[name];
+    if (st.maximized && !st.fullscreen && winState[name].open) {
+      const win = $('win-' + name);
+      win.style.bottom = `${Math.max(0, window.innerHeight - dockTop())}px`;
+    }
+  });
+});
+
+// ── macOS 菜单栏（App/文件/编辑/显示/窗口） ──
+const menuItems = {
+  app: [
+    { label: '关于视频下载器', action: () => showToast('视频下载器 · macOS 桌面版') },
+    { sep: true },
+    { label: '退出登录…', action: () => doLogout() },
+  ],
+  file: [
+    { label: '新建下载任务 ⌘N', action: () => { ensureOpen('downloads'); setTimeout(() => $('urlInput')?.focus(), 80); } },
+    { label: '关闭窗口 ⌘W', action: () => { if (activeApp) closeApp(activeApp); } },
+  ],
+  edit: [
+    { label: '聚焦地址栏 ⌘F', action: () => { ensureOpen('downloads'); setTimeout(() => $('urlInput')?.focus(), 80); } },
+    { label: '聚焦播放链接 ⌘L', action: () => { ensureOpen('browse'); setTimeout(() => $('playUrlInput')?.focus(), 80); } },
+  ],
+  view: [
+    { label: '浅色外观', action: () => { settings.theme = 'light'; saveSettings(); applyTheme(); } },
+    { label: '深色外观', action: () => { settings.theme = 'dark'; saveSettings(); applyTheme(); } },
+    { label: '自动外观', action: () => { settings.theme = 'auto'; saveSettings(); applyTheme(); } },
+    { sep: true },
+    { label: '进入全屏 ⌃⌘F', action: () => { if (activeApp) toggleFullscreen(activeApp); } },
+  ],
+  window: [
+    { label: '下载 ⌘1', action: () => ensureOpen('downloads') },
+    { label: '浏览 ⌘2', action: () => ensureOpen('browse') },
+    { label: '设置 ⌘3', action: () => ensureOpen('settings') },
+  ],
+};
+function buildMenus() {
+  document.querySelectorAll('#menuBar .mb-item[data-menu]').forEach((item) => {
+    item.addEventListener('click', (e) => {
+      e.stopPropagation();
+      document.querySelectorAll('#menuBar .menu-pop').forEach((p) => p.remove());
+      const key = item.dataset.menu;
+      const items = menuItems[key] || [];
+      const pop = document.createElement('div');
+      pop.className = 'menu-pop';
+      pop.innerHTML = items.map((it) => it.sep
+        ? '<div class="menu-sep"></div>'
+        : `<button class="menu-opt" data-act="${key}">${escapeHtml(it.label)}</button>`).join('');
+      document.body.appendChild(pop);
+      const r = item.getBoundingClientRect();
+      pop.style.left = `${r.left}px`;
+      pop.style.top = `${r.bottom + 4}px`;
+      pop.querySelectorAll('.menu-opt').forEach((btn, i) => {
+        btn.addEventListener('click', () => { pop.remove(); items[i].action && items[i].action(); });
+      });
+    });
+  });
+  document.addEventListener('click', () => document.querySelectorAll('#menuBar .menu-pop').forEach((p) => p.remove()));
+}
+buildMenus();
+
+// ── macOS 全局快捷键 ──
+document.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod) return;
+  const k = e.key.toLowerCase();
+  if (k === 'n') { e.preventDefault(); ensureOpen('downloads'); setTimeout(() => $('urlInput')?.focus(), 80); }
+  else if (k === 'w') { e.preventDefault(); if (activeApp) closeApp(activeApp); }
+  else if (k === 'f') { e.preventDefault(); ensureOpen('downloads'); setTimeout(() => $('urlInput')?.focus(), 80); }
+  else if (k === 'l') { e.preventDefault(); ensureOpen('browse'); setTimeout(() => $('playUrlInput')?.focus(), 80); }
+  else if (k === '1') { e.preventDefault(); ensureOpen('downloads'); }
+  else if (k === '2') { e.preventDefault(); ensureOpen('browse'); }
+  else if (k === '3') { e.preventDefault(); ensureOpen('settings'); }
+  else if (e.key === 'Enter' && activeApp === 'downloads') { e.preventDefault(); submitDownload(); }
+});
+
+// ═══════════════════════════════════════════════════════
+// 设置持久化
+// ═══════════════════════════════════════════════════════
+const SETTINGS_KEY = 'vd.settings.v2';
+const defaultSettings = {
+  theme: 'auto', wallpaper: 'default', engine: 'auto', format: 'auto',
+  parallel: false, parallelCount: 4, maxSpeedMB: 0, timeoutMin: 30, libraryView: 'grid',
+};
+function loadSettings() {
+  try { return { ...defaultSettings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
+  catch { return { ...defaultSettings }; }
+}
+function saveSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
+let settings = loadSettings();
+function applyTheme() {
+  const dark = settings.theme === 'dark' ||
+    (settings.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', dark ? '#000000' : '#F2F2F7');
+  document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('active', b.dataset.theme === settings.theme));
+}
+function applyWallpaper() {
+  const name = settings.wallpaper || 'default';
+  $('desktop').className = 'desktop' + (name === 'default' ? '' : ` wallpaper-${name}`);
+  document.querySelectorAll('#wallpaperPicker .swatch').forEach((s) => s.classList.toggle('active', s.dataset.wallpaper === name));
+}
+function renderSettingsForm() {
+  $('engineSelect').value = settings.engine;
+  $('formatSelect').value = settings.format;
+  $('parallelSwitch').checked = settings.parallel;
+  $('parallelCountInput').value = settings.parallelCount;
+  $('maxSpeedInput').value = settings.maxSpeedMB;
+  $('timeoutInput').value = settings.timeoutMin;
+}
+function bindSettingsForm() {
+  $('themeSeg').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    settings.theme = btn.dataset.theme;
+    saveSettings(); applyTheme();
+  });
+  $('wallpaperPicker').addEventListener('click', (e) => {
+    const btn = e.target.closest('.swatch');
+    if (!btn) return;
+    settings.wallpaper = btn.dataset.wallpaper;
+    saveSettings(); applyWallpaper();
+  });
+  $('engineSelect').addEventListener('change', (e) => { settings.engine = e.target.value; saveSettings(); });
+  $('formatSelect').addEventListener('change', (e) => { settings.format = e.target.value; saveSettings(); });
+  $('parallelSwitch').addEventListener('change', (e) => { settings.parallel = e.target.checked; saveSettings(); });
+  $('parallelCountInput').addEventListener('change', (e) => { settings.parallelCount = Math.min(16, Math.max(1, parseInt(e.target.value, 10) || 4)); e.target.value = settings.parallelCount; saveSettings(); });
+  $('maxSpeedInput').addEventListener('change', (e) => { settings.maxSpeedMB = Math.max(0, parseFloat(e.target.value) || 0); e.target.value = settings.maxSpeedMB; saveSettings(); });
+  $('timeoutInput').addEventListener('change', (e) => { settings.timeoutMin = Math.min(600, Math.max(1, parseInt(e.target.value, 10) || 30)); e.target.value = settings.timeoutMin; saveSettings(); });
+  $('libraryViewToggle') && $('libraryViewToggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    settings.libraryView = btn.dataset.view;
+    saveSettings();
+    document.querySelectorAll('#libraryViewToggle button').forEach(b => b.classList.toggle('active', b === btn));
+    renderBrowse();
+  });
+  $('privateViewToggle') && $('privateViewToggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    settings.libraryView = btn.dataset.view;
+    saveSettings();
+    document.querySelectorAll('#privateViewToggle button').forEach(b => b.classList.toggle('active', b === btn));
+    renderPrivateBrowse();
+  });
+}
+async function loadServerSettings() {
+  try {
+    const res = await fetch('/api/settings');
+    if (res.ok) {
+      const data = await res.json();
+      $('parallelDownloadsInput').value = data.maxConcurrent ?? 3;
+    }
+  } catch {}
+}
+async function saveServerSettings() {
+  const value = Math.min(10, Math.max(1, parseInt($('parallelDownloadsInput').value, 10) || 3));
+  $('parallelDownloadsInput').value = value;
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxConcurrent: value }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error || '保存失败', true);
+      return;
+    }
+    showToast(`并行下载数已设为 ${value}`);
+  } catch (err) { showToast(err.message, true); }
+}
+
+// ═══════════════════════════════════════════════════════
+// 播放记录
+// ═══════════════════════════════════════════════════════
+const HISTORY_KEY = 'vd.history.v2';
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
+  catch { return []; }
+}
+let history = loadHistory();
+function saveHistory() { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50))); }
+function upsertHistory(entry) {
+  history = history.filter(h => h.id !== entry.id);
+  history.unshift(entry);
+  saveHistory();
+}
+function removeHistory(id) {
+  history = history.filter(h => h.id !== id);
+  saveHistory();
+}
+
+// ═══════════════════════════════════════════════════════
+// Socket.IO 连接
+// ═══════════════════════════════════════════════════════
+const socket = io(window.location.origin, {
+  transports: ['websocket', 'polling'],
+  auth: (cb) => cb({ token: getAuthToken() }),
+});
+socket.on('connect', () => {
+  document.querySelectorAll('.conn-dot').forEach(d => d.className = 'conn-dot on');
+  loadTasks();
+});
+socket.on('disconnect', () => document.querySelectorAll('.conn-dot').forEach(d => d.className = 'conn-dot off'));
+socket.on('task-status', (task) => updateTaskCard(task));
+socket.on('task-list-update', (tasks) => renderTasks(tasks));
+socket.on('task-finalized', ({ taskId }) => socket.emit('unsubscribe', taskId));
+
+// ═══════════════════════════════════════════════════════
+// 下载页：提交任务
+// ═══════════════════════════════════════════════════════
+async function submitDownload() {
+  const input = $('urlInput');
+  const btn = $('downloadBtn');
+  const url = input.value.trim();
+  if (!url) { input.focus(); return; }
+  if (!/^https?:\/\//i.test(url)) { showToast('请输入以 http(s):// 开头的链接'); input.focus(); return; }
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  try {
+    const res = await fetch('/api/download/advanced', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        engine: settings.engine,
+        format: settings.format,
+        parallel: settings.parallel,
+        parallelCount: settings.parallelCount,
+        maxSpeed: Math.round(settings.maxSpeedMB * 1024 * 1024),
+        timeoutMs: settings.timeoutMin * 60 * 1000,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);
+    input.value = '';
+    socket.emit('subscribe', data.taskId);
+    loadTasks();
+    showToast('任务已创建，开始解析');
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '下载';
+  }
+}
+async function loadTasks() {
+  try {
+    const res = await fetch('/api/tasks');
+    if (res.ok) renderTasks(await res.json());
+  } catch {}
+}
+async function actionTask(taskId, action) {
+  const map = {
+    stop: ['POST', `/api/task/${taskId}/cancel`, '已停止，可续跑'],
+    retry: ['POST', `/api/task/${taskId}/retry`, '已重新加入队列'],
+    delete: ['DELETE', `/api/task/${taskId}`, '已删除'],
+  };
+  const [method, url, okMsg] = map[action];
+  try {
+    const res = await fetch(url, { method });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '操作失败');
+    showToast(okMsg);
+    if (action === 'retry') socket.emit('subscribe', taskId);
+    loadTasks();
+  } catch (err) { showToast(err.message, true); }
+}
+const STATUS_TEXT = {
+  created: ['排队中', ''], running: ['进行中', 'running'],
+  completed: ['已完成', 'completed'], failed: ['失败', 'failed'], cancelled: ['已停止', 'cancelled'],
+};
+function buildTaskRow(task) {
+  const status = task.status || 'created';
+  const [statusText, cls] = STATUS_TEXT[status] || [status, ''];
+  const progress = Math.max(0, Math.min(100, task.progress || 0));
+  const actions = [];
+  if (status === 'created' || status === 'running') actions.push(`<button class="icon-btn danger" title="停止" onclick="actionTask('${task.id}','stop')">${icon('stop', 17)}</button>`);
+  if (status === 'failed' || status === 'cancelled') actions.push(`<button class="icon-btn" title="重试" onclick="actionTask('${task.id}','retry')">${icon('retry', 17)}</button>`);
+  actions.push(`<button class="icon-btn danger" title="删除" onclick="actionTask('${task.id}','delete')">${icon('trash', 17)}</button>`);
+  if (status === 'completed' && task.outputFile) {
+    const name = task.outputFile.split('/').pop();
+    actions.push(`<button class="icon-btn green" title="播放文件" onclick="playLibrary('${name.replace(/'/g, "\\'")}')">${icon('play', 17)}</button>`);
+  }
+  const metaParts = [];
+  metaParts.push(`<span class="task-status ${cls}">${statusText}</span>`);
+  if (task.progress != null) metaParts.push(`<span>${Math.round(progress)}%</span>`);
+  if (task.speed) metaParts.push(`<span>${escapeHtml(task.speed)}</span>`);
+  if (task.outputSizeBytes) metaParts.push(`<span>${formatBytes(task.outputSizeBytes)}</span>`);
+  const errorHtml = task.error ? `<div class="task-error">⚠ ${escapeHtml(task.error)}</div>` : '';
+  return `
+    <div class="row task-row" data-id="${task.id}">
+      <div class="task-icon ${cls}">${status === 'completed' ? icon('dlFile', 17) : status === 'failed' ? icon('xmark', 17) : icon('download', 17)}</div>
+      <div class="task-main">
+        <div class="task-url" title="${escapeHtml(task.url)}">${escapeHtml(task.url)}</div>
+        <div class="task-meta">${metaParts.join('')}</div>
+        ${task.message ? `<div class="task-message" title="${escapeHtml(task.message)}">${escapeHtml(task.message)}</div>` : ''}
+        <div class="task-progress"><i class="${cls}" style="width:${progress}%"></i></div>
+        ${errorHtml}
+      </div>
+      <div class="task-actions">${actions.join('')}</div>
+    </div>`;
+}
+function renderTasks(tasks) {
+  const list = $('taskList');
+  $('taskCount').textContent = tasks.length ? `(${tasks.length})` : '';
+  $('cleanCompletedBtn').hidden = !tasks.some(t => t.status === 'completed');
+  if (!tasks.length) {
+    list.innerHTML = '<div class="empty"><div class="big">📥</div>还没有下载任务</div>';
+    return;
+  }
+  const sorted = [...tasks].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  list.innerHTML = sorted.map(buildTaskRow).join('');
+}
+function updateTaskCard(task) {
+  const list = $('taskList');
+  const rows = [...list.querySelectorAll('.task-row')];
+  const idx = rows.findIndex(r => r.dataset.id === task.id);
+  if (idx !== -1) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = buildTaskRow(task);
+    list.replaceChild(tmp.firstElementChild, rows[idx]);
+  } else {
+    loadTasks();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// 浏览页：视频库 + 播放
+// ═══════════════════════════════════════════════════════
+let libraryFiles = [];
+async function loadLibrary() {
+  try {
+    const res = await fetch('/api/library');
+    if (!res.ok) throw new Error();
+    libraryFiles = await res.json();
+    renderBrowse();
+  } catch {
+    $('libraryGrid').innerHTML = '<div class="empty"><div class="big">⚠️</div>视频库读取失败</div>';
+  }
+}
+let browseFolder = null; // null=根视图 | {id,name,isPrivate}
+
+function renderBrowse() {
+  const grid = $('libraryGrid');
+  const folderEl = $('folderGrid');
+  const crumb = $('browseCrumb');
+  const isList = browseFolder && browseFolder.id;
+  const view = settings.libraryView || 'grid';
+
+  if (isList) {
+    crumb.innerHTML = `<button class="folder-back" onclick="browseFolder=null;renderBrowse()">‹ 返回</button> ${escapeHtml(browseFolder.name)}`;
+    folderEl.hidden = true;
+    grid.className = view === 'list' ? 'library-list' : 'library-grid';
+    grid.innerHTML = '<div class="empty">加载中…</div>';
+    renderListVideos({ grid, count: $('libraryCount'), folder: browseFolder, nameAttr: 'data-name', rmAttr: 'data-rm-list', isPrivate: !!browseFolder.isPrivate, onLoaded: () => renderListVideos({ grid, count: $('libraryCount'), folder: browseFolder, nameAttr: 'data-name', rmAttr: 'data-rm-list', isPrivate: !!browseFolder.isPrivate }) });
+    return;
+  }
+  crumb.innerHTML = '';
+  folderEl.hidden = false;
+  grid.className = view === 'list' ? 'library-list' : 'library-grid';
+  renderRootFolders();
+  renderLibraryGrid(libraryFiles);
+}
+
+function renderRootFolders() {
+  const el = $('folderGrid');
+  const pubs = myLists.map((l) => `
+    <div class="folder-card" data-enter="list" data-id="${l.id}" data-name="${escapeHtml(l.name)}">
+      <div class="folder-icon">📁</div>
+      <div class="folder-name">${escapeHtml(l.name)}</div>
+      <div class="folder-meta">${l.items.length} 个视频</div>
+      <button class="list-item-del" data-del-list="${l.id}" onclick="event.stopPropagation();removeList('${l.id}')">删除列表</button>
+    </div>`).join('');
+  const newCard = `<div class="folder-card" data-new="1" style="border:1.5px dashed var(--separator);background:transparent;box-shadow:none;">
+        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">＋</div>
+        <div class="folder-name" style="color:var(--accent);">新建列表</div>
+        <div class="folder-meta">按主题创建列表，将视频加入</div>
+      </div>`;
+  el.innerHTML = (pubs ? pubs : '<div class="folder-card" style="cursor:default;"><div class="folder-meta">暂无公开列表<br>点击下方新建列表</div></div>') + newCard;
+  el.querySelectorAll('[data-enter="list"]').forEach((card) => {
+    card.addEventListener('click', () => enterListFolder(card.dataset.id, card.dataset.name, false));
+  });
+  el.querySelector('[data-new="1"]')?.addEventListener('click', () => openCreateList(false));
+}
+
+function renderLibraryGrid(files) {
+  const grid = $('libraryGrid');
+  const view = settings.libraryView || 'grid';
+  grid.className = view === 'list' ? 'library-list' : 'library-grid';
+  if (!files.length) {
+    grid.innerHTML = '<div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>';
+    return;
+  }
+  grid.innerHTML = files.map((f) => {
+    const pct = libraryProgress(f.name);
+    const progressHtml = pct === null ? '' : view === 'list'
+      ? `<div class="video-progress">${pct}%<span class="bar" style="width:${pct}%"></span></div>`
+      : `<span class="video-progress">${pct}%</span>`;
+    const selCls = selectedSet.has(f.name) ? ' selected' : '';
+    const sel = selectionMode ? `<i class="sel-check">✓</i>` : '';
+    if (view === 'list') {
+      return `
+      <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}">
+        ${sel}
+        <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span></div>
+        <div class="video-info">
+          <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+          <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
+          ${progressHtml}
+        </div>
+        <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" title="删除视频">${icon('trash', 15)}</button>
+      </div>`;
+    }
+    return `
+    <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}">
+      ${sel}
+      <div class="video-thumb">
+        <span class="play-badge">${icon('play', 20)}</span>
+        ${progressHtml}
+        <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" title="删除视频">${icon('trash', 14)}</button>
+      </div>
+      <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+      <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
+    </div>`;
+  }).join('');
+  bindLibraryCardEvents();
+}
+
+function bindLibraryCardEvents() {
+  const grid = $('libraryGrid');
+  grid.querySelectorAll('.video-card').forEach((card) => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.video-delete')) return;
+      const name = card.dataset.name;
+      if (selectionMode) { toggleSelect(name); return; }
+      playLibrary(name);
+    });
+    grid.querySelectorAll('.video-delete').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        deleteVideo(btn.dataset.deleteName);
+      });
+    });
+  });
+  // 文件夹导航事件
+  $('folderGrid').querySelectorAll('[data-del-list]').forEach((btn) => {
+    btn.addEventListener('click', (e) => { e.stopPropagation(); removeList(btn.dataset.delList); });
+  });
+}
+
+async function renderListVideos({ grid, count, folder, nameAttr, rmAttr, isPrivate, onLoaded }) {
+  const view = settings.libraryView || 'grid';
+  grid.className = view === 'list' ? 'library-list' : 'library-grid';
+  if (count) count.textContent = '';
+  let items = [];
+  try {
+    const res = isPrivate
+      ? await privateFetch(`/api/lists/${folder.id}`, {}, onLoaded)
+      : await fetch(`/api/lists/${folder.id}`);
+    if (res === null) return;
+    if (res.ok) {
+      const list = await res.json();
+      items = list.items || [];
+    }
+  } catch (_) {}
+  if (!items.length) {
+    grid.innerHTML = '<div class="empty"><div class="big">📂</div>列表为空<br>在浏览页选择视频后可加入</div>';
+    return;
+  }
+  grid.innerHTML = items.map((i) => {
+    const pct = libraryProgress(i.name);
+    const progressHtml = pct === null ? '' : view === 'list'
+      ? `<div class="video-progress">${pct}%<span class="bar" style="width:${pct}%"></span></div>`
+      : `<span class="video-progress">${pct}%</span>`;
+    const meta = [i.size ? formatBytes(i.size) : '', i.mtime ? formatDate(i.mtime) : '', i.addedAt ? formatDate(i.addedAt) + ' 加入' : ''].filter(Boolean).join(' · ');
+    return view === 'list'
+      ? `
+      <div class="video-card" ${nameAttr}="${escapeHtml(i.name)}">
+        <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span>${progressHtml}</div>
+        <div class="video-info">
+          <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
+          <div class="video-meta">${meta}</div>
+        </div>
+        <button class="video-delete" ${rmAttr}="${folder.id}|${escapeHtml(i.name)}" title="从列表移除">${icon('trash', 15)}</button>
+      </div>`
+      : `
+      <div class="video-card" ${nameAttr}="${escapeHtml(i.name)}">
+        <div class="video-thumb">
+          <span class="play-badge">${icon('play', 20)}</span>
+          ${progressHtml}
+          <button class="video-delete" ${rmAttr}="${folder.id}|${escapeHtml(i.name)}" title="从列表移除">${icon('trash', 14)}</button>
+        </div>
+        <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
+        <div class="video-meta">${meta}</div>
+      </div>`;
+  }).join('');
+  grid.querySelectorAll('.video-card').forEach((card) => {
+    card.addEventListener('click', (e) => {
+      if (e.target.closest('.video-delete')) return;
+      const name = card.getAttribute(nameAttr);
+      if (name) { if (isPrivate) playPrivateVideo(name); else playLibrary(name); }
+    });
+  });
+  grid.querySelectorAll('.video-delete').forEach((btn) => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (btn.hasAttribute(rmAttr)) {
+        const [fid, nm] = btn.getAttribute(rmAttr).split('|');
+        removeListVideo(fid, nm, isPrivate);
+      } else if (btn.dataset.deleteName) {
+        deleteVideo(btn.dataset.deleteName);
+      }
+    });
+  });
+}
+
+function enterListFolder(id, name, isPrivate) {
+  browseFolder = { id, name, isPrivate };
+  renderBrowse();
+}
+function backToRoot() { browseFolder = null; renderBrowse(); }
+async function removeListVideo(folderId, name, isPrivate) {
+  try {
+    const res = isPrivate
+      ? await privateFetch(`/api/lists/${folderId}/items`, {
+          method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [name] }),
+        }, () => removeListVideo(folderId, name, isPrivate))
+      : await fetch(`/api/lists/${folderId}/items`, {
+          method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [name] }),
+        });
+    if (res === null) return;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '移除失败');
+    showToast('已从列表移除');
+    loadLists();
+    loadLibrary();
+  } catch (err) { showToast(err.message, true); }
+}
+function libraryProgress(name) {
+  const h = history.find(x => x.id === 'file:' + name);
+  if (!h || !h.duration) return null;
+  return Math.min(100, Math.round((h.time / h.duration) * 100));
+}
+function renderLibrary(files) { renderBrowse(); }
+
+async function deleteVideo(name) {
+  showActionSheet({
+    title: '删除视频',
+    message: `「${name}」删除后无法恢复。`,
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        const res = await fetch(`/api/library/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '删除失败');
+        removeHistory('file:' + name);
+        showToast('已删除');
+        loadLibrary();
+      } catch (err) { showToast(err.message, true); }
+    },
+  });
+}
+
+// ── 播放器核心 ──────────────────────────────────
+let hls = null;
+let currentPlay = null;
+let lastSaveTime = 0;
+let userPaused = false;
+
+function openPlayer(title, src, id, target = 'browse') {
+  const pfx = target === 'private' ? 'private' : '';
+  const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+  const titleEl = $(pfx ? 'privateInlinePlayerTitle' : 'inlinePlayerTitle');
+  const video = $(pfx ? 'privateInlinePlayerVideo' : 'inlinePlayerVideo');
+  ensureOpen(target === 'private' ? 'private' : 'browse');
+  titleEl.textContent = title;
+  box.hidden = false;
+  userPaused = false;
+  updateCacheBtnState(target, src);
+  if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
+  currentPlay = { id, title, src, time: 0, duration: 0, updatedAt: Date.now() };
+  if (hls) { hls.destroy(); hls = null; }
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  const isHls = /\.m3u8($|\?)/i.test(src);
+  if (isHls && window.Hls && Hls.isSupported()) {
+    hls = new Hls({ enableWorker: true, maxBufferLength: 60 });
+    hls.loadSource(src);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.ERROR, (_e, data) => {
+      if (data.fatal) {
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+        else showToast('播放失败：流地址不可用', true);
+      }
+    });
+  } else {
+    playFromCacheOrStream(video, src, target);
+  }
+  const prev = history.find(h => h.id === id);
+  video.onloadedmetadata = () => {
+    if (!currentPlay) return;
+    currentPlay.duration = video.duration || 0;
+    if (prev && prev.time > 3 && prev.time < (video.duration || Infinity) - 5) {
+      video.currentTime = prev.time;
+    }
+    if (!userPaused) video.play().catch(() => {});
+  };
+  video.ontimeupdate = () => {
+    if (!currentPlay) return;
+    currentPlay.time = video.currentTime || 0;
+    currentPlay.duration = video.duration || 0;
+    const now = Date.now();
+    if (now - lastSaveTime > 5000) {
+      lastSaveTime = now;
+      upsertHistory({ ...currentPlay, updatedAt: now });
+    }
+  };
+  video.onpause = () => { if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() }); };
+  video.onended = () => {
+    if (!currentPlay) return;
+    currentPlay.time = currentPlay.duration;
+    upsertHistory({ ...currentPlay, updatedAt: Date.now() });
+  };
+  video.onerror = () => showToast('播放失败：请确认链接可访问且格式受支持', true);
+}
+function closePlayer(target = 'browse') {
+  const pfx = target === 'private' ? 'private' : '';
+  const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+  const video = $(pfx ? 'privateInlinePlayerVideo' : 'inlinePlayerVideo');
+  if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
+  currentPlay = null;
+  if (hls) { hls.destroy(); hls = null; }
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  box.hidden = true;
+  if (target === 'browse') loadLibrary();
+}
+function closePrivatePlayerOnly() { closePlayer('private'); }
+function playLibrary(name) {
+  openPlayer(name, `/downloads/${encodeURIComponent(name)}`, `file:${name}`);
+}
+function playUrl() {
+  const url = $('playUrlInput').value.trim();
+  if (!/^https?:\/\//i.test(url)) { showToast('请输入有效的 http(s) 链接', true); return; }
+  openPlayer(url, url, `url:${url}`);
+}
+
+// ═══════════════════════════════════════════════════════
+// 设置页：服务状态
+// ═══════════════════════════════════════════════════════
+async function loadHealth() {
+  try {
+    const res = await fetch('/api/health');
+    if (!res.ok) throw new Error();
+    const h = await res.json();
+    $('healthVersion').textContent = h.version || '—';
+    $('healthUptime').textContent = `${Math.floor(h.uptime / 60)} 分钟`;
+    $('healthQueue').textContent = `${h.tasks.queued} / ${h.tasks.running}（上限 ${h.tasks.maxConcurrent}）`;
+    const eng = h.engines || {};
+    $('healthEngines').innerHTML = `${dot(eng.ffmpeg)} ffmpeg &nbsp; ${dot(eng.ffprobe)} ffprobe`;
+    $('healthNre').innerHTML = `${dot(eng.n_m3u8dl_re)} 可用`;
+    $('healthDisk').textContent = h.disk || '—';
+  } catch {}
+}
+function dot(ok) { return `<span class="status-dot ${ok ? 'ok' : 'no'}"></span>`; }
+
+// ═══════════════════════════════════════════════════════
+// Toast / 弹窗管理
+// ═══════════════════════════════════════════════════════
+let toastTimer = null;
+function showToast(msg, isError = false) {
+  let t = document.querySelector('.toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.className = 'toast';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.classList.toggle('error', isError);
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+const modalMask = $('modalMask');
+const modalCard = $('modalCard');
+function openModal(html) {
+  modalCard.innerHTML = html;
+  modalMask.hidden = false;
+}
+function closeModal() {
+  modalMask.hidden = true;
+  modalCard.innerHTML = '';
+  if (privateCtx) { privateCtx = false; setPrivateToken(''); }
+}
+modalMask.addEventListener('click', (e) => { if (e.target === modalMask) closeModal(); });
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !modalMask.hidden) closeModal(); });
+
+// ── macOS Action Sheet 确认菜单（替代原生 confirm） ──
+function showActionSheet({ title, message, confirmText = '删除', cancelText = '取消', danger = true, onConfirm }) {
+  openModal(`
+    <div class="action-sheet">
+      <div class="as-title">${title}</div>
+      <div class="as-message">${message}</div>
+      <button class="as-btn ${danger ? 'danger' : ''}" id="asConfirm">${confirmText}</button>
+      <button class="as-btn cancel" onclick="closeModal()">${cancelText}</button>
+    </div>`);
+  $('asConfirm').addEventListener('click', () => { closeModal(); onConfirm && onConfirm(); });
+}
+
+// ═══════════════════════════════════════════════════════
+// 下载页：一键清理已完成
+// ═══════════════════════════════════════════════════════
+async function cleanCompleted() {
+  try {
+    const res = await fetch('/api/tasks/clean-completed', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '清理失败');
+    showToast(`已清理 ${data.removed || 0} 条已完成记录`);
+    loadTasks();
+  } catch (err) { showToast(err.message, true); }
+}
+
+// ═══════════════════════════════════════════════════════
+// 浏览页：列表数据 + 选择模式 + 批量操作
+// ═══════════════════════════════════════════════════════
+let myLists = [];
+let myPrivateLists = [];
+let selectionMode = false;
+let selectedSet = new Set();
+
+async function loadLists() {
+  try {
+    const res = await fetch('/api/lists');
+    if (!res.ok) return;
+    const data = await res.json();
+    myLists = data.lists || [];
+    if (data.hasPrivate && getPrivateToken()) loadPrivateLists();
+    renderBrowse();
+  } catch {}
+}
+async function loadPrivateLists() {
+  try {
+    const res = await privateFetch('/api/private/lists', {}, () => loadPrivateLists());
+    if (res === null) return;
+    if (res.ok) myPrivateLists = (await res.json()).lists || [];
+  } catch {}
+}
+
+function enterSelectionMode() {
+  selectionMode = true;
+  selectedSet.clear();
+  $('selectModeBtn').textContent = '取消';
+  $('batchBar').hidden = false;
+  renderLibrary(libraryFiles);
+}
+function exitSelectionMode() {
+  selectionMode = false;
+  selectedSet.clear();
+  $('selectModeBtn').textContent = '选择';
+  $('batchBar').hidden = true;
+  renderLibrary(libraryFiles);
+}
+function toggleSelect(name) {
+  if (selectedSet.has(name)) selectedSet.delete(name);
+  else selectedSet.add(name);
+  updateBatchBar();
+  renderLibrary(libraryFiles);
+}
+function updateBatchBar() {
+  $('batchCount').textContent = `已选 ${selectedSet.size} 项`;
+  $('batchSelectAllBtn').textContent = (selectedSet.size === libraryFiles.length && libraryFiles.length) ? '全不选' : '全选';
+}
+function toggleSelectAll() {
+  if (selectedSet.size === libraryFiles.length) selectedSet.clear();
+  else libraryFiles.forEach(f => selectedSet.add(f.name));
+  updateBatchBar();
+  renderLibrary(libraryFiles);
+}
+async function batchDeleteSelected() {
+  if (!selectedSet.size) { showToast('请先选择视频', true); return; }
+  const names = [...selectedSet];
+  showActionSheet({
+    title: '批量删除',
+    message: `确定删除选中的 ${names.length} 个视频文件？删除后无法恢复。`,
+    confirmText: '删除',
+    onConfirm: async () => {
+      let ok = 0;
+      for (const name of names) {
+        try {
+          const res = await fetch(`/api/library/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          if (res.ok) { ok++; removeHistory('file:' + name); }
+        } catch {}
+      }
+      showToast(`已删除 ${ok} 个视频`);
+      exitSelectionMode();
+      loadLibrary();
+    },
+  });
+}
+
+// ── 批量操作：动态菜单 ──
+function openBatchOps() {
+  if (!selectedSet.size) { showToast('请先选择视频', true); return; }
+  const n = selectedSet.size;
+  const listBtns = myLists.map(l => `
+    <button class="as-btn" onclick="addSelectedTo('${l.id}', false)">加入「${escapeHtml(l.name)}」</button>`).join('');
+  openModal(`
+    <div class="action-sheet">
+      <div class="as-title">批量操作</div>
+      <div class="as-message">已选 ${n} 个视频</div>
+      <button class="as-btn danger" id="asBatchDel">删除所选</button>
+      ${listBtns}
+      <button class="as-btn" onclick="openAddToList(true)">加入私密列表</button>
+      <button class="as-btn" onclick="closeModal();openCreateList(false)">新建列表并加入</button>
+      <button class="as-btn cancel" onclick="closeModal()">取消</button>
+    </div>`);
+  $('asBatchDel').addEventListener('click', () => { closeModal(); batchDeleteSelected(); });
+}
+
+// ── 加入列表 ──
+function openAddToList(isPrivate = false) {
+  // 私密列表：统一走解锁门控，token 有效才加载并打开列表（过期时自动引导重新验证并续接）
+  if (isPrivate) {
+    ensurePrivateUnlock(async () => {
+      await loadPrivateLists();
+      openPrivateListPicker();
+    });
+    return;
+  }
+  const listArr = myLists;
+  if (!listArr.length) { showToast('暂无列表，请先创建', true); return; }
+  const items = listArr.map(l => `
+    <div class="list-tile" onclick="addSelectedTo('${l.id}', false)">
+      <span class="list-tile-icon">📁</span>
+      <span class="list-tile-main">
+        <span class="list-tile-name">${escapeHtml(l.name)}</span>
+        <span class="list-tile-meta">${l.items.length} 项</span>
+      </span>
+    </div>`).join('');
+  openModal(`
+    <div class="modal-head"><span class="modal-title">加入列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      ${items || '<div class="empty">暂无列表</div>'}
+      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="closeModal();openCreateList(false)">＋ 新建列表</button>
+    </div>`);
+}
+
+async function openPrivateListPicker() {
+  const listArr = myPrivateLists;
+  if (!listArr.length) { showToast('暂无私密列表，请先创建', true); return; }
+  const items = listArr.map(l => `
+    <div class="list-tile" onclick="addSelectedTo('${l.id}', true)">
+      <span class="list-tile-icon private">🔒</span>
+      <span class="list-tile-main">
+        <span class="list-tile-name">${escapeHtml(l.name)}</span>
+        <span class="list-tile-meta">${l.items.length} 项</span>
+      </span>
+    </div>`).join('');
+  openModal(`
+    <div class="modal-head"><span class="modal-title">加入私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">${items || '<div class="empty">暂无列表</div>'}</div>`);
+}
+
+async function addSelectedTo(listId, isPrivate) {
+  const names = [...selectedSet];
+  if (!names.length) { showToast('请先选择视频', true); return; }
+  try {
+    const res = await fetch(`/api/lists/${listId}/items`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '加入失败');
+    showToast(`已加入 ${names.length} 项`);
+    closeModal();
+    exitSelectionMode();
+    loadLists();
+    loadLibrary();
+  } catch (err) { showToast(err.message, true); }
+}
+
+// ── 创建列表 ──
+function openCreateList(isPrivate = false) {
+  openModal(`
+    <div class="modal-head"><span class="modal-title">创建${isPrivate ? '私密' : ''}列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <input class="text-input" id="newListName" placeholder="列表名称" maxlength="40" style="width:100%;">
+      ${isPrivate ? '<p class="pin-tip">🔒 私密列表仅凭密码可见</p>' : ''}
+    </div>
+    <div class="modal-foot">
+      <button class="btn-secondary" onclick="closeModal()">取消</button>
+      <button class="btn-primary" onclick="submitCreateList(${isPrivate})">创建</button>
+    </div>`);
+  setTimeout(() => { const el = $('newListName'); if (el) el.focus(); }, 60);
+}
+async function submitCreateList(isPrivate) {
+  const name = ($('newListName')?.value || '').trim();
+  if (!name) { showToast('请输入列表名称', true); return; }
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (isPrivate) headers['X-Private-Token'] = getPrivateToken();
+    const res = await fetch('/api/lists', { method: 'POST', headers, body: JSON.stringify({ name, private: isPrivate }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '创建失败');
+    showToast('列表已创建');
+    closeModal();
+    loadLists();
+    if (isPrivate) loadPrivateLists();
+  } catch (err) { showToast(err.message, true); }
+}
+
+async function removeList(listId) {
+  showActionSheet({
+    title: '删除列表',
+    message: '删除后列表内视频将恢复显示在浏览页，已下载文件不受影响。',
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '删除失败');
+        showToast('列表已删除');
+        closeModal();
+        loadLists();
+        loadLibrary();
+      } catch (err) { showToast(err.message, true); }
+    },
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// 私密列表认证（PIN 密码）
+// ═══════════════════════════════════════════════════════
+const PRIVATE_TOKEN_KEY = 'vd.private.token';
+let privateCtx = false;
+let pendingPrivateAction = null;
+let pinState = null;
+
+function getPrivateToken() { return localStorage.getItem(PRIVATE_TOKEN_KEY) || ''; }
+function setPrivateToken(t) { if (t) localStorage.setItem(PRIVATE_TOKEN_KEY, t); else localStorage.removeItem(PRIVATE_TOKEN_KEY); }
+
+async function openPrivateEntry() {
+  try {
+    const res = await fetch('/api/private/status');
+    if (!res.ok) throw new Error();
+    const st = await res.json();
+    if (!st.hasPassword) openPrivateSetup();
+    else openPrivateVerify();
+  } catch { showToast('无法获取私密状态', true); }
+}
+
+async function ensurePrivateUnlock(action) {
+  const token = getPrivateToken();
+  if (!token) {
+    pendingPrivateAction = action;
+    openPrivateEntry();
+    return;
+  }
+  try {
+    const res = await fetch('/api/private/status', { headers: { 'X-Private-Token': token } });
+    const st = await res.json().catch(() => ({}));
+    if (res.ok && st.tokenValid) { action(); return; }
+  } catch {}
+  setPrivateToken('');
+  pendingPrivateAction = action;
+  openPrivateEntry();
+}
+
+async function privateFetch(url, opts = {}, reauthAction = null) {
+  const headers = { ...(opts.headers || {}), 'X-Private-Token': getPrivateToken() };
+  const res = await fetch(url, { ...opts, headers });
+  if (res.status === 401) {
+    setPrivateToken('');
+    pendingPrivateAction = reauthAction;
+    openPrivateVerify();
+    return null;
+  }
+  return res;
+}
+
+function openPinScreen({ title, sub, len = 4, seg = false, autoBoth = false, onDone }) {
+  pinState = { title, sub, len, seg, autoBoth, pin: '', err: '', onDone };
+  renderPinScreen();
+}
+
+function renderPinScreen() {
+  const s = pinState;
+  if (!s) return;
+  const dots = Array.from({ length: s.len }, (_, i) => `<i class="pin-dot${i < s.pin.length ? ' filled' : ''}"></i>`).join('');
+  const segHtml = s.seg ? `
+    <div class="pin-seg">
+      <button class="${s.len === 4 ? 'active' : ''}" onclick="pinSetLen(4)">4 位</button>
+      <button class="${s.len === 6 ? 'active' : ''}" onclick="pinSetLen(6)">6 位</button>
+    </div>` : '';
+  openModal(`
+    <div class="modal-head"><span class="modal-title">🔒 私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-body">
+      <div class="pin-screen">
+        <div class="pin-screen-title">${s.title}</div>
+        <div class="pin-screen-sub">${s.sub}</div>
+        ${segHtml}
+        <div class="pin-dots">${dots}</div>
+        <div class="numpad">
+          ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button onclick="pinKey(${n})">${n}</button>`).join('')}
+          <button class="key-del" onclick="pinKey('del')">⌫</button>
+          <button onclick="pinKey(0)">0</button>
+          <button style="visibility:hidden"></button>
+        </div>
+        <div class="pin-error" id="pinError">${s.err}</div>
+      </div>
+    </div>`);
+}
+
+function pinSetLen(n) {
+  pinState.len = n; pinState.pin = ''; pinState.err = '';
+  renderPinScreen();
+}
+
+function pinKey(k) {
+  if (!pinState) return;
+  if (k === 'del') { pinState.pin = pinState.pin.slice(0, -1); renderPinScreen(); return; }
+  if (typeof k !== 'number') return;
+  if (pinState.pin.length >= pinState.len) return;
+  pinState.pin += String(k);
+  renderPinScreen();
+  const reached = pinState.autoBoth
+    ? (pinState.pin.length === 4 || pinState.pin.length === 6)
+    : (pinState.pin.length === pinState.len);
+  if (reached) {
+    const p = pinState.pin;
+    pinState.pin = '';
+    setTimeout(() => pinState.onDone && pinState.onDone(p), 120);
+  }
+}
+
+function pinSetError(msg) {
+  if (!pinState) return;
+  pinState.err = msg;
+  renderPinScreen();
+}
+
+function openPrivateSetup() {
+  openPinScreen({
+    title: '设置密码', sub: '保护你的私密列表（4 或 6 位数字）', len: 4, seg: true, autoBoth: true,
+    onDone: async (p) => {
+      openPinScreen({
+        title: '确认密码', sub: '再次输入以确认', len: p.length,
+        onDone: async (p2) => {
+          if (p2 !== p) { pinSetError(`两次输入不一致`); return; }
+          try {
+            const res = await fetch('/api/private/password', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ password: p }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || '设置失败');
+            // ⭐ 后端 password 接口不签发 token：设置成功后需 verify 获取 token 再解锁
+            const vres = await fetch('/api/private/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ password: p }),
+            });
+            const vdata = await vres.json().catch(() => ({}));
+            if (vres.ok && vdata.token) setPrivateToken(vdata.token);
+            showToast('私密密码已设置');
+            closeModal();
+            afterPrivateUnlock();
+          } catch (e) { pinSetError(e.message + '，请重试'); }
+        },
+      });
+    },
+  });
+}
+
+function openPrivateVerify() {
+  openPinScreen({
+    title: '输入密码', sub: '验证后进入私密列表', len: 4, autoBoth: true,
+    onDone: async (p) => {
+      try {
+        const res = await fetch('/api/private/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: p }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '密码错误');
+        setPrivateToken(data.token || '');
+        showToast('解锁成功');
+        closeModal();
+        afterPrivateUnlock();
+      } catch (e) { pinSetError(e.message + '，请重试'); }
+    },
+  });
+}
+
+function afterPrivateUnlock() {
+  if (pendingPrivateAction) {
+    const fn = pendingPrivateAction;
+    pendingPrivateAction = null;
+    fn();
+    return;
+  }
+  closeModal();
+  openPrivateApp();
+}
+
+function openPrivateApp() {
+  privateCtx = true;
+  $('privateDockIcon').hidden = false;
+  $('privateDockSep').hidden = false;
+  browseFolder = null;
+  privateFolder = null;
+  ensureOpen('private');
+  loadPrivateLists().then(renderPrivateBrowse);
+}
+
+function closePrivateApp() {
+  try { closeApp('private'); } catch (_) {}
+  $('privateDockIcon').hidden = true;
+  $('privateDockSep').hidden = true;
+  const tk = getPrivateToken();
+  if (tk) { try { privateFetch('/api/private/logout', { method: 'POST' }); } catch (_) {} }
+  setPrivateToken('');
+  privateCtx = false;
+  privateFolder = null;
+  try {
+    const v = $('privateInlinePlayerVideo');
+    if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+    $('privateInlinePlayer').hidden = true;
+  } catch (_) {}
+  showToast('已退出私密浏览');
+}
+
+let privateFolder = null;
+
+function renderPrivateBrowse() {
+  const grid = $('privateLibraryGrid');
+  const folderEl = $('privateFolderGrid');
+  const crumb = $('privateBrowseCrumb');
+  const view = settings.libraryView || 'grid';
+  const isList = privateFolder && privateFolder.id;
+
+  crumb.innerHTML = isList
+    ? `<button class="folder-back" onclick="privateFolder=null;renderPrivateBrowse()">‹ 私密列表</button> ${escapeHtml(privateFolder.name)}`
+    : '私密列表';
+  $('privateCount').textContent = '';
+
+  if (!isList) {
+    const pbox = $('privateInlinePlayer');
+    if (pbox && !pbox.hidden) closePrivatePlayerOnly();
+  }
+
+  if (isList) {
+    folderEl.hidden = true;
+    renderPrivateFolderVideos(privateFolder);
+    return;
+  }
+  folderEl.hidden = false;
+  const newBtn = `<div class="folder-card" data-pnew="1" style="border:1.5px dashed var(--separator);background:transparent;box-shadow:none;">
+        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">＋</div>
+        <div class="folder-name" style="color:var(--accent);">新建私密列表</div>
+        <div class="folder-meta">创建后即可加入视频</div>
+      </div>`;
+  if (!myPrivateLists.length) {
+    folderEl.innerHTML = '<div class="empty"><div class="big">🔒</div>暂无私密列表<br>点击右上角新建</div>' + newBtn;
+  } else {
+    folderEl.innerHTML = myPrivateLists.map((l) => `
+      <div class="folder-card" data-pfolder="${l.id}" data-pname="${escapeHtml(l.name)}">
+        <div class="folder-icon private">🔒<span class="folder-badge">${l.items.length}</span></div>
+        <div class="folder-name">${escapeHtml(l.name)}</div>
+        <div class="folder-meta">${l.items.length} 个视频</div>
+      </div>`).join('') + newBtn;
+  }
+  grid.innerHTML = '';
+}
+
+async function renderPrivateFolderVideos(folder) {
+  await renderListVideos({
+    grid: $('privateLibraryGrid'),
+    count: $('privateCount'),
+    folder,
+    nameAttr: 'data-pvideo',
+    rmAttr: 'data-prm',
+    isPrivate: true,
+    onLoaded: () => renderPrivateFolderVideos(folder),
+  });
+}
+
+async function removePrivateList(listId) {
+  showActionSheet({
+    title: '删除私密列表',
+    message: '删除后其中视频将恢复显示在浏览页。',
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        const res = await privateFetch(`/api/lists/${listId}`, { method: 'DELETE' }, () => removePrivateList(listId));
+        if (res === null) return;
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '删除失败');
+        showToast('私密列表已删除');
+        closeModal();
+        loadLists();
+        loadLibrary();
+      } catch (err) { showToast(err.message, true); }
+    },
+  });
+}
+
+function playPrivateVideo(name) {
+  // ⭐ 私密 App 内播放：私密窗口内嵌播放器（保持私密浏览上下文）
+  openPlayer(name, `/downloads/${encodeURIComponent(name)}`, `file:${name}`, 'private');
+}
+
+async function removePrivateItem(listId, name) {
+  try {
+    const res = await privateFetch(`/api/lists/${listId}/items`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names: [name] }),
+    }, () => removePrivateItem(listId, name));
+    if (res === null) return;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '移除失败');
+    showToast('已移除');
+    renderPrivateBrowse();
+    loadLists();
+    loadLibrary();
+  } catch (err) { showToast(err.message, true); }
+}
+
+function openChangePin() {
+  openPinScreen({
+    title: '修改密码', sub: '输入原密码', len: 4,
+    onDone: async (oldP) => {
+      openPinScreen({
+        title: '修改密码', sub: '输入新密码（4 或 6 位数字）', len: 4, seg: true,
+        onDone: async (newP) => {
+          openPinScreen({
+            title: '修改密码', sub: '再次输入新密码', len: newP.length,
+            onDone: async (newP2) => {
+              if (newP2 !== newP) { showToast('两次输入不一致，请重新设置', true); openChangePin(); return; }
+              try {
+                const res = await privateFetch('/api/private/change', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ oldPassword: oldP, newPassword: newP }),
+                }, () => openChangePin());
+                if (res === null) return;
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || '修改失败');
+                showToast('密码已修改');
+                closeModal();
+              } catch (err) { showToast(err.message, true); }
+            },
+          });
+        },
+      });
+    },
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// 视频缓存（Cache API）
+// ═══════════════════════════════════════════════════════
+const VIDEO_CACHE = 'vd-media-cache';
+
+async function refreshCacheStats() {
+  try {
+    const cachesApi = await caches.open(VIDEO_CACHE);
+    const keys = await cachesApi.keys();
+    let bytes = 0;
+    for (const k of keys) {
+      const r = await cachesApi.match(k);
+      const h = r?.headers.get('content-length');
+      if (h) bytes += Number(h);
+    }
+    $('cacheStats').textContent = `${keys.length} 项 · ${formatBytes(bytes)}`;
+  } catch { $('cacheStats').textContent = '—'; }
+}
+
+async function clearAllCache() {
+  try {
+    await caches.delete(VIDEO_CACHE);
+    showToast('已清空视频缓存');
+    refreshCacheStats();
+    updateCacheBtnState('browse', currentPlay ? currentPlay.src : '');
+  } catch (err) { showToast('清理失败：' + err.message, true); }
+}
+
+async function cacheVideo(target, src, onProg) {
+  try {
+    const cache = await caches.open(VIDEO_CACHE);
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`缓存失败 (${res.status})`);
+    const total = Number(res.headers.get('content-length')) || 0;
+    if (total && res.body && res.body.getReader) {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+        onProg(Math.min(99, Math.round((received / total) * 100)));
+      }
+      const blob = new Blob(chunks, { type: res.headers.get('content-type') || 'video/mp4' });
+      await cache.put(src, new Response(blob, { status: 200, headers: { 'Content-Type': blob.type } }));
+    } else {
+      await cache.put(src, res);
+    }
+    onProg(100);
+    showToast('视频已缓存到本地');
+    refreshCacheStats();
+    updateCacheBtnState(target, src);
+  } catch (err) {
+    showToast('缓存失败：' + err.message, true);
+    updateCacheBtnState(target, src);
+  }
+}
+
+async function playFromCacheOrStream(video, src, target = 'browse') {
+  try {
+    const cache = await caches.open(VIDEO_CACHE);
+    const hit = await cache.match(src);
+    if (hit) {
+      const blob = await hit.blob();
+      const url = URL.createObjectURL(blob);
+      video.src = url;
+      updateCacheBtnState(target, src);
+      return;
+    }
+  } catch (_) {}
+  video.src = src;
+  updateCacheBtnState(target, src);
+}
+
+async function updateCacheBtnState(target, src) {
+  const btn = $(target === 'private' ? 'privateCacheMenuBtn' : 'cacheMenuBtn');
+  if (!btn) return;
+  try {
+    const cache = await caches.open(VIDEO_CACHE);
+    const hit = await cache.match(src);
+    btn.textContent = hit ? '✓' : '⋯';
+    btn.classList.toggle('cached', !!hit);
+  } catch (_) {}
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// ═══════════════════════════════════════════════════════
+// 登录鉴权
+// ═══════════════════════════════════════════════════════
+const AUTH_KEY = 'vd.auth.token';
+const USER_KEY = 'vd.auth.user';
+function getAuthToken() { return localStorage.getItem(AUTH_KEY) || ''; }
+function setAuthToken(t) { if (t) localStorage.setItem(AUTH_KEY, t); else localStorage.removeItem(AUTH_KEY); }
+function getAuthUser() { return localStorage.getItem(USER_KEY) || ''; }
+function setAuthUser(u) { if (u) localStorage.setItem(USER_KEY, u); else localStorage.removeItem(USER_KEY); }
+const _origFetch = window.fetch;
+window.fetch = async (input, init) => {
+  const opts = { ...(init || {}), headers: { ...((init && init.headers) || {}) } };
+  const tk = getAuthToken();
+  if (tk && !/\/api\/auth\//.test(String(input))) opts.headers['Authorization'] = 'Bearer ' + tk;
+  const res = await _origFetch(input, opts);
+  // 401 门控：仅普通业务请求的 401 视为登录失效；私密认证端点（/api/private/*）与私密业务请求（意图携带 X-Private-Token）的 401 由私密流程专门处理
+  const isPrivateReq = /\/api\/private\//.test(String(input)) || !!(opts.headers && ('X-Private-Token' in opts.headers));
+  if (res.status === 401 && !/\/api\/auth\//.test(String(input)) && !isPrivateReq) { setAuthToken(''); showLogin(); }
+  return res;
+};
+function showLogin() {
+  const s = $('loginScreen'); if (s) s.classList.remove('hidden');
+  const lbl = $('currentUserLabel');
+  const u = getAuthUser();
+  if (lbl) lbl.textContent = u ? `当前用户：${u}` : '';
+}
+function hideLogin() { const s = $('loginScreen'); if (s) s.classList.add('hidden'); }
+async function doLogout() {
+  try { await _origFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
+  setAuthToken(''); setAuthUser('');
+  socket.disconnect();
+  showLogin();
+  showToast('已退出登录');
+}
+async function doLogin() {
+  const user = ($('loginUser')?.value || '').trim();
+  const pass = $('loginPass')?.value || '';
+  const err = $('loginError');
+  if (err) err.textContent = '';
+  try {
+    const res = await _origFetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: user, password: pass }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { if (err) err.textContent = data.error || '登录失败'; return; }
+    setAuthToken(data.token); setAuthUser(data.username); hideLogin();
+    showToast('欢迎，' + data.username);
+    socket.auth = { token: data.token };
+    socket.disconnect();
+    socket.connect();
+    loadLists(); loadLibrary(); loadTasks();
+  } catch (e) { if (err) err.textContent = e.message; }
+}
+
+// ═══════════════════════════════════════════════════════
+// 事件绑定与初始化
+// ═══════════════════════════════════════════════════════
+$('cleanCompletedBtn').addEventListener('click', cleanCompleted);
+$('selectModeBtn').addEventListener('click', () => { selectionMode ? exitSelectionMode() : enterSelectionMode(); });
+$('batchSelectAllBtn').addEventListener('click', toggleSelectAll);
+$('batchOpsBtn').addEventListener('click', openBatchOps);
+$('batchCancelBtn').addEventListener('click', exitSelectionMode);
+$('openListsBtn').addEventListener('click', () => { browseFolder = null; renderBrowse(); });
+$('privateEntryBtn').addEventListener('click', openPrivateEntry);
+$('privateLockBtn').addEventListener('click', closePrivateApp);
+$('downloadBtn').addEventListener('click', submitDownload);
+$('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitDownload(); });
+$('playUrlBtn').addEventListener('click', playUrl);
+$('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
+$('inlinePlayerClose').addEventListener('click', () => closePlayer('browse'));
+$('privateInlinePlayerClose').addEventListener('click', () => closePlayer('private'));
+$('cacheMenuBtn').addEventListener('click', () => {
+  if (!currentPlay) return;
+  cacheVideo('browse', currentPlay.src, (p) => { $('cacheMenuBtn').textContent = p + '%'; });
+});
+$('privateCacheMenuBtn').addEventListener('click', () => {
+  if (!currentPlay) return;
+  cacheVideo('private', currentPlay.src, (p) => { $('privateCacheMenuBtn').textContent = p + '%'; });
+});
+$('refreshHealth').addEventListener('click', loadHealth);
+$('clearCacheBtn').addEventListener('click', clearAllCache);
+$('loginBtn').addEventListener('click', doLogin);
+$('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('loginUser').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('logoutBtn')?.addEventListener('click', (e) => { e.preventDefault(); doLogout(); });
+
+// 视图切换
+$('libraryViewToggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  settings.libraryView = btn.dataset.view;
+  saveSettings();
+  document.querySelectorAll('#libraryViewToggle button').forEach(b => b.classList.toggle('active', b === btn));
+  renderLibrary(libraryFiles);
+});
+$('privateViewToggle').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  settings.libraryView = btn.dataset.view;
+  saveSettings();
+  document.querySelectorAll('#privateViewToggle button').forEach(b => b.classList.toggle('active', b === btn));
+  renderPrivateBrowse();
+});
+
+// 文件夹网格事件（事件委托）
+$('folderGrid').addEventListener('click', (e) => {
+  const card = e.target.closest('[data-enter="list"], [data-new="1"]');
+  if (!card) return;
+  const del = e.target.closest('[data-del-list]');
+  if (del) { event.stopPropagation(); removeList(del.dataset.delList); return; }
+  if (card.dataset.new) { openCreateList(false); return; }
+  enterListFolder(card.dataset.id, card.dataset.name, false);
+});
+$('privateFolderGrid').addEventListener('click', (e) => {
+  const card = e.target.closest('[data-pfolder], [data-pnew]');
+  if (!card) return;
+  if (card.dataset.pnew) { openCreateList(true); return; }
+  privateFolder = { id: card.dataset.pfolder, name: card.dataset.pname };
+  renderPrivateBrowse();
+});
+
+// macOS 菜单栏
+document.querySelectorAll('.mb-item').forEach((item) => {
+  item.addEventListener('click', () => {
+    const m = item.dataset.menu;
+    const actions = {
+      'app': () => { showToast('视频下载器 v2.2 · Playwright 流拦截 + 多引擎下载'); },
+      'file': () => { ensureOpen('downloads'); setTimeout(() => $('urlInput').focus(), 100); },
+      'edit': () => { ensureOpen('downloads'); setTimeout(() => $('urlInput').select(), 100); },
+      'view': () => {
+        const t = settings.theme === 'dark' ? 'light' : 'dark';
+        settings.theme = t; saveSettings(); applyTheme();
+        showToast(t === 'dark' ? '已切换深色模式' : '已切换浅色模式');
+      },
+      'window': () => { ensureOpen('browse'); },
+    };
+    (actions[m] || actions['app'])();
+  });
+});
+
+// 键盘快捷键（macOS 惯例：Cmd/Ctrl + 键）
+document.addEventListener('keydown', (e) => {
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod) return;
+  const k = e.key.toLowerCase();
+  if (k === 'enter') { e.preventDefault(); submitDownload(); }
+  else if (k === 'f') { e.preventDefault(); ensureOpen('downloads'); setTimeout(() => $('urlInput').focus(), 80); }
+  else if (k === 'w') { e.preventDefault(); if (activeApp) closeApp(activeApp); }
+  else if (k === 'm') { e.preventDefault(); if (activeApp) minimizeApp(activeApp); }
+  else if (k === '1') { e.preventDefault(); ensureOpen('downloads'); }
+  else if (k === '2') { e.preventDefault(); ensureOpen('browse'); }
+  else if (k === '3') { e.preventDefault(); ensureOpen('settings'); }
+});
+
+// 播放器快捷键：空格=暂停/继续，←/→=后退/前进 30 秒
+document.addEventListener('keydown', (e) => {
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  const browseBox = $('inlinePlayer');
+  const privBox = $('privateInlinePlayer');
+  let video = null, box = null, target = 'browse';
+  if (browseBox && !browseBox.hidden) { video = $('inlinePlayerVideo'); box = browseBox; }
+  else if (privBox && !privBox.hidden) { video = $('privateInlinePlayerVideo'); box = privBox; target = 'private'; }
+  if (!video || !box) return;
+
+  if (e.code === 'Space') {
+    e.preventDefault();
+    e.stopPropagation();
+    if (video.paused) { userPaused = false; video.play().catch(() => {}); }
+    else { userPaused = true; video.pause(); }
+    if (currentPlay) upsertHistory({ ...currentPlay, time: video.currentTime || 0, duration: video.duration || 0, updatedAt: Date.now() });
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    video.currentTime = Math.max(0, (video.currentTime || 0) - 30);
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    video.currentTime = Math.min(video.duration || Infinity, (video.currentTime || 0) + 30);
+  }
+});
+
+// PIN 物理键盘输入
+document.addEventListener('keydown', (e) => {
+  if (pinState && !$('modalMask').hidden) {
+    if (/^[0-9]$/.test(e.key)) pinKey(parseInt(e.key, 10));
+    else if (e.key === 'Backspace') pinKey('del');
+  }
+});
+
+// 初始化
+window.addEventListener('load', () => {
+  applyTheme();
+  applyWallpaper();
+  renderSettingsForm();
+  bindSettingsForm();
+  bindLibraryCardEvents();
+  if (!getAuthToken()) { showLogin(); return; }
+  hideLogin();
+  socketConnect();
+  loadLists();
+  loadTasks();
+  loadHealth();
+  refreshCacheStats();
+  ensureOpen('downloads');
+});
+
+// 暴露给 e2e 的全局接口
+window.loadLists = loadLists;
+window.loadPrivateLists = loadPrivateLists;
+window.renderPrivateBrowse = renderPrivateBrowse;
+window.backToRoot = backToRoot;
+</script>
+</body>
+</html>

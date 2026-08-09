@@ -45,6 +45,7 @@ import browserPool from './browser-pool.js';
 import listStore from './list-store.js';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -65,22 +66,93 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
   : defaultOrigins;
 
-// ⭐ 可选 API Token：设置 API_TOKEN 后，除 /api/health 外所有 API 均需携带
-const API_TOKEN = process.env.API_TOKEN || '';
-const requireAuth = (req, res, next) => {
-  if (!API_TOKEN) return next();
-  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '') || req.headers['x-api-token'];
-  if (token !== API_TOKEN) {
-    return res.status(401).json({ error: '未授权：缺少或错误的 API Token' });
+// ⭐ 登录会话：持久化到 SQLite（服务重启后登录态保留），由 listStore 管理
+const SESSION_TTL_MS = 7 * 24 * 3600 * 1000; // 7 天
+const AUTH_COOKIE = 'vd_auth_token'; // 用于 video 标签等无法带 Authorization header 的场景
+
+/** 极简 cookie 解析（避免引入 cookie-parser 依赖） */
+function parseCookies(req) {
+  const out = {};
+  const raw = req.headers.cookie || '';
+  for (const part of raw.split(';')) {
+    const idx = part.indexOf('=');
+    if (idx > 0) {
+      const k = part.slice(0, idx).trim();
+      const v = decodeURIComponent(part.slice(idx + 1).trim());
+      if (k) out[k] = v;
+    }
   }
+  return out;
+}
+
+/** 从 header 或 cookie 提取凭据 */
+function resolveToken(req) {
+  return req.headers.authorization?.replace(/^Bearer\s+/i, '')
+    || req.headers['x-auth-token']
+    || parseCookies(req)[AUTH_COOKIE]
+    || null;
+}
+
+const requireAuth = (req, res, next) => {
+  const token = resolveToken(req);
+  const username = token ? listStore.getSessionUser(token) : null;
+  if (!username) {
+    return res.status(401).json({ error: '未登录：请先登录' });
+  }
+  req.user = username;
+  // ⭐ 用户隔离：列表查询/写入按当前登录用户过滤
+  listStore.setCurrentUser(username);
   next();
 };
 
+// ⭐ 全局中间件必须先于所有路由注册，否则 req.body 无法解析
 app.use(cors({
   origin: allowedOrigins.includes('*') ? '*' : allowedOrigins,
   methods: ['GET', 'POST', 'DELETE'],
 }));
 app.use(express.json({ limit: '1mb' }));
+
+// 登录 API（放置于 requireAuth 挂载之前，免登录访问）
+app.post('/api/auth/login', (req, res) => {
+  const { username, password } = req.body || {};
+  try {
+    const user = listStore.login(username, password);
+    const token = crypto.randomBytes(32).toString('hex');
+    listStore.createSession(token, user.username, SESSION_TTL_MS);
+    // ⭐ 同时下发 cookie：video 标签播放 /downloads 时无法带 Authorization header
+    res.cookie(AUTH_COOKIE, token, {
+      httpOnly: false,
+      sameSite: 'lax',
+      maxAge: SESSION_TTL_MS,
+      path: '/',
+    });
+    res.json({ ok: true, token, username: user.username });
+  } catch (err) {
+    res.status(401).json({ error: err.message });
+  }
+});
+
+// 登出 API：清除会话 token
+app.post('/api/auth/logout', (req, res) => {
+  const token = resolveToken(req);
+  if (token) listStore.deleteSession(token);
+  res.clearCookie(AUTH_COOKIE, { path: '/' });
+  res.json({ ok: true });
+});
+
+// 注册 API（保留能力；前端按钮置灰，暂不开放）
+app.post('/api/auth/register', (req, res) => {
+  const { username, password } = req.body || {};
+  try {
+    const user = listStore.register(username, password);
+    // ⭐ 用户隔离：注册成功即初始化专属下载目录
+    const dir = path.join(DOWNLOADS_DIR, user.username);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    res.json({ ok: true, username: user.username });
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
 
 // ⭐ P2-11: 全局 API 速率限制
 const globalLimiter = rateLimit({
@@ -107,11 +179,21 @@ app.use('/vendor/socket.io', express.static(path.join(__dirname, '../node_module
 app.use('/vendor/hls.js', express.static(path.join(__dirname, '../node_modules/hls.js/dist')));
 app.use(express.static(path.join(__dirname, '../public')));
 
-// 下载文件保护：DOWNLOADS_AUTH=1 + API_TOKEN 时需鉴权
-if (process.env.DOWNLOADS_AUTH === '1' && API_TOKEN) {
-  app.use('/downloads', requireAuth);
-}
-app.use('/downloads', express.static(path.join(__dirname, '../downloads')));
+// ⭐ 下载文件按用户隔离：cookie 鉴权（video 标签无法带 Authorization header）
+// 映射到 downloads/<username>/ 子目录，实现用户隔离
+app.use('/downloads', (req, res, next) => {
+  const token = resolveToken(req);
+  const username = token ? listStore.getSessionUser(token) : null;
+  if (!username) {
+    return res.status(401).json({ error: '未登录：请先登录' });
+  }
+  req.user = username;
+  listStore.setCurrentUser(username);
+  const userDir = path.join(DOWNLOADS_DIR, username);
+  express.static(userDir, { fallthrough: false })(req, res, () => {
+    res.status(404).json({ error: '文件不存在' });
+  });
+});
 
 // ─── HTTP Server & Socket.IO ────────────────────────
 const httpServer = createServer(app);
@@ -119,14 +201,24 @@ const io = new SocketIOServer(httpServer, {
   cors: { origin: allowedOrigins.includes('*') ? '*' : allowedOrigins, methods: ['GET', 'POST'] },
 });
 
-// WebSocket 连接
+// WebSocket 连接（⭐ 用户隔离：从握手 auth 解析用户并加入对应房间）
 io.on('connection', (socket) => {
   log.info({ socketId: socket.id }, 'WS 客户端连接');
 
+  // 从握手 auth 或 query 解析登录用户
+  const authToken = socket.handshake?.auth?.token
+    || socket.handshake?.query?.token
+    || null;
+  const authUser = authToken ? listStore.getSessionUser(authToken) : null;
+  if (authUser) socket.join(`user:${authUser}`);
+
   socket.on('subscribe', (taskId) => {
-    socket.join(`task:${taskId}`);
     const task = taskManager.get(taskId);
-    if (task) socket.emit('task-status', task);
+    // 用户隔离：仅允许订阅自己拥有的任务
+    if (task && authUser && (!task.owner || task.owner === authUser)) {
+      socket.join(`task:${taskId}`);
+      socket.emit('task-status', task);
+    }
   });
 
   socket.on('unsubscribe', (taskId) => {
@@ -139,38 +231,44 @@ io.on('connection', (socket) => {
 });
 
 // ─── taskManager 事件 → WebSocket 广播 ────────────
+// ⭐ 用户隔离：任务列表只推送给该任务所属用户的客户端
+function broadcastTaskList(owner) {
+  io.to(`user:${owner}`).emit('task-list-update', taskManager.listByOwner(owner));
+}
+
 taskManager.on('task-updated', (task) => {
   io.to(`task:${task.id}`).emit('task-status', task);
-  io.emit('task-list-update', taskManager.listAll());
+  broadcastTaskList(task.owner || 'wilsonwen');
 });
 
 taskManager.on('task-created', (task) => {
-  io.emit('task-list-update', taskManager.listAll());
+  broadcastTaskList(task.owner || 'wilsonwen');
 });
 
 taskManager.on('task-retry', (task) => {
-  io.emit('task-list-update', taskManager.listAll());
+  broadcastTaskList(task.owner || 'wilsonwen');
 });
 
 taskManager.on('task-completed', (task) => {
-  io.emit('task-list-update', taskManager.listAll());
+  broadcastTaskList(task.owner || 'wilsonwen');
   // ⭐ Socket.IO 房间清理：通知客户端退订已完成任务
   io.to(`task:${task.id}`).emit('task-finalized', { taskId: task.id });
 });
 
 taskManager.on('task-failed', (task) => {
-  io.emit('task-list-update', taskManager.listAll());
+  broadcastTaskList(task.owner || 'wilsonwen');
   // ⭐ Socket.IO 房间清理：通知客户端退订失败任务
   io.to(`task:${task.id}`).emit('task-finalized', { taskId: task.id });
 });
 
 taskManager.on('task-cancelled', (task) => {
-  io.emit('task-list-update', taskManager.listAll());
+  broadcastTaskList(task.owner || 'wilsonwen');
   io.to(`task:${task.id}`).emit('task-finalized', { taskId: task.id });
 });
 
-taskManager.on('task-removed', (taskId) => {
-  io.emit('task-list-update', taskManager.listAll());
+taskManager.on('task-removed', ({ taskId, owner }) => {
+  // ⭐ 用户隔离：向该任务所属用户广播更新
+  broadcastTaskList(owner || 'wilsonwen');
 });
 
 // 重试就绪事件 → 交给统一调度器（受 maxConcurrent 限制）
@@ -227,7 +325,7 @@ app.post('/api/download', downloadLimiter, async (req, res) => {
     return res.status(400).json({ error: err.message });
   }
 
-  const taskId = taskManager.create(url, { cookies, injectScript, maxSpeed, proxy });
+  const taskId = taskManager.create(url, { cookies, injectScript, maxSpeed, proxy, owner: req.user });
   log.info({ taskId, url: url.slice(0, 100) }, '创建下载任务');
 
   scheduleNext();
@@ -261,6 +359,7 @@ app.post('/api/download/advanced', downloadLimiter, async (req, res) => {
 
   const taskId = taskManager.create(url, {
     cookies, injectScript, maxSpeed, proxy,
+    owner: req.user,
     engine: cleanEngine,
     format: cleanFormat,
     targetBandwidth: bandwidth || null,
@@ -278,16 +377,17 @@ app.post('/api/download/advanced', downloadLimiter, async (req, res) => {
 /**
  * GET /api/tasks — 列出所有任务
  */
-app.get('/api/tasks', (_req, res) => {
-  res.json(taskManager.listAll());
+app.get('/api/tasks', (req, res) => {
+  res.json(taskManager.listByOwner(req.user));
 });
 
 /**
- * GET /api/library — 已下载视频库（供“浏览”页播放）
+ * GET /api/library — 已下载视频库（供“浏览”页播放，按用户隔离）
  */
-app.get('/api/library', (_req, res) => {
+app.get('/api/library', (req, res) => {
+  const userDir = path.join(DOWNLOADS_DIR, req.user);
   const runningIds = new Set(
-    taskManager.listAll()
+    taskManager.listByOwner(req.user)
       .filter(t => [TaskStatus.CREATED, TaskStatus.RUNNING].includes(t.status))
       .map(t => t.id)
   );
@@ -295,19 +395,19 @@ app.get('/api/library', (_req, res) => {
   const listedNames = listStore.allItemNames();
   let files = [];
   try {
-    files = fs.readdirSync(DOWNLOADS_DIR)
+    files = fs.readdirSync(userDir)
       .filter((name) => {
         if (name.startsWith('.')) return false;
         if (name.endsWith('.part')) return false;
         if (runningIds.has(name) || [...runningIds].some(id => name.startsWith(`${id}.`))) return false;
         if (listedNames.has(name)) return false; // ⭐ 已入列表：浏览页隐藏
-        const p = path.join(DOWNLOADS_DIR, name);
+        const p = path.join(userDir, name);
         let stat;
         try { stat = fs.statSync(p); } catch { return false; }
         return stat.isFile();
       })
       .map((name) => {
-        const p = path.join(DOWNLOADS_DIR, name);
+        const p = path.join(userDir, name);
         const stat = fs.statSync(p);
         return { name, size: stat.size, mtime: stat.mtimeMs };
       })
@@ -323,19 +423,20 @@ app.get('/api/library', (_req, res) => {
  * 仅允许删除 downloads 根目录下的普通文件，且不允许删除运行中任务的文件
  */
 app.delete('/api/library/:name', (req, res) => {
+  const userDir = path.join(DOWNLOADS_DIR, req.user);
   const name = path.basename(req.params.name || '');
   if (!name || name === '.' || name === '..') {
     return res.status(400).json({ error: '非法文件名' });
   }
-  const filePath = path.join(DOWNLOADS_DIR, name);
-  if (!filePath.startsWith(DOWNLOADS_DIR + path.sep)) {
+  const filePath = path.join(userDir, name);
+  if (!filePath.startsWith(userDir + path.sep)) {
     return res.status(400).json({ error: '非法文件名' });
   }
   if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
     return res.status(404).json({ error: '文件不存在' });
   }
   const runningIds = new Set(
-    taskManager.listAll()
+    taskManager.listByOwner(req.user)
       .filter(t => [TaskStatus.CREATED, TaskStatus.RUNNING].includes(t.status))
       .map(t => t.id)
   );
@@ -372,12 +473,22 @@ app.post('/api/settings', (req, res) => {
   res.json({ ok: true, maxConcurrent: applied });
 });
 
+/** 校验任务归属：返回任务或 403/404 响应 */
+function ownedTask(req, res, id) {
+  const task = taskManager.get(id);
+  if (!task) return res.status(404).json({ error: '任务不存在' });
+  if (task.owner && task.owner !== req.user) {
+    return res.status(403).json({ error: '无权访问该任务' });
+  }
+  return task;
+}
+
 /**
  * GET /api/task/:id — 查询单个任务
  */
 app.get('/api/task/:id', (req, res) => {
-  const task = taskManager.get(req.params.id);
-  if (!task) return res.status(404).json({ error: '任务不存在' });
+  const task = ownedTask(req, res, req.params.id);
+  if (!task) return;
   res.json(task);
 });
 
@@ -385,8 +496,8 @@ app.get('/api/task/:id', (req, res) => {
  * DELETE /api/task/:id — 删除任务
  */
 app.delete('/api/task/:id', (req, res) => {
-  const task = taskManager.get(req.params.id);
-  if (!task) return res.status(404).json({ error: '任务不存在' });
+  const task = ownedTask(req, res, req.params.id);
+  if (!task) return;
   cancelDownload(req.params.id);
   const ok = taskManager.remove(req.params.id);
   if (!ok) return res.status(500).json({ error: '删除失败' });
@@ -397,8 +508,8 @@ app.delete('/api/task/:id', (req, res) => {
  * POST /api/task/:id/cancel — 停止任务（不删除，保留分片缓存，可重试续跑）
  */
 app.post('/api/task/:id/cancel', (req, res) => {
-  const task = taskManager.get(req.params.id);
-  if (!task) return res.status(404).json({ error: '任务不存在' });
+  const task = ownedTask(req, res, req.params.id);
+  if (!task) return;
   if (![TaskStatus.CREATED, TaskStatus.RUNNING].includes(task.status)) {
     return res.status(400).json({ error: '仅运行中/等待中的任务可停止' });
   }
@@ -431,7 +542,12 @@ app.post('/api/tasks/retry-batch', async (req, res) => {
   if (!Array.isArray(taskIds) || taskIds.length === 0) {
     return res.status(400).json({ error: '缺少 taskIds 参数或为空' });
   }
-  const result = taskManager.retryBatch(taskIds);
+  // ⭐ 用户隔离：仅操作当前用户的任务
+  const owned = taskIds.filter((id) => {
+    const t = taskManager.get(id);
+    return t && (!t.owner || t.owner === req.user);
+  });
+  const result = taskManager.retryBatch(owned);
   scheduleNext();
   res.json({ ok: true, ...result });
 });
@@ -444,8 +560,13 @@ app.post('/api/tasks/delete-batch', (req, res) => {
   if (!Array.isArray(taskIds) || taskIds.length === 0) {
     return res.status(400).json({ error: '缺少 taskIds 参数或为空' });
   }
-  for (const id of taskIds) cancelDownload(id);
-  const result = taskManager.removeBatch(taskIds);
+  // ⭐ 用户隔离：仅操作当前用户的任务
+  const owned = taskIds.filter((id) => {
+    const t = taskManager.get(id);
+    return t && (!t.owner || t.owner === req.user);
+  });
+  for (const id of owned) cancelDownload(id);
+  const result = taskManager.removeBatch(owned);
   res.json({ ok: true, ...result });
 });
 
@@ -463,8 +584,8 @@ app.post('/api/proxy/add', (req, res) => {
 /**
  * GET /api/stats — 系统统计信息（P2-9 监控增强）
  */
-app.get('/api/stats', (_req, res) => {
-  const tasks = taskManager.listAll();
+app.get('/api/stats', (req, res) => {
+  const tasks = taskManager.listByOwner(req.user);
   const total = tasks.length;
   const completed = tasks.filter(t => t.status === 'completed').length;
   const failed = tasks.filter(t => t.status === 'failed').length;
@@ -504,6 +625,15 @@ app.get('/api/lists', (_req, res) => {
 });
 
 /**
+ * GET /api/lists/private-meta — 私密列表元数据（id/name/count，不含 items）
+ * ⭐ 供前端“将视频加入私密列表”时选择目标列表，无需密码（密码仅用于进入/浏览列表内容）
+ * 必须定义在 /api/lists/:id 之前，避免被 :id 通配捕获
+ */
+app.get('/api/lists/private-meta', (req, res) => {
+  res.json({ lists: listStore.listPrivateMeta() });
+});
+
+/**
  * GET /api/lists/:id — 查询单个列表（私密列表需 token）
  */
 app.get('/api/lists/:id', (req, res) => {
@@ -533,10 +663,14 @@ app.get('/api/lists/:id', (req, res) => {
  * Body: { name: string, private?: boolean }
  * 创建私密列表需携带 x-private-token
  */
+/**
+ * POST /api/lists — 创建列表（含私密，不需要密码：密码仅用于进入/浏览私密列表内容）
+ * Body: { name: string, private?: boolean }
+ */
 app.post('/api/lists', (req, res) => {
   const { name, private: isPrivate } = req.body || {};
   try {
-    const list = listStore.create(name, !!isPrivate, privateToken(req));
+    const list = listStore.create(name, !!isPrivate);
     log.info({ listId: list.id, name: list.name, private: list.private }, '创建列表');
     res.json({ ok: true, list });
   } catch (err) {
@@ -559,13 +693,13 @@ app.delete('/api/lists/:id', (req, res) => {
 });
 
 /**
- * POST /api/lists/:id/items — 添加条目到列表
+ * POST /api/lists/:id/items — 添加条目到列表（含私密，不需要密码）
  * Body: { names: string[] }
  */
 app.post('/api/lists/:id/items', (req, res) => {
   const { names } = req.body || {};
   try {
-    const list = listStore.addItems(req.params.id, names, privateToken(req));
+    const list = listStore.addItems(req.params.id, names);
     res.json({ ok: true, list });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -573,13 +707,13 @@ app.post('/api/lists/:id/items', (req, res) => {
 });
 
 /**
- * DELETE /api/lists/:id/items — 从列表移除条目
+ * DELETE /api/lists/:id/items — 从列表移除条目（含私密，不需要密码）
  * Body: { names: string[] }
  */
 app.delete('/api/lists/:id/items', (req, res) => {
   const { names } = req.body || {};
   try {
-    const list = listStore.removeItems(req.params.id, names, privateToken(req));
+    const list = listStore.removeItems(req.params.id, names);
     res.json({ ok: true, list });
   } catch (err) {
     res.status(400).json({ error: err.message });
@@ -590,7 +724,7 @@ app.delete('/api/lists/:id/items', (req, res) => {
  * POST /api/tasks/clean-completed — 一键清理所有已完成任务记录（保留已下载文件）
  */
 app.post('/api/tasks/clean-completed', (req, res) => {
-  const completed = taskManager.listAll()
+  const completed = taskManager.listByOwner(req.user)
     .filter(t => t.status === TaskStatus.COMPLETED)
     .map(t => t.id);
   if (completed.length === 0) {
@@ -636,7 +770,7 @@ app.post('/api/private/password', (req, res) => {
 });
 
 /**
- * POST /api/private/verify — 验证私密密码，签发 30 分钟 token
+ * POST /api/private/verify — 验证私密密码，签发 token（永不过期，认证由前端锁会话控制）
  * Body: { password: string }
  */
 app.post('/api/private/verify', (req, res) => {
@@ -647,6 +781,16 @@ app.post('/api/private/verify', (req, res) => {
   } catch (err) {
     res.status(401).json({ error: err.message });
   }
+});
+
+/**
+ * POST /api/private/logout — 私密登出/锁定：删除服务端私密 token
+ * ⭐ 前端在软件到后台或退出私密列表时调用，使私密认证失效并清理服务端会话
+ */
+app.post('/api/private/logout', (req, res) => {
+  const token = privateToken(req);
+  if (token) listStore.deletePrivateSession(token);
+  res.json({ ok: true });
 });
 
 /**
@@ -819,6 +963,8 @@ async function processTask(taskId) {
 
     // 构建下载选项（headers 通过 startDownload 第2参数单独传入，不放在 options 里）
     const downloadOpts = {
+      owner: task.owner || 'wilsonwen',
+      outputDir: path.join(DOWNLOADS_DIR, task.owner || 'wilsonwen'), // ⭐ 用户隔离：下载到用户专属目录
       engine: task.engine || 'auto',
       format: task.format || streamFormat,
       maxSpeed: task.maxSpeed || 0,
@@ -917,6 +1063,7 @@ function sanitizeFileBase(name) {
  * 优先页面标题；直链/流地址取路径文件名；均不可用时退回 taskId
  */
 function resolveOutputName(task, captureResult, streamUrl) {
+  const userDir = path.join(DOWNLOADS_DIR, task.owner || 'wilsonwen');
   let base = '';
   if (captureResult.pageTitle) base = sanitizeFileBase(captureResult.pageTitle);
   else if (captureResult.title) base = sanitizeFileBase(captureResult.title);
@@ -928,8 +1075,8 @@ function resolveOutputName(task, captureResult, streamUrl) {
     } catch (_) {}
   }
   if (!base) return task.id;
-  // 存在同名文件时追加短任务号，避免覆盖其他任务
-  const conflict = ['.mp4', '.ts', '.mkv'].some(ext => fs.existsSync(path.join(DOWNLOADS_DIR, base + ext)));
+  // 存在同名文件时追加短任务号，避免覆盖其他任务（按用户目录检查）
+  const conflict = ['.mp4', '.ts', '.mkv'].some(ext => fs.existsSync(path.join(userDir, base + ext)));
   return conflict ? `${base}_${task.id.slice(-6)}` : base;
 }
 
@@ -958,6 +1105,55 @@ httpServer.listen(PORT, () => {
   // AUTO_START_QUEUE=0 可进入“待命模式”，不自动处理队列（维护/调试用）
   if (process.env.AUTO_START_QUEUE !== '0') {
     scheduleNext();
+  }
+
+  // ⭐ 用户隔离：为数据库中的每个用户初始化专属下载目录
+  try {
+    const users = listStore.listUsers();
+    for (const u of users) {
+      const dir = path.join(DOWNLOADS_DIR, u.username);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    }
+    // ⭐ 历史数据迁移：downloads 根目录旧文件归入默认用户（wilsonwen）子目录
+    try {
+      const rootEntries = fs.readdirSync(DOWNLOADS_DIR);
+      const defaultUser = 'wilsonwen';
+      const userNames = new Set(users.map(u => u.username));
+      const legacyDir = path.join(DOWNLOADS_DIR, defaultUser);
+      if (fs.existsSync(legacyDir)) {
+        for (const entry of rootEntries) {
+          if (userNames.has(entry)) continue; // 跳过用户子目录
+          if (entry.startsWith('.')) continue; // 跳过隐藏（.cache 等）
+          const src = path.join(DOWNLOADS_DIR, entry);
+          let st; try { st = fs.statSync(src); } catch { continue; }
+          if (!st.isFile()) continue;
+          const dst = path.join(legacyDir, entry);
+          if (fs.existsSync(dst)) continue;
+          try {
+            fs.renameSync(src, dst);
+            log.info({ from: entry, to: defaultUser }, '迁移历史下载文件到用户目录');
+          } catch (err) {
+            log.warn({ entry, err: err.message }, '历史文件迁移失败');
+          }
+        }
+      }
+    } catch (err) {
+      log.warn({ err: err.message }, '历史下载文件迁移扫描失败');
+    }
+    log.info({ users: users.map(u => u.username) }, '已为用户初始化下载目录');
+  } catch (err) {
+    log.error({ err: err.message }, '用户下载目录初始化失败');
+  }
+
+  // ⭐ 可选优化：启动时主动清理已过期的登录/私密会话（避免表无限增长）
+  try {
+    const clearedLogin = listStore.sweepSessions();
+    const clearedPrivate = listStore.sweepPrivateSessions();
+    if (clearedLogin || clearedPrivate) {
+      log.info({ clearedLogin, clearedPrivate }, '启动时已清理过期会话');
+    }
+  } catch (err) {
+    log.warn({ err: err.message }, '启动时清理过期会话失败');
   }
 });
 

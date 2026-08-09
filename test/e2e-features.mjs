@@ -48,7 +48,20 @@ page.on('console', (m) => { if (m.type() === 'error' && !m.text().includes('favi
 try {
   if (!await waitForServer()) { throw new Error('隔离测试实例启动失败'); }
   console.log(`  🔌 隔离实例已启动: :${TEST_PORT} 数据目录=${TEST_DATA_DIR}`);
+  // ⭐ 后端强制登录：node 侧获取 API token（隔离实例 seed 默认用户）
+  const authRes = await fetch(`${BASE}/api/auth/login`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'wilsonwen', password: 'Wenq5201314' }),
+  });
+  const authData = await authRes.json();
+  check('隔离实例登录成功（默认用户）', authRes.ok && !!authData.token, JSON.stringify(authData).slice(0, 80));
+  const apiCall = (url, opts = {}) => fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: 'Bearer ' + (authData.token || '') } });
   await page.goto(BASE, { waitUntil: 'networkidle', timeout: 15000 });
+  await page.waitForTimeout(800);
+  // ⭐ 页面 UI 登录（验证 macos.html 登录门控）
+  await page.fill('#loginUser', 'wilsonwen');
+  await page.fill('#loginPass', 'Wenq5201314');
+  await page.click('#loginBtn');
   await page.waitForTimeout(800);
 
   // ── 1. 一键清理按钮 ──
@@ -267,25 +280,25 @@ try {
 
   // ── 4.7 本轮新增：加入列表后浏览页隐藏 / 私密列表卡片播放 / 切后台锁定 ──
   // 通过 API 创建公开列表并加入第一个视频（走真实接口）
-  const libFiles = await fetch(`${BASE}/api/library`).then(r => r.json());
+  const libFiles = await apiCall(`${BASE}/api/library`).then(r => r.json());
   if (libFiles.length) {
     const first = libFiles[0].name;
-    const mkRes = await fetch(`${BASE}/api/lists`, {
+    const mkRes = await apiCall(`${BASE}/api/lists`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'E2E收藏' }),
     });
     const mkData = await mkRes.json();
     const listId = mkData.list?.id;
     if (listId) {
-      const addRes = await fetch(`${BASE}/api/lists/${listId}/items`, {
+      const addRes = await apiCall(`${BASE}/api/lists/${listId}/items`, {
         method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: [first] }),
       });
       check('API: 视频成功加入列表', addRes.ok, JSON.stringify(await addRes.json().catch(() => ({}))).slice(0, 80));
       // 加入列表后浏览页应隐藏该视频
-      const libAfter = await fetch(`${BASE}/api/library`).then(r => r.json());
+      const libAfter = await apiCall(`${BASE}/api/library`).then(r => r.json());
       check('加入列表后浏览页隐藏该视频', !libAfter.some(f => f.name === first), `hidden=${first}`);
       // 清理：删除测试列表（视频恢复可见）
-      await fetch(`${BASE}/api/lists/${listId}`, { method: 'DELETE' });
-      const libRestored = await fetch(`${BASE}/api/library`).then(r => r.json());
+      await apiCall(`${BASE}/api/lists/${listId}`, { method: 'DELETE' });
+      const libRestored = await apiCall(`${BASE}/api/library`).then(r => r.json());
       check('删除列表后视频恢复浏览页可见', libRestored.some(f => f.name === first));
     }
   } else {
@@ -362,9 +375,9 @@ try {
   await page.waitForTimeout(300);
 
   // ── 5. API 层冒烟（走 HTTP 直接验证） ──
-  const api = await fetch(`${BASE}/api/private/status`).then(r => r.json());
+  const api = await apiCall(`${BASE}/api/private/status`).then(r => r.json());
   check('API: private/status 返回 hasPassword=true', api.hasPassword === true, JSON.stringify(api));
-  const lists = await fetch(`${BASE}/api/lists`).then(r => r.json());
+  const lists = await apiCall(`${BASE}/api/lists`).then(r => r.json());
   check('API: lists 正常返回', Array.isArray(lists.lists), JSON.stringify(lists).slice(0, 80));
 
 } catch (e) {

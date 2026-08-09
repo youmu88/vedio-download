@@ -35,7 +35,8 @@ const DB_FILE = path.join(DATA_DIR, 'vd.db');
 const LEGACY_LISTS_FILE = path.join(DATA_DIR, 'lists.json');
 const LEGACY_PASS_FILE = path.join(DATA_DIR, 'private-pass.json');
 
-const TOKEN_TTL_MS = 30 * 60 * 1000; // token 有效期 30 分钟
+// ⭐ 私密认证 token 永不过期：认证时机由前端锁会话控制（软件到后台/退出私密列表时清除），
+// 持续浏览/播放无时间限制，无需服务端 TTL
 const PIN_RE = /^(\d{4}|\d{6})$/;    // 4 位或 6 位数字密码
 
 function ensureDataDir() {
@@ -44,7 +45,6 @@ function ensureDataDir() {
 
 class ListStore {
   constructor() {
-    this.tokens = new Map(); // token → { expiresAt }
     ensureDataDir();
     this.db = new DatabaseSync(DB_FILE);
     this._initSchema();
@@ -63,14 +63,127 @@ class ListStore {
         name TEXT NOT NULL,
         is_private INTEGER NOT NULL DEFAULT 0,
         created_at TEXT NOT NULL,
-        items TEXT NOT NULL DEFAULT '[]'
+        items TEXT NOT NULL DEFAULT '[]',
+        owner TEXT NOT NULL DEFAULT 'wilsonwen'
       );
       CREATE TABLE IF NOT EXISTS private_pass (
         id INTEGER PRIMARY KEY CHECK (id = 1),
         salt TEXT NOT NULL,
         hash TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS users (
+        username TEXT PRIMARY KEY,
+        salt TEXT NOT NULL,
+        hash TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS sessions (
+        token TEXT PRIMARY KEY,
+        username TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS private_sessions (
+        token TEXT PRIMARY KEY,
+        created_at TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      );
     `);
+    // 兼容旧库：已有 lists 表缺 owner 列时补列（存量数据归默认用户）
+    try {
+      const cols = this.db.prepare('PRAGMA table_info(lists)').all();
+      if (!cols.some((c) => c.name === 'owner')) {
+        this.db.exec('ALTER TABLE lists ADD COLUMN owner TEXT NOT NULL DEFAULT \'wilsonwen\'');
+        console.log('[ListStore] 已为 lists 表补充 owner 列');
+      }
+    } catch (err) {
+      console.error('[ListStore] owner 列迁移失败:', err.message);
+    }
+    this._seedDefaultUser();
+  }
+
+  /** 预加载默认用户（wilsonwen / Wenq5201314） */
+  _seedDefaultUser() {
+    const row = this.db.prepare('SELECT COUNT(*) AS n FROM users').get();
+    if (row.n > 0) return;
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync('Wenq5201314', salt, 64).toString('hex');
+    this.db.prepare('INSERT INTO users (username, salt, hash, created_at) VALUES (?,?,?,?)')
+      .run('wilsonwen', salt, hash, new Date().toISOString());
+    console.log('[ListStore] 已预加载默认用户: wilsonwen');
+  }
+
+  /** 登录校验：成功返回用户，失败抛错 */
+  login(username, password) {
+    const user = this.db.prepare('SELECT * FROM users WHERE username = ?').get(String(username || '').trim());
+    if (!user) throw new Error('用户不存在');
+    const expected = Buffer.from(user.hash, 'hex');
+    const actual = crypto.scryptSync(String(password || ''), user.salt, 64);
+    if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
+      throw new Error('密码错误');
+    }
+    return { username: user.username, createdAt: user.created_at };
+  }
+
+  /** 注册新用户（保留能力；当前前端按钮置灰暂不开放） */
+  register(username, password) {
+    const name = String(username || '').trim();
+    if (!name || name.length < 3) throw new Error('用户名至少 3 个字符');
+    if (this.db.prepare('SELECT 1 FROM users WHERE username = ?').get(name)) throw new Error('用户已存在');
+    const salt = crypto.randomBytes(16).toString('hex');
+    const hash = crypto.scryptSync(String(password || ''), salt, 64).toString('hex');
+    this.db.prepare('INSERT INTO users (username, salt, hash, created_at) VALUES (?,?,?,?)')
+      .run(name, salt, hash, new Date().toISOString());
+    return { username: name };
+  }
+
+  // ═══════════════════════════════════════════
+  // 会话（SQLite 持久化，服务重启后登录态保留）
+  // ═══════════════════════════════════════════
+
+  /**
+   * 创建会话（token → username），持久化到 SQLite
+   * @param {string} token - 随机 token（32 字节 hex）
+   * @param {string} username - 登录用户
+   * @param {number} ttlMs - 有效期毫秒
+   */
+  createSession(token, username, ttlMs) {
+    const now = Date.now();
+    this.db.prepare('INSERT OR REPLACE INTO sessions (token, username, created_at, expires_at) VALUES (?,?,?,?)')
+      .run(String(token), String(username), new Date(now).toISOString(), now + (ttlMs || 0));
+    return token;
+  }
+
+  /**
+   * 查询有效会话对应的用户名（过期/不存在返回 null）
+   * @returns {string|null}
+   */
+  getSessionUser(token) {
+    if (!token) return null;
+    const row = this.db.prepare('SELECT username, expires_at FROM sessions WHERE token = ?').get(String(token));
+    if (!row) return null;
+    if (row.expires_at < Date.now()) {
+      this.deleteSession(token); // 惰性清理过期会话
+      return null;
+    }
+    return row.username;
+  }
+
+  /** 删除会话（登出/取消） */
+  deleteSession(token) {
+    if (!token) return;
+    this.db.prepare('DELETE FROM sessions WHERE token = ?').run(String(token));
+  }
+
+  /** 清理所有已过期会话，返回删除条数 */
+  sweepSessions() {
+    const res = this.db.prepare('DELETE FROM sessions WHERE expires_at < ?').run(Date.now());
+    return res.changes || 0;
+  }
+
+  /** 列出所有有效会话（供启动/诊断用） */
+  listSessions() {
+    return this.db.prepare('SELECT token, username, created_at, expires_at FROM sessions').all();
   }
 
   /** 旧 JSON 数据迁移导入（仅首次执行，DB 为空列表且旧文件存在时） */
@@ -131,12 +244,17 @@ class ListStore {
   }
 
   _allRows() {
-    return this.db.prepare('SELECT * FROM lists').all().map((r) => this._rowToList(r));
+    return this.db.prepare('SELECT * FROM lists WHERE owner = ?').all(this._currentOwner || 'wilsonwen').map((r) => this._rowToList(r));
+  }
+
+  /** 设置当前会话用户（登录后由路由层注入，实现数据按用户隔离） */
+  setCurrentUser(username) {
+    this._currentOwner = String(username || 'wilsonwen');
   }
 
   _upsert(list) {
-    this.db.prepare('INSERT OR REPLACE INTO lists (id, name, is_private, created_at, items) VALUES (?,?,?,?,?)')
-      .run(list.id, list.name, list.private ? 1 : 0, list.createdAt, JSON.stringify(list.items || []));
+    this.db.prepare('INSERT OR REPLACE INTO lists (id, name, is_private, created_at, items, owner) VALUES (?,?,?,?,?,?)')
+      .run(list.id, list.name, list.private ? 1 : 0, list.createdAt, JSON.stringify(list.items || []), list.owner || this._currentOwner || 'wilsonwen');
   }
 
   _getPass() {
@@ -160,6 +278,17 @@ class ListStore {
     return this._allRows()
       .filter((l) => l.private)
       .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  }
+
+  /**
+   * 私密列表元数据（id/name/count，不含 items）
+   * ⭐ 供前端“将视频加入私密列表”时选择目标列表，无需密码（密码仅用于进入/浏览列表内容）
+   */
+  listPrivateMeta() {
+    return this._allRows()
+      .filter((l) => l.private)
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .map((l) => ({ id: l.id, name: l.name, count: (l.items || []).length }));
   }
 
   /** 是否有私密列表（供前端显示锁图标） */
@@ -196,13 +325,12 @@ class ListStore {
    * 创建列表
    * @param {string} name 列表名称
    * @param {boolean} [isPrivate] 是否私密（默认 false）
-   * @param {string} [token] 创建私密列表时必须携带有效 token
    * @returns {{id: string, name: string, private: boolean}}
+   * ⭐ 创建列表（含私密）不需要密码：密码仅用于进入/浏览私密列表内容
    */
-  create(name, isPrivate = false, token = null) {
+  create(name, isPrivate = false) {
     const clean = String(name || '').trim().slice(0, 40);
     if (!clean) throw new Error('列表名称不能为空');
-    if (isPrivate) this._requireToken(token);
     const list = {
       id: `list_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       name: clean,
@@ -229,10 +357,14 @@ class ListStore {
    * 向列表添加条目（按视频文件名，重复自动去重）
    * @param {string[]} names 视频文件名数组
    */
-  addItems(id, names, token = null) {
+  /**
+   * 向列表添加条目（按视频文件名，重复自动去重）
+   * ⭐ 加入列表（含私密）不需要密码：密码仅用于进入/浏览私密列表内容
+   * @param {string[]} names 视频文件名数组
+   */
+  addItems(id, names) {
     const list = this.get(id);
     if (!list) throw new Error('列表不存在');
-    if (list.private) this._requireToken(token);
     if (!Array.isArray(names) || names.length === 0) throw new Error('缺少视频条目');
     const exist = new Set(list.items.map((i) => i.name));
     const now = new Date().toISOString();
@@ -249,10 +381,12 @@ class ListStore {
   /**
    * 从列表移除条目
    */
-  removeItems(id, names, token = null) {
+  /**
+   * 从列表移除条目（⭐ 移除列表不需要密码：密码仅用于进入/浏览私密列表内容）
+   */
+  removeItems(id, names) {
     const list = this.get(id);
     if (!list) throw new Error('列表不存在');
-    if (list.private) this._requireToken(token);
     if (!Array.isArray(names) || names.length === 0) throw new Error('缺少视频条目');
     const drop = new Set(names.map((n) => String(n).trim()));
     list.items = list.items.filter((i) => !drop.has(i.name));
@@ -286,8 +420,8 @@ class ListStore {
   }
 
   /**
-   * 验证密码；正确则签发 token
-   * @returns {{ token: string, expiresAt: number }}
+   * 验证密码；正确则签发 token（永不过期，认证由前端锁会话控制）
+   * @returns {{ token: string, expiresAt: null }}
    */
   verifyPassword(pin) {
     if (!this.hasPassword()) throw new Error('尚未设置私密密码');
@@ -299,11 +433,14 @@ class ListStore {
       throw new Error('密码错误');
     }
     const token = crypto.randomBytes(24).toString('hex');
-    const expiresAt = Date.now() + TOKEN_TTL_MS;
-    this.tokens.set(token, { expiresAt });
-    // 定期清理过期 token，防止 Map 无限增长
+    // ⭐ 私密 token 永不过期（expires_at 存远未来时间戳表达无限期，兼容表 NOT NULL 约束）：
+    // 持续浏览/播放无时间限制，认证失效完全由前端锁会话（后台/退出时清除 token + 调后端删除）控制
+    const FOREVER_MS = 253402300799000; // 9999-12-31，表达永不过期
+    this.db.prepare('INSERT OR REPLACE INTO private_sessions (token, created_at, expires_at) VALUES (?,?,?)')
+      .run(token, new Date().toISOString(), FOREVER_MS);
+    // 兼容清理旧库中遗留的过期 token，防止表无限增长
     this._sweepTokens();
-    return { token, expiresAt };
+    return { token, expiresAt: null };
   }
 
   /**
@@ -326,21 +463,36 @@ class ListStore {
     return this._requireToken(token);
   }
 
-  /** 校验 token 有效性 */
+  /** 列出所有用户（供启动时初始化专属下载目录） */
+  listUsers() {
+    return this.db.prepare('SELECT username, created_at FROM users ORDER BY created_at').all();
+  }
+
+  /** 校验 token 有效性（SQLite 持久化存储；token 永不过期，仅校验存在性） */
   _requireToken(token) {
-    const t = this.tokens.get(String(token || ''));
-    if (!t || t.expiresAt < Date.now()) {
-      if (t) this.tokens.delete(token);
-      throw new Error('私密验证已过期，请重新输入密码');
+    const row = this.db.prepare('SELECT 1 FROM private_sessions WHERE token = ?')
+      .get(String(token || ''));
+    if (!row) {
+      throw new Error('私密认证已失效，请重新输入密码');
     }
     return true;
   }
 
+  /** 删除私密会话（登出/锁定） */
+  deletePrivateSession(token) {
+    if (!token) return;
+    this.db.prepare('DELETE FROM private_sessions WHERE token = ?').run(String(token));
+  }
+
+  /** 清理所有已过期的私密会话（兼容旧库遗留），返回删除条数 */
   _sweepTokens() {
-    const now = Date.now();
-    for (const [token, t] of this.tokens) {
-      if (t.expiresAt < now) this.tokens.delete(token);
-    }
+    const res = this.db.prepare('DELETE FROM private_sessions WHERE expires_at IS NOT NULL AND expires_at < ?').run(Date.now());
+    return res.changes || 0;
+  }
+
+  /** 公开入口：清理所有已过期的私密会话（供启动/周期调用） */
+  sweepPrivateSessions() {
+    return this._sweepTokens();
   }
 }
 

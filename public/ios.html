@@ -1,0 +1,2134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#F2F2F7">
+<title>视频下载器</title>
+<script src="/vendor/socket.io/socket.io.min.js"></script>
+<script src="/vendor/hls.js/hls.min.js"></script>
+<style>
+/* ═══════════════════════════════════════════════
+   iOS 设计系统（独立一套，不复用 macOS 变体）
+   ═══════════════════════════════════════════════ */
+:root {
+  color-scheme: light;
+  --accent: #007AFF; --accent-press: #0062CC;
+  --green: #34C759; --red: #FF3B30; --orange: #FF9500; --gray: #8E8E93;
+  --bg: #F2F2F7; --card: #FFFFFF;
+  --fill: rgba(120,120,128,0.12); --fill-strong: rgba(120,120,128,0.22);
+  --separator: rgba(60,60,67,0.16);
+  --text: #000000; --text2: rgba(60,60,67,0.6); --text3: rgba(60,60,67,0.38);
+  --nav-bg: rgba(246,246,250,0.82);
+  --tabbar-h: 49px;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  --radius: 12px;
+  --shadow: 0 1px 2px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08);
+  --touch-min: 44px;
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000; --card: #1C1C1E;
+  --fill: rgba(120,120,128,0.24); --fill-strong: rgba(120,120,128,0.34);
+  --separator: rgba(84,84,88,0.6);
+  --text: #FFFFFF; --text2: rgba(235,235,245,0.6); --text3: rgba(235,235,245,0.45);
+  --nav-bg: rgba(18,18,20,0.82);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+[hidden] { display: none !important; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
+  background: var(--bg); color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  overscroll-behavior: none;
+}
+button { font-family: inherit; border: none; background: none; color: inherit; cursor: pointer; }
+input, select { font-family: inherit; font-size: 16px; }
+::placeholder { color: var(--text3); }
+
+/* ── 顶部导航（大标题 + 毛玻璃） ─────────────── */
+.navbar {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  padding-top: var(--safe-t);
+  background: var(--nav-bg);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-bottom: 0.5px solid var(--separator);
+}
+.navbar-inner { display: flex; align-items: center; min-height: 44px; padding: 0 8px; }
+.nav-back {
+  min-width: 44px; min-height: 44px; display: flex; align-items: center;
+  font-size: 17px; color: var(--accent); flex-shrink: 0;
+}
+.nav-title {
+  flex: 1; font-size: 34px; font-weight: 700; letter-spacing: -0.5px;
+  padding: 8px 16px 10px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.nav-title.small { font-size: 17px; font-weight: 600; padding: 11px 16px; }
+.nav-right { display: flex; align-items: center; gap: 4px; padding-right: 8px; flex-shrink: 0; }
+.nav-btn {
+  min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center;
+  font-size: 15px; font-weight: 500; color: var(--accent);
+}
+.nav-btn.danger { color: var(--red); }
+.nav-conn { width: 9px; height: 9px; border-radius: 50%; background: var(--gray); }
+.nav-conn.on { background: var(--green); }
+.nav-conn.off { background: var(--red); }
+
+/* ── 主内容区（Safe Area 上下留白） ──────────── */
+main {
+  position: fixed; top: 0; left: 0; right: 0; bottom: calc(var(--tabbar-h) + var(--safe-b));
+  overflow-y: auto; overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  padding-top: calc(var(--safe-t) + 44px);
+}
+.page { display: none; padding: 0 16px 24px; }
+.page.active { display: block; }
+
+/* ── 底部 Tab Bar（毛玻璃 + Home Indicator 安全区） ── */
+.tabbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 100;
+  background: var(--nav-bg);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-top: 0.5px solid var(--separator);
+  padding-bottom: var(--safe-b);
+  display: flex;
+}
+.tab {
+  flex: 1; min-height: var(--tabbar-h);
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px;
+  color: var(--gray); font-size: 10px; font-weight: 500;
+  transition: color 0.15s ease;
+}
+.tab .tab-icon { font-size: 22px; line-height: 1; }
+.tab.active { color: var(--accent); }
+
+/* ── 分组列表（inset grouped） ───────────────── */
+.group-title {
+  font-size: 13px; font-weight: 600; color: var(--text2);
+  text-transform: uppercase; letter-spacing: 0.4px;
+  margin: 20px 20px 6px;
+  display: flex; align-items: center; gap: 8px;
+}
+.group { background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px; min-height: 52px;
+  border-bottom: 0.5px solid var(--separator);
+}
+.row:last-child { border-bottom: none; }
+.row-label { flex: 1; font-size: 16px; }
+.row-hint { font-size: 13px; color: var(--text2); }
+.form-row { display: flex; gap: 10px; padding: 16px; }
+.text-input {
+  flex: 1; min-width: 0;
+  background: var(--fill); border-radius: 10px;
+  padding: 14px 16px; font-size: 16px; color: var(--text);
+  border: 1px solid transparent; outline: none;
+  transition: border 0.15s ease, background 0.15s ease;
+}
+.text-input:focus { border-color: var(--accent); background: var(--card); }
+select.text-input { appearance: none; -webkit-appearance: none; padding-right: 28px;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text3) 50%), linear-gradient(135deg, var(--text3) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+  background-size: 5px 5px; background-repeat: no-repeat;
+}
+.btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--accent); color: #fff; font-size: 16px; font-weight: 600;
+  padding: 15px 24px; border-radius: 12px; white-space: nowrap; min-height: var(--touch-min);
+  transition: opacity 0.15s ease, transform 0.08s ease;
+}
+.btn-primary:active { opacity: 0.7; transform: scale(0.97); }
+.btn-primary:disabled { opacity: 0.5; }
+.btn-secondary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  background: var(--fill); color: var(--text); font-size: 16px; font-weight: 600;
+  padding: 15px 16px; border-radius: 12px; white-space: nowrap; min-height: var(--touch-min);
+}
+.btn-secondary.danger { color: var(--red); }
+.icon-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: var(--touch-min); height: var(--touch-min); border-radius: 10px; color: var(--accent);
+}
+.icon-btn.danger { color: var(--red); }
+.icon-btn.green { color: var(--green); }
+
+/* ── 任务列表 ────────────────────────────────── */
+.task-row { align-items: flex-start; padding: 16px; min-height: 0; }
+.task-icon {
+  width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--fill); color: var(--text2); font-size: 17px;
+}
+.task-icon.running { background: rgba(0,122,255,0.14); color: var(--accent); animation: pulse 1.2s infinite; }
+.task-icon.completed { background: rgba(52,199,89,0.14); color: var(--green); }
+.task-icon.failed { background: rgba(255,59,48,0.14); color: var(--red); }
+.task-icon.cancelled { background: rgba(255,149,0,0.14); color: var(--orange); }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+.task-main { flex: 1; min-width: 0; }
+.task-url { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-meta { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 12px; color: var(--text2); flex-wrap: wrap; }
+.task-message { margin-top: 5px; font-size: 12px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-progress { height: 5px; border-radius: 3px; background: var(--fill); margin-top: 8px; overflow: hidden; }
+.task-progress > i { display: block; height: 100%; border-radius: 3px; background: var(--accent); transition: width 0.25s ease; }
+.task-progress > i.done { background: var(--green); }
+.task-progress > i.failed { background: var(--red); }
+.task-error { margin-top: 8px; font-size: 12px; color: var(--red); background: rgba(255,59,48,0.08); border-radius: 8px; padding: 8px 10px; word-break: break-all; }
+.task-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.task-status { font-size: 11px; font-weight: 600; color: var(--text2); }
+.task-status.running { color: var(--accent); }
+.task-status.completed { color: var(--green); }
+.task-status.failed { color: var(--red); }
+.task-status.cancelled { color: var(--orange); }
+
+/* ── 视频库网格 ──────────────────────────────── */
+.library-grid { display: grid; gap: 14px; grid-template-columns: repeat(2, 1fr); margin-top: 12px; }
+@media (min-width: 480px) { .library-grid { grid-template-columns: repeat(3, 1fr); } }
+.video-card {
+  position: relative; cursor: pointer; user-select: none;
+  background: var(--card); border-radius: var(--radius); overflow: hidden;
+  box-shadow: var(--shadow); padding-bottom: 10px;
+}
+.video-card.selected::after { content: ''; position: absolute; inset: 0; border-radius: var(--radius); border: 2.5px solid var(--accent); pointer-events: none; }
+.sel-check {
+  position: absolute; top: 8px; left: 8px; z-index: 3;
+  width: 26px; height: 26px; border-radius: 50%;
+  background: rgba(0,0,0,0.45); color: transparent;
+  display: flex; align-items: center; justify-content: center;
+  border: 1.5px solid rgba(255,255,255,0.85);
+  transition: all 0.15s ease; font-size: 14px; font-weight: 700;
+}
+.video-card.selected .sel-check { background: var(--accent); border-color: var(--accent); color: #fff; }
+.video-thumb { position: relative; aspect-ratio: 16/9; background: var(--fill); display: flex; align-items: center; justify-content: center; }
+.video-thumb.usegrad { background: linear-gradient(135deg, #5AC8FA, #007AFF); }
+.video-thumb .play-badge { width: 40px; height: 40px; border-radius: 50%; background: rgba(0,0,0,0.35); color: #fff; display: flex; align-items: center; justify-content: center; }
+.video-progress {
+  position: absolute; right: 6px; bottom: 6px;
+  background: rgba(0,0,0,0.55); color: #fff; font-size: 11px; font-weight: 600;
+  padding: 2px 8px; border-radius: 999px; backdrop-filter: blur(4px);
+}
+.video-name {
+  font-size: 14px; font-weight: 600; margin: 8px 10px 0;
+  overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.video-meta { font-size: 12px; color: var(--text2); margin: 3px 10px 0; }
+.video-delete {
+  position: absolute; top: 6px; right: 6px; z-index: 2;
+  width: 32px; height: 32px; border-radius: 50%;
+  background: rgba(0,0,0,0.45); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  backdrop-filter: blur(4px);
+}
+/* 列表视图 */
+.library-list .video-card { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
+.library-list .video-thumb { width: 110px; aspect-ratio: 16/9; border-radius: 8px; flex-shrink: 0; }
+.library-list .video-thumb .play-badge { width: 32px; height: 32px; }
+.library-list .video-info { flex: 1; min-width: 0; }
+.library-list .video-name { margin-top: 0; }
+.library-list .video-progress { position: static; width: 90px; margin-top: 6px; background: var(--fill); color: var(--text2); text-align: center; }
+.library-list .video-delete { position: static; background: var(--fill); color: var(--red); }
+
+/* 文件夹网格 */
+.folder-grid { display: grid; gap: 14px; grid-template-columns: repeat(2, 1fr); margin-top: 12px; }
+@media (min-width: 480px) { .folder-grid { grid-template-columns: repeat(3, 1fr); } }
+.folder-card {
+  cursor: pointer; user-select: none;
+  border-radius: var(--radius); padding: 18px 12px;
+  background: var(--card); box-shadow: var(--shadow);
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.folder-card:active { transform: scale(0.97); }
+.folder-card .folder-icon {
+  width: 56px; height: 56px; border-radius: 14px;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(145deg, #5AC8FA, #007AFF); color: #fff;
+  font-size: 26px; box-shadow: var(--shadow); position: relative;
+}
+.folder-card .folder-icon.private { background: linear-gradient(145deg, #FF9F0A, #FF6482); }
+.folder-badge {
+  position: absolute; top: -6px; right: -6px;
+  min-width: 20px; height: 20px; border-radius: 999px;
+  background: var(--red); color: #fff; font-size: 11px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; padding: 0 5px;
+}
+.folder-name { font-size: 14px; font-weight: 600; text-align: center; }
+.folder-meta { font-size: 11px; color: var(--text2); text-align: center; }
+
+.empty { text-align: center; color: var(--text3); padding: 48px 20px; font-size: 15px; line-height: 1.7; }
+.empty .big { font-size: 44px; margin-bottom: 10px; }
+
+/* ── 内嵌播放器 ──────────────────────────────── */
+.inline-player { margin-top: 12px; background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.inline-player-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 0.5px solid var(--separator); }
+.inline-player-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inline-player video { display: block; width: 100%; max-height: 40vh; background: #000; }
+.inline-player-close { width: 30px; height: 30px; border-radius: 50%; background: var(--fill); color: var(--text2); font-size: 15px; display: flex; align-items: center; justify-content: center; }
+
+/* ── 设置控件 ────────────────────────────────── */
+.setting-row { min-height: 56px; }
+.setting-row .row-label small { display: block; font-size: 12px; color: var(--text2); margin-top: 2px; font-weight: 400; }
+.switch { position: relative; width: 51px; height: 31px; flex-shrink: 0; }
+.switch input { display: none; }
+.switch .track { position: absolute; inset: 0; background: var(--fill-strong); border-radius: 16px; transition: background 0.2s ease; }
+.switch .thumb { position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.25); transition: transform 0.2s cubic-bezier(0.3, 1.2, 0.5, 1); }
+.switch input:checked + .track { background: var(--green); }
+.switch input:checked + .track + .thumb { transform: translateX(20px); }
+.num-input { width: 76px; text-align: center; background: var(--fill); border: none; border-radius: 8px; padding: 10px 4px; font-size: 16px; color: var(--text); outline: none; }
+.status-row { justify-content: space-between; }
+.status-value { display: flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 500; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; }
+.status-dot.ok { background: var(--green); }
+.status-dot.no { background: var(--red); }
+.status-dot.mid { background: var(--orange); }
+.segmented { display: flex; gap: 2px; padding: 2px; background: var(--fill); border-radius: 9px; }
+.segmented button { padding: 8px 14px; border-radius: 7px; font-size: 14px; font-weight: 600; color: var(--text2); min-height: var(--touch-min); }
+.segmented button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+.wallpaper-picker { display: flex; gap: 10px; flex-wrap: wrap; }
+.swatch { width: 44px; height: 44px; border-radius: 11px; border: 2px solid transparent; position: relative; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1); }
+.swatch.active { border-color: var(--accent); }
+.swatch.s-default { background: linear-gradient(160deg, #E8E8ED, #C9C9D2); }
+[data-theme="dark"] .swatch.s-default { background: linear-gradient(160deg, #2C2C31, #101012); }
+.swatch.s-aurora { background: linear-gradient(160deg, #E0EAFC, #CFDEF3); }
+[data-theme="dark"] .swatch.s-aurora { background: linear-gradient(160deg, #0F2027, #2C5364); }
+.swatch.s-sunset { background: linear-gradient(160deg, #FAD0C4, #FFD1FF); }
+[data-theme="dark"] .swatch.s-sunset { background: linear-gradient(160deg, #3A1C2E, #6B2D4E); }
+.swatch.s-ocean { background: linear-gradient(160deg, #A1C4FD, #C2E9FB); }
+[data-theme="dark"] .swatch.s-ocean { background: linear-gradient(160deg, #0B486B, #175D78); }
+.swatch.s-graphite { background: linear-gradient(160deg, #E3E3E6, #C7C7CC); }
+[data-theme="dark"] .swatch.s-graphite { background: linear-gradient(160deg, #2A2A2E, #161618); }
+.swatch .swatch-name { position: absolute; bottom: -20px; left: 50%; transform: translateX(-50%); font-size: 10px; color: var(--text2); white-space: nowrap; }
+.footer-note { text-align: center; font-size: 12px; color: var(--text3); margin-top: 26px; }
+
+/* ── 批量操作栏（固定底部） ──────────────────── */
+.batch-bar {
+  position: fixed; left: 0; right: 0; bottom: calc(var(--tabbar-h) + var(--safe-b)); z-index: 90;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom));
+  background: var(--nav-bg); backdrop-filter: blur(20px) saturate(180%);
+  border-top: 0.5px solid var(--separator);
+}
+.batch-count { flex: 1; font-size: 14px; font-weight: 600; color: var(--text2); padding-left: 8px; }
+.batch-bar .title-btn { min-height: var(--touch-min); padding: 10px 16px; border-radius: 10px; font-size: 14px; font-weight: 600; color: var(--accent); background: var(--fill); }
+.batch-bar .title-btn.danger { color: var(--red); }
+
+/* ── Action Sheet（底部弹窗） ─────────────────── */
+.sheet-mask {
+  position: fixed; inset: 0; z-index: 500;
+  background: rgba(0,0,0,0.4);
+  display: flex; align-items: flex-end; justify-content: center;
+  animation: sheetFade 0.18s ease;
+}
+@keyframes sheetFade { from { opacity: 0; } to { opacity: 1; } }
+.sheet-card {
+  width: 100%; max-width: 500px;
+  background: var(--bg); border-radius: 16px 16px 0 0;
+  padding-bottom: calc(16px + var(--safe-b));
+  animation: sheetUp 0.3s cubic-bezier(0.32, 0.72, 0, 1);
+  max-height: 82vh; display: flex; flex-direction: column;
+}
+@keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+.sheet-head { display: flex; align-items: center; gap: 12px; padding: 16px; border-bottom: 0.5px solid var(--separator); }
+.sheet-title { flex: 1; font-size: 16px; font-weight: 700; }
+.sheet-close { width: 32px; height: 32px; border-radius: 50%; background: var(--fill); color: var(--text2); font-size: 15px; display: flex; align-items: center; justify-content: center; }
+.sheet-body { flex: 1; overflow-y: auto; padding: 12px 16px; }
+
+.action-sheet { padding: 6px 0; display: flex; flex-direction: column; }
+.as-title { text-align: center; font-size: 13px; font-weight: 600; color: var(--text2); padding: 10px 16px 2px; }
+.as-message { text-align: center; font-size: 12px; color: var(--text3); padding: 2px 16px 14px; line-height: 1.5; }
+.as-btn {
+  margin: 0 12px 8px; padding: 15px; border-radius: 12px;
+  font-size: 17px; font-weight: 600; color: var(--text);
+  background: var(--card); text-align: center; min-height: var(--touch-min);
+}
+.as-btn:active { opacity: 0.7; }
+.as-btn.danger { color: var(--red); }
+.as-btn.cancel { background: var(--fill); color: var(--text2); font-weight: 500; margin-top: 4px; }
+
+/* ── PIN 密码界面 ────────────────────────────── */
+.pin-screen { text-align: center; padding: 6px 0 2px; }
+.pin-screen-title { font-size: 22px; font-weight: 700; letter-spacing: 0.3px; }
+.pin-screen-sub { font-size: 14px; color: var(--text2); margin-top: 6px; }
+.pin-dots { display: flex; gap: 12px; justify-content: center; margin: 24px 0 20px; }
+.pin-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--fill-strong); transition: background 0.15s ease, transform 0.15s ease; }
+.pin-dot.filled { background: var(--accent); transform: scale(1.15); }
+.pin-seg { display: flex; gap: 2px; justify-content: center; padding: 2px; background: var(--fill); border-radius: 10px; margin: 0 auto 20px; width: fit-content; }
+.pin-seg button { padding: 10px 26px; border-radius: 8px; font-size: 15px; font-weight: 600; color: var(--text2); min-height: var(--touch-min); }
+.pin-seg button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
+.numpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 300px; margin: 0 auto 4px; }
+.numpad button { height: 72px; border-radius: 14px; font-size: 26px; font-weight: 500; background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 2px 6px rgba(0,0,0,0.05); min-height: 0; }
+.numpad button:active { transform: scale(0.94); background: var(--fill); }
+.numpad button.key-del { font-size: 22px; color: var(--text2); }
+.pin-tip { text-align: center; font-size: 13px; color: var(--text2); padding: 4px 0 12px; }
+.pin-error { text-align: center; font-size: 13px; color: var(--red); min-height: 20px; }
+
+/* ── 列表选择器 ──────────────────────────────── */
+.list-tile { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-bottom: 8px; background: var(--card); border-radius: 12px; box-shadow: var(--shadow); cursor: pointer; min-height: 56px; }
+.list-tile:active { background: var(--fill); }
+.list-tile-icon { width: 40px; height: 40px; border-radius: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--fill); color: var(--accent); font-size: 17px; }
+.list-tile-icon.private { color: var(--orange); }
+.list-tile-main { flex: 1; min-width: 0; }
+.list-tile-name { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-tile-meta { font-size: 12px; color: var(--text2); margin-top: 3px; }
+.list-item-row { display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; margin-bottom: 8px; background: var(--fill); }
+.list-item-name { flex: 1; min-width: 0; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.list-item-del { color: var(--red); font-size: 13px; padding: 10px; border-radius: 8px; flex-shrink: 0; min-height: var(--touch-min); }
+
+/* ── 登录 ────────────────────────────────────── */
+#loginScreen { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 24px; }
+#loginScreen.hidden { display: none; }
+.login-card { width: 100%; max-width: 380px; background: var(--card); border-radius: 18px; padding: 32px 28px 24px; box-shadow: var(--shadow); text-align: center; }
+.login-avatar { width: 72px; height: 72px; border-radius: 50%; background: var(--fill); font-size: 36px; display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; }
+.login-title { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+.login-sub { font-size: 14px; color: var(--text2); margin-bottom: 18px; }
+.login-error { color: var(--red); font-size: 13px; min-height: 20px; margin-bottom: 6px; }
+
+/* ── Toast ───────────────────────────────────── */
+.toast {
+  position: fixed; bottom: calc(var(--tabbar-h) + var(--safe-b) + 24px); left: 50%;
+  transform: translateX(-50%) translateY(12px);
+  background: rgba(28,28,30,0.85); color: #fff; font-size: 14px;
+  padding: 12px 20px; border-radius: 999px; z-index: 700;
+  opacity: 0; pointer-events: none; transition: opacity 0.25s ease, transform 0.25s ease;
+  max-width: 86vw; text-align: center;
+}
+.toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.toast.error { background: rgba(255,59,48,0.92); }
+</style>
+</head>
+<body>
+
+<!-- 登录页 -->
+<div id="loginScreen">
+  <div class="login-card">
+    <div class="login-avatar">👤</div>
+    <div class="login-title">视频下载器</div>
+    <div class="login-sub">登录后访问全部功能</div>
+    <input class="text-input" id="loginUser" placeholder="用户名" autocomplete="username" style="width:100%;margin-bottom:10px;">
+    <input class="text-input" id="loginPass" type="password" placeholder="密码" autocomplete="current-password" style="width:100%;margin-bottom:14px;">
+    <div class="login-error" id="loginError"></div>
+    <button class="btn-primary" id="loginBtn" style="width:100%;">登录</button>
+    <button class="btn-secondary" id="registerBtn" disabled style="width:100%;margin-top:10px;opacity:0.5;" title="暂不开放注册">注册（暂未开放）</button>
+    <div class="login-sub" id="loginHint" style="margin-top:14px;font-size:12px;">
+      <span id="currentUserLabel"></span>
+      <a href="#" id="logoutBtn" style="color:var(--red);float:right;">退出登录</a>
+    </div>
+  </div>
+</div>
+
+<!-- 主界面 -->
+<div id="app" hidden>
+  <!-- 顶部导航 -->
+  <div class="navbar">
+    <div class="navbar-inner">
+      <button class="nav-back" id="navBack" hidden><span>‹ 返回</span></button>
+      <div class="nav-title" id="navTitle">下载</div>
+      <div class="nav-right">
+        <span class="nav-conn off" id="navConn"></span>
+      </div>
+    </div>
+  </div>
+
+  <main id="mainScroll">
+    <!-- ═══ Tab：下载 ═══ -->
+    <section class="page active" id="page-downloads">
+      <div class="group" style="margin-top:12px;">
+        <div class="form-row">
+          <input class="text-input" id="urlInput" type="url" placeholder="粘贴视频播放页 URL 或直链" autocomplete="url" spellcheck="false">
+          <button class="btn-primary" id="downloadBtn">下载</button>
+        </div>
+      </div>
+      <div class="group-title">任务列表 <span id="taskCount" style="text-transform:none;"></span>
+        <button class="nav-btn danger" id="cleanCompletedBtn" style="margin-left:auto;min-height:32px;">清理已完成</button>
+      </div>
+      <div class="group" id="taskList">
+        <div class="empty"><div class="big">📥</div>还没有下载任务</div>
+      </div>
+    </section>
+
+    <!-- ═══ Tab：浏览 ═══ -->
+    <section class="page" id="page-browse">
+      <div class="inline-player" id="inlinePlayer" hidden>
+        <div class="inline-player-bar">
+          <span class="inline-player-title" id="inlinePlayerTitle"></span>
+          <button class="nav-btn" id="cacheMenuBtn" style="min-height:32px;">⋯</button>
+          <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放">×</button>
+        </div>
+        <video id="inlinePlayerVideo" controls playsinline></video>
+      </div>
+      <div class="group-title">在线播放</div>
+      <div class="group">
+        <div class="form-row">
+          <input class="text-input" id="playUrlInput" type="url" placeholder="粘贴 m3u8 / mp4 链接直接播放" spellcheck="false">
+          <button class="btn-primary" id="playUrlBtn">播放</button>
+        </div>
+      </div>
+      <div class="group-title">视频库 <span id="browseCrumb" style="text-transform:none;"></span><span id="libraryCount" style="text-transform:none;"></span>
+        <span class="segmented" id="libraryViewToggle" style="margin-left:auto;">
+          <button data-view="grid" class="active" title="网格">▦</button>
+          <button data-view="list" title="列表">☰</button>
+        </span>
+        <button class="nav-btn" id="selectModeBtn" style="min-height:32px;">选择</button>
+        <button class="nav-btn" id="openListsBtn" style="min-height:32px;">我的列表</button>
+      </div>
+      <div class="folder-grid" id="folderGrid" hidden></div>
+      <div class="library-grid" id="libraryGrid">
+        <div class="empty" style="grid-column:1/-1;"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>
+      </div>
+    </section>
+
+    <!-- ═══ Tab：设置 ═══ -->
+    <section class="page" id="page-settings">
+      <div class="group-title" style="margin-top:12px;">外观</div>
+      <div class="group">
+        <div class="row setting-row" style="flex-wrap:wrap;">
+          <div class="row-label">壁纸<small>桌面背景，随主题切换深浅色</small></div>
+          <div class="wallpaper-picker" id="wallpaperPicker" style="margin-top:8px;width:100%;justify-content:center;">
+            <button class="swatch s-default active" data-wallpaper="default"></button>
+            <button class="swatch s-aurora" data-wallpaper="aurora"></button>
+            <button class="swatch s-sunset" data-wallpaper="sunset"></button>
+            <button class="swatch s-ocean" data-wallpaper="ocean"></button>
+            <button class="swatch s-graphite" data-wallpaper="graphite"></button>
+          </div>
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">主题<small>自动跟随系统 / 浅色 / 深色</small></div>
+          <div class="segmented" id="themeSeg">
+            <button data-theme="auto">自动</button>
+            <button data-theme="light">浅色</button>
+            <button data-theme="dark">深色</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="group-title">隐私</div>
+      <div class="group">
+        <div class="row setting-row">
+          <div class="row-label">私密列表<small>4/6 位数字密码保护，默认不可见</small></div>
+          <button class="btn-secondary" id="privateEntryBtn">进入</button>
+        </div>
+      </div>
+
+      <div class="group-title">缓存管理</div>
+      <div class="group">
+        <div class="row status-row"><span class="row-label">缓存占用</span><span class="status-value" id="cacheStats">—</span></div>
+        <div class="row"><button class="row-label" id="clearCacheBtn" style="color:var(--red);text-align:left;">一键清理全部缓存</button></div>
+      </div>
+
+      <div class="group-title">下载默认设置</div>
+      <div class="group">
+        <div class="row setting-row">
+          <div class="row-label">并行下载数<small>同时下载的任务数量（1～10）</small></div>
+          <input class="num-input" id="parallelDownloadsInput" type="number" min="1" max="10" value="3">
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">下载引擎<small>N_m3u8DL-RE → ffmpeg → JS</small></div>
+          <select class="text-input" id="engineSelect" style="width:130px;">
+            <option value="auto">自动选择</option>
+            <option value="n_m3u8dl_re">N_m3u8DL-RE</option>
+            <option value="ffmpeg">ffmpeg</option>
+            <option value="js">JS 原生</option>
+          </select>
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">输出格式</div>
+          <select class="text-input" id="formatSelect" style="width:110px;">
+            <option value="auto">自动</option>
+            <option value="mp4">MP4</option>
+            <option value="ts">TS</option>
+            <option value="mkv">MKV</option>
+          </select>
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">并行分片下载<small>HLS 分片并发加速</small></div>
+          <label class="switch"><input type="checkbox" id="parallelSwitch"><span class="track"></span><span class="thumb"></span></label>
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">分片并发数</div>
+          <input class="num-input" id="parallelCountInput" type="number" min="1" max="16" value="4">
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">单任务限速<small>MB/s，0 表示不限速</small></div>
+          <input class="num-input" id="maxSpeedInput" type="number" min="0" step="0.5" value="0">
+        </div>
+        <div class="row setting-row">
+          <div class="row-label">下载超时<small>分钟</small></div>
+          <input class="num-input" id="timeoutInput" type="number" min="1" max="600" value="30">
+        </div>
+      </div>
+
+      <div class="group-title">服务状态</div>
+      <div class="group" id="healthGroup">
+        <div class="row status-row"><span class="row-label">服务版本</span><span class="status-value" id="healthVersion">—</span></div>
+        <div class="row status-row"><span class="row-label">运行时间</span><span class="status-value" id="healthUptime">—</span></div>
+        <div class="row status-row"><span class="row-label">队列 / 运行中</span><span class="status-value" id="healthQueue">—</span></div>
+        <div class="row status-row"><span class="row-label">ffmpeg / ffprobe</span><span class="status-value" id="healthEngines">—</span></div>
+        <div class="row status-row"><span class="row-label">N_m3u8DL-RE</span><span class="status-value" id="healthNre">—</span></div>
+        <div class="row status-row"><span class="row-label">磁盘空间</span><span class="status-value" id="healthDisk">—</span></div>
+        <div class="row"><button class="row-label" id="refreshHealth" style="color:var(--accent);text-align:left;">刷新状态</button></div>
+      </div>
+      <div class="footer-note">视频下载器 v2.1 · iOS 版</div>
+    </section>
+
+    <!-- ═══ 私密浏览页（认证后进入，全屏页面） ═══ -->
+    <section class="page" id="page-private">
+      <div class="inline-player" id="privateInlinePlayer" hidden>
+        <div class="inline-player-bar">
+          <span class="inline-player-title" id="privateInlinePlayerTitle"></span>
+          <button class="nav-btn" id="privateCacheMenuBtn" style="min-height:32px;">⋯</button>
+          <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放">×</button>
+        </div>
+        <video id="privateInlinePlayerVideo" controls playsinline></video>
+      </div>
+      <div class="group-title">私密视频库 <span id="privateBrowseCrumb" style="text-transform:none;"></span><span id="privateCount" style="text-transform:none;"></span>
+        <button class="nav-btn danger" id="privateLockBtn" style="margin-left:auto;min-height:32px;">锁定</button>
+      </div>
+      <div class="folder-grid" id="privateFolderGrid" hidden></div>
+      <div class="library-grid" id="privateLibraryGrid">
+        <div class="empty" style="grid-column:1/-1;"><div class="big">🔒</div>私密列表为空<br>认证后此处显示私密内容</div>
+      </div>
+    </section>
+  </main>
+
+  <!-- 底部 Tab Bar -->
+  <nav class="tabbar" id="tabbar">
+    <button class="tab active" data-tab="downloads"><span class="tab-icon">📥</span><span>下载</span></button>
+    <button class="tab" data-tab="browse"><span class="tab-icon">🎬</span><span>浏览</span></button>
+    <button class="tab" data-tab="settings"><span class="tab-icon">⚙️</span><span>设置</span></button>
+  </nav>
+</div>
+
+<!-- 批量操作栏 -->
+<div class="batch-bar" id="batchBar" hidden>
+  <button class="title-btn" id="batchSelectAllBtn">全选</button>
+  <span class="batch-count" id="batchCount">已选 0 项</span>
+  <button class="title-btn danger" id="batchOpsBtn">操作 ▾</button>
+  <button class="title-btn" id="batchCancelBtn">取消</button>
+</div>
+
+<!-- 底部弹窗（Sheet） -->
+<div class="sheet-mask" id="sheetMask" hidden>
+  <div class="sheet-card" id="sheetCard"></div>
+</div>
+
+<script>
+// ═══════════════════════════════════════════════════════
+// 工具函数
+// ═══════════════════════════════════════════════════════
+const $ = (id) => document.getElementById(id);
+const escapeHtml = (s) => {
+  if (!s) return '';
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+};
+function formatBytes(bytes) {
+  if (!bytes || bytes <= 0) return '';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let i = 0, v = bytes;
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return `${v.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;
+}
+function formatTime(sec) {
+  if (!isFinite(sec) || sec < 0) return '00:00';
+  sec = Math.floor(sec);
+  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+  const mm = String(m).padStart(2, '0'), ss = String(s).padStart(2, '0');
+  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+function formatDate(ts) {
+  const d = new Date(ts);
+  const diff = Date.now() - d;
+  if (diff < 60 * 1000) return '刚刚';
+  if (diff < 3600 * 1000) return `${Math.floor(diff / 60000)} 分钟前`;
+  if (diff < 24 * 3600 * 1000) return `${Math.floor(diff / 3600000)} 小时前`;
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
+}
+
+// ═══════════════════════════════════════════════════════
+// 图标（内联 SVG，Apple 风格）
+// ═══════════════════════════════════════════════════════
+function icon(name, size = 18) {
+  const paths = {
+    download: '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 8.5v6m0 0l-2.4-2.4M12 14.5l2.4-2.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    play: '<path d="M8 5.5v13l11-6.5z" fill="currentColor"/>',
+    playRect: '<rect x="3" y="5" width="18" height="14" rx="3" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M10 9.2v5.6l4.8-2.8z" fill="currentColor"/>',
+    gear: '<circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2.8l1 2.2 2.4-.6 1 2.1 2.3.8-.3 2.4 2 1.2-1.5 1.9 1.5 1.9-2 1.2.3 2.4-2.3.8-1 2.1-2.4-.6-1 2.2-1-2.2-2.4.6-1-2.1-2.3-.8.3-2.4-2-1.2 1.5-1.9L2.3 12l2-1.2-.3-2.4 2.3-.8 1-2.1 2.4.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/>',
+    stop: '<rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/>',
+    retry: '<path d="M4.5 12a7.5 7.5 0 101.6-4.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M4.8 3.5v4.5h4.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>',
+    trash: '<path d="M4.5 6.5h15M9 6.5V4.8a1.3 1.3 0 011.3-1.3h3.4A1.3 1.3 0 0115 4.8v1.7m3 0l-.8 11a1.6 1.6 0 01-1.6 1.5H8.4a1.6 1.6 0 01-1.6-1.5l-.8-11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>',
+    dlFile: '<path d="M12 4v10m0 0l-3.4-3.4M12 14l3.4-3.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15.5V18a2 2 0 002 2h12a2 2 0 002-2v-2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
+    xmark: '<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+  };
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">${paths[name] || paths.play}</svg>`;
+}
+
+// ═══════════════════════════════════════════════════════
+// Tab 导航（Tab Bar + 大标题 + 返回按钮）
+// ═══════════════════════════════════════════════════════
+const TABS = ['downloads', 'browse', 'settings'];
+const TAB_TITLES = { downloads: '下载', browse: '浏览', settings: '设置' };
+let activeTab = 'downloads';
+let privatePageActive = false; // 私密浏览页（全屏覆盖，Tab Bar 隐藏）
+
+function switchTab(name) {
+  if (privatePageActive && name === 'private') return; // 私密页由锁定/返回控制
+  activeTab = name;
+  TABS.forEach((t) => {
+    $('page-' + t).classList.toggle('active', t === name);
+    document.querySelector(`.tab[data-tab="${t}"]`)?.classList.toggle('active', t === name);
+  });
+  $('navTitle').textContent = TAB_TITLES[name];
+  $('navBack').hidden = true;
+  $('navBack').dataset.back = '';
+  if (name === 'browse') { loadLibrary(); loadLists(); }
+  if (name === 'settings') { loadServerSettings(); loadHealth(); }
+  $('mainScroll').scrollTop = 0;
+}
+
+document.querySelectorAll('.tab').forEach((btn) => {
+  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+});
+
+// ═══════════════════════════════════════════════════════
+// 设置持久化（本地 + 服务端）
+// ═══════════════════════════════════════════════════════
+const SETTINGS_KEY = 'vd.settings.v2';
+const defaultSettings = {
+  theme: 'auto', wallpaper: 'default', engine: 'auto', format: 'auto',
+  parallel: false, parallelCount: 4, maxSpeedMB: 0, timeoutMin: 30, libraryView: 'grid',
+};
+function loadSettings() {
+  try { return { ...defaultSettings, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') }; }
+  catch { return { ...defaultSettings }; }
+}
+function saveSettings() { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); }
+let settings = loadSettings();
+
+function applyTheme() {
+  const dark = settings.theme === 'dark' ||
+    (settings.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+  document.querySelector('meta[name="theme-color"]').setAttribute('content', dark ? '#000000' : '#F2F2F7');
+  document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('active', b.dataset.theme === settings.theme));
+}
+function applyWallpaper() {
+  const name = settings.wallpaper || 'default';
+  document.body.className = 'wallpaper-' + name;
+  document.querySelectorAll('#wallpaperPicker .swatch').forEach((s) => s.classList.toggle('active', s.dataset.wallpaper === name));
+}
+function renderSettingsForm() {
+  $('engineSelect').value = settings.engine;
+  $('formatSelect').value = settings.format;
+  $('parallelSwitch').checked = settings.parallel;
+  $('parallelCountInput').value = settings.parallelCount;
+  $('maxSpeedInput').value = settings.maxSpeedMB;
+  $('timeoutInput').value = settings.timeoutMin;
+}
+function bindSettingsForm() {
+  $('themeSeg').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    settings.theme = btn.dataset.theme;
+    saveSettings(); applyTheme();
+  });
+  $('wallpaperPicker').addEventListener('click', (e) => {
+    const btn = e.target.closest('.swatch');
+    if (!btn) return;
+    settings.wallpaper = btn.dataset.wallpaper;
+    saveSettings(); applyWallpaper();
+  });
+  $('engineSelect').addEventListener('change', (e) => { settings.engine = e.target.value; saveSettings(); });
+  $('formatSelect').addEventListener('change', (e) => { settings.format = e.target.value; saveSettings(); });
+  $('parallelSwitch').addEventListener('change', (e) => { settings.parallel = e.target.checked; saveSettings(); });
+  $('parallelCountInput').addEventListener('change', (e) => { settings.parallelCount = Math.min(16, Math.max(1, parseInt(e.target.value, 10) || 4)); e.target.value = settings.parallelCount; saveSettings(); });
+  $('maxSpeedInput').addEventListener('change', (e) => { settings.maxSpeedMB = Math.max(0, parseFloat(e.target.value) || 0); e.target.value = settings.maxSpeedMB; saveSettings(); });
+  $('timeoutInput').addEventListener('change', (e) => { settings.timeoutMin = Math.min(600, Math.max(1, parseInt(e.target.value, 10) || 30)); e.target.value = settings.timeoutMin; saveSettings(); });
+  $('libraryViewToggle').addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    settings.libraryView = btn.dataset.view;
+    saveSettings();
+    document.querySelectorAll('#libraryViewToggle button').forEach(b => b.classList.toggle('active', b.dataset.view === settings.libraryView));
+    renderBrowse();
+  });
+}
+
+async function loadServerSettings() {
+  try {
+    const res = await fetch('/api/settings');
+    if (res.ok) {
+      const data = await res.json();
+      $('parallelDownloadsInput').value = data.maxConcurrent ?? 3;
+    }
+  } catch {}
+}
+async function saveServerSettings() {
+  const value = Math.min(10, Math.max(1, parseInt($('parallelDownloadsInput').value, 10) || 3));
+  $('parallelDownloadsInput').value = value;
+  try {
+    const res = await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ maxConcurrent: value }),
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      showToast(data.error || '保存失败', true);
+      return;
+    }
+    showToast(`并行下载数已设为 ${value}`);
+  } catch (err) { showToast(err.message, true); }
+}
+
+// ═══════════════════════════════════════════════════════
+// 播放记录
+// ═══════════════════════════════════════════════════════
+const HISTORY_KEY = 'vd.history.v2';
+function loadHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
+  catch { return []; }
+}
+let history = loadHistory();
+function saveHistory() { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50))); }
+function upsertHistory(entry) {
+  history = history.filter(h => h.id !== entry.id);
+  history.unshift(entry);
+  saveHistory();
+}
+function removeHistory(id) {
+  history = history.filter(h => h.id !== id);
+  saveHistory();
+}
+
+// ═══════════════════════════════════════════════════════
+// Socket.IO 连接
+// ═══════════════════════════════════════════════════════
+const socket = io(window.location.origin, {
+  transports: ['websocket', 'polling'],
+  auth: (cb) => cb({ token: getAuthToken() }),
+});
+socket.on('connect', () => {
+  document.querySelectorAll('.nav-conn').forEach(d => d.className = 'nav-conn on');
+  loadTasks();
+});
+socket.on('disconnect', () => document.querySelectorAll('.nav-conn').forEach(d => d.className = 'nav-conn off'));
+socket.on('task-status', (task) => updateTaskCard(task));
+socket.on('task-list-update', (tasks) => renderTasks(tasks));
+socket.on('task-finalized', ({ taskId }) => socket.emit('unsubscribe', taskId));
+
+// ═══════════════════════════════════════════════════════
+// 下载页：提交任务
+// ═══════════════════════════════════════════════════════
+async function submitDownload() {
+  const input = $('urlInput');
+  const btn = $('downloadBtn');
+  const url = input.value.trim();
+  if (!url) { input.focus(); return; }
+  if (!/^https?:\/\//i.test(url)) { showToast('请输入以 http(s):// 开头的链接'); input.focus(); return; }
+  btn.disabled = true;
+  btn.textContent = '提交中…';
+  try {
+    const res = await fetch('/api/download/advanced', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url,
+        engine: settings.engine,
+        format: settings.format,
+        parallel: settings.parallel,
+        parallelCount: settings.parallelCount,
+        maxSpeed: Math.round(settings.maxSpeedMB * 1024 * 1024),
+        timeoutMs: settings.timeoutMin * 60 * 1000,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `请求失败 (${res.status})`);
+    input.value = '';
+    socket.emit('subscribe', data.taskId);
+    loadTasks();
+    showToast('任务已创建，开始解析');
+  } catch (err) {
+    showToast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '下载';
+  }
+}
+
+async function loadTasks() {
+  try {
+    const res = await fetch('/api/tasks');
+    if (res.ok) renderTasks(await res.json());
+  } catch {}
+}
+
+async function actionTask(taskId, action) {
+  const map = {
+    stop: ['POST', `/api/task/${taskId}/cancel`, '已停止，可续跑'],
+    retry: ['POST', `/api/task/${taskId}/retry`, '已重新加入队列'],
+    delete: ['DELETE', `/api/task/${taskId}`, '已删除'],
+  };
+  const [method, url, okMsg] = map[action];
+  try {
+    const res = await fetch(url, { method });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '操作失败');
+    showToast(okMsg);
+    if (action === 'retry') socket.emit('subscribe', taskId);
+    loadTasks();
+  } catch (err) { showToast(err.message, true); }
+}
+
+const STATUS_TEXT = {
+  created: ['排队中', ''],
+  running: ['进行中', 'running'],
+  completed: ['已完成', 'completed'],
+  failed: ['失败', 'failed'],
+  cancelled: ['已停止', 'cancelled'],
+};
+
+function buildTaskRow(task) {
+  const status = task.status || 'created';
+  const [statusText, cls] = STATUS_TEXT[status] || [status, ''];
+  const progress = Math.max(0, Math.min(100, task.progress || 0));
+  const actions = [];
+  if (status === 'created' || status === 'running') actions.push(`<button class="icon-btn danger" title="停止" onclick="actionTask('${task.id}','stop')">${icon('stop', 18)}</button>`);
+  if (status === 'failed' || status === 'cancelled') actions.push(`<button class="icon-btn" title="重试" onclick="actionTask('${task.id}','retry')">${icon('retry', 18)}</button>`);
+  actions.push(`<button class="icon-btn danger" title="删除" onclick="actionTask('${task.id}','delete')">${icon('trash', 18)}</button>`);
+  if (status === 'completed' && task.outputFile) {
+    const name = task.outputFile.split('/').pop();
+    actions.push(`<button class="icon-btn green" title="播放文件" onclick="playLibrary('${name.replace(/'/g, "\\'")}')">${icon('play', 18)}</button>`);
+  }
+  const metaParts = [];
+  metaParts.push(`<span class="task-status ${cls}">${statusText}</span>`);
+  if (task.progress != null) metaParts.push(`<span>${Math.round(progress)}%</span>`);
+  if (task.speed) metaParts.push(`<span>${escapeHtml(task.speed)}</span>`);
+  if (task.outputSizeBytes) metaParts.push(`<span>${formatBytes(task.outputSizeBytes)}</span>`);
+  const errorHtml = task.error ? `<div class="task-error">⚠ ${escapeHtml(task.error)}</div>` : '';
+  return `
+    <div class="row task-row" data-id="${task.id}">
+      <div class="task-icon ${cls}">${status === 'completed' ? icon('dlFile', 17) : status === 'failed' ? icon('xmark', 17) : icon('download', 17)}</div>
+      <div class="task-main">
+        <div class="task-url" title="${escapeHtml(task.url)}">${escapeHtml(task.url)}</div>
+        <div class="task-meta">${metaParts.join('')}</div>
+        ${task.message ? `<div class="task-message" title="${escapeHtml(task.message)}">${escapeHtml(task.message)}</div>` : ''}
+        <div class="task-progress"><i class="${cls}" style="width:${progress}%"></i></div>
+        ${errorHtml}
+      </div>
+      <div class="task-actions">${actions.join('')}</div>
+    </div>`;
+}
+
+function renderTasks(tasks) {
+  const list = $('taskList');
+  $('taskCount').textContent = tasks.length ? `(${tasks.length})` : '';
+  $('cleanCompletedBtn').hidden = !tasks.some(t => t.status === 'completed');
+  if (!tasks.length) {
+    list.innerHTML = '<div class="empty"><div class="big">📥</div>还没有下载任务</div>';
+    return;
+  }
+  const sorted = [...tasks].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  list.innerHTML = sorted.map(buildTaskRow).join('');
+}
+
+function updateTaskCard(task) {
+  const list = $('taskList');
+  const rows = [...list.querySelectorAll('.task-row')];
+  const idx = rows.findIndex(r => r.dataset.id === task.id);
+  if (idx !== -1) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = buildTaskRow(task);
+    list.replaceChild(tmp.firstElementChild, rows[idx]);
+  } else {
+    loadTasks();
+  }
+}
+
+// ═══════════════════════════════════════════════════════
+// 浏览页：视频库 + 文件夹导航 + 播放
+// ═══════════════════════════════════════════════════════
+let libraryFiles = [];
+let browseFolder = null;
+let myLists = [];
+let myPrivateLists = [];
+// ═══════════════════════════════════════════════════════
+// 浏览页：文件夹导航 + 渲染
+// ═══════════════════════════════════════════════════════
+async function loadLibrary() {
+  try {
+    const res = await fetch('/api/library');
+    if (!res.ok) throw new Error();
+    libraryFiles = await res.json();
+    renderBrowse();
+  } catch {
+    $('libraryGrid').innerHTML = '<div class="empty"><div class="big">⚠️</div>视频库读取失败</div>';
+  }
+}
+
+function renderBrowse() {
+  const grid = $('libraryGrid');
+  const folderEl = $('folderGrid');
+  const crumb = $('browseCrumb');
+  const isList = browseFolder && browseFolder.id;
+  const view = settings.libraryView || 'grid';
+
+  if (isList) {
+    crumb.innerHTML = `<button class="folder-back" onclick="backToRoot()">‹ 返回</button> ${escapeHtml(browseFolder.name)}`;
+    folderEl.hidden = true;
+    renderListVideos({
+      grid, count: $('libraryCount'), folder: browseFolder,
+      nameAttr: 'data-name', rmAttr: 'data-rm-list', isPrivate: false,
+    });
+    return;
+  }
+  crumb.innerHTML = '';
+  $('libraryCount').textContent = '';
+  folderEl.hidden = false;
+  renderRootFolders();
+  renderLibraryGrid(libraryFiles, grid, view);
+}
+
+function renderRootFolders() {
+  const el = $('folderGrid');
+  const pubs = myLists.map((l) => `
+    <div class="folder-card" data-enter="list" data-id="${l.id}" data-name="${escapeHtml(l.name)}" onclick="enterListFolder('${l.id}','${escapeHtml(l.name).replace(/'/g, "\\'")}',false)">
+      <div class="folder-icon">📁</div>
+      <div class="folder-name">${escapeHtml(l.name)}</div>
+      <div class="folder-meta">${l.items.length} 个视频</div>
+    </div>`).join('');
+  const newCard = `<div class="folder-card" data-new="1" onclick="openCreateList(false)">
+        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">＋</div>
+        <div class="folder-name" style="color:var(--accent);">新建列表</div>
+        <div class="folder-meta">按主题创建列表，将视频加入</div>
+      </div>`;
+  el.innerHTML = (pubs || '<div class="folder-card" style="cursor:default;"><div class="folder-meta">暂无公开列表</div></div>') + newCard;
+}
+
+function renderLibraryGrid(files, grid, view) {
+  grid.className = view === 'list' ? 'library-list' : 'library-grid';
+  if (!files.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>';
+    return;
+  }
+  grid.innerHTML = files.map((f) => {
+    const pct = libraryProgress(f.name);
+    const progressHtml = pct === null ? '' : view === 'list'
+      ? `<div class="video-progress">${pct}%</div>`
+      : `<span class="video-progress">${pct}%</span>`;
+    const sel = selectionMode ? `<span class="sel-check">✓</span>` : '';
+    const selCls = selectionMode && selectedSet.has(f.name) ? ' selected' : '';
+    if (view === 'list') {
+      return `
+      <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}" onclick="onVideoCardTap('${escapeHtml(f.name).replace(/'/g, "\\'")}')">
+        ${sel}
+        <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span></div>
+        <div class="video-info">
+          <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+          <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
+          ${progressHtml}
+        </div>
+        <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" onclick="event.stopPropagation();deleteVideo('${escapeHtml(f.name).replace(/'/g, "\\'")}')">${icon('trash', 15)}</button>
+      </div>`;
+    }
+    return `
+    <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}" onclick="onVideoCardTap('${escapeHtml(f.name).replace(/'/g, "\\'")}')">
+      ${sel}
+      <div class="video-thumb">
+        <span class="play-badge">${icon('play', 20)}</span>
+        ${progressHtml}
+        <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" onclick="event.stopPropagation();deleteVideo('${escapeHtml(f.name).replace(/'/g, "\\'")}')">${icon('trash', 14)}</button>
+      </div>
+      <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
+      <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
+    </div>`;
+  }).join('');
+}
+
+/** iOS 卡片点击：选择模式下切换选中，否则播放 */
+function onVideoCardTap(name) {
+  if (selectionMode) { toggleSelect(name); return; }
+  playLibrary(name);
+}
+
+async function renderListVideos({ grid, count, folder, nameAttr, rmAttr, isPrivate, onLoaded }) {
+  const view = settings.libraryView || 'grid';
+  grid.className = view === 'list' ? 'library-list' : 'library-grid';
+  if (count) count.textContent = '';
+  let items = [];
+  try {
+    const res = isPrivate
+      ? await privateFetch(`/api/lists/${folder.id}`, {}, onLoaded)
+      : await fetch(`/api/lists/${folder.id}`);
+    if (res === null) return;
+    if (res.ok) {
+      const list = await res.json();
+      items = list.items || [];
+    }
+  } catch (_) {}
+  if (!items.length) {
+    grid.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">📂</div>列表为空<br>在浏览页选择视频后可加入</div>';
+    return;
+  }
+  grid.innerHTML = items.map((i) => {
+    const pct = libraryProgress(i.name);
+    const progressHtml = pct === null ? '' : view === 'list'
+      ? `<div class="video-progress">${pct}%</div>`
+      : `<span class="video-progress">${pct}%</span>`;
+    const meta = [i.size ? formatBytes(i.size) : '', i.mtime ? formatDate(i.mtime) : '', i.addedAt ? formatDate(i.addedAt) + ' 加入' : ''].filter(Boolean).join(' · ');
+    const playOn = `onclick="${isPrivate ? "playPrivateVideo" : "playLibrary"}('${escapeHtml(i.name).replace(/'/g, "\\'")}')"`;
+    if (view === 'list') {
+      return `
+      <div class="video-card" ${nameAttr}="${escapeHtml(i.name)}" ${playOn}>
+        <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span>${progressHtml}</div>
+        <div class="video-info">
+          <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
+          <div class="video-meta">${meta}</div>
+        </div>
+        <button class="video-delete" ${rmAttr}="${folder.id}|${escapeHtml(i.name)}" onclick="event.stopPropagation();removeListVideo('${folder.id}','${escapeHtml(i.name).replace(/'/g, "\\'")}',${isPrivate})">${icon('trash', 15)}</button>
+      </div>`;
+    }
+    return `
+    <div class="video-card" ${nameAttr}="${escapeHtml(i.name)}" ${playOn}>
+      <div class="video-thumb">
+        <span class="play-badge">${icon('play', 20)}</span>
+        ${progressHtml}
+        <button class="video-delete" ${rmAttr}="${folder.id}|${escapeHtml(i.name)}" onclick="event.stopPropagation();removeListVideo('${folder.id}','${escapeHtml(i.name).replace(/'/g, "\\'")}',${isPrivate})">${icon('trash', 14)}</button>
+      </div>
+      <div class="video-name" title="${escapeHtml(i.name)}">${escapeHtml(i.name)}</div>
+      <div class="video-meta">${meta}</div>
+    </div>`;
+  }).join('');
+}
+
+function enterListFolder(id, name, isPrivate) {
+  browseFolder = { id, name, isPrivate };
+  renderBrowse();
+}
+function backToRoot() { browseFolder = null; renderBrowse(); }
+
+async function removeListVideo(folderId, name, isPrivate) {
+  try {
+    const opts = {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names: [name] }),
+    };
+    const res = isPrivate
+      ? await privateFetch(`/api/lists/${folderId}/items`, opts, () => removeListVideo(folderId, name, isPrivate))
+      : await fetch(`/api/lists/${folderId}/items`, opts);
+    if (res === null) return;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '移除失败');
+    showToast('已从列表移除');
+    loadLists();
+    loadLibrary();
+  } catch (err) { showToast(err.message, true); }
+}
+
+function libraryProgress(name) {
+  const h = history.find(x => x.id === 'file:' + name);
+  if (!h || !h.duration) return null;
+  return Math.min(100, Math.round((h.time / h.duration) * 100));
+}
+
+function renderLibrary(files) { renderBrowse(); }
+
+async function deleteVideo(name) {
+  showActionSheet({
+    title: '删除视频',
+    message: `「${name}」删除后无法恢复。`,
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        const res = await fetch(`/api/library/${encodeURIComponent(name)}`, { method: 'DELETE' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '删除失败');
+        removeHistory('file:' + name);
+        showToast('已删除');
+        loadLibrary();
+      } catch (err) { showToast(err.message, true); }
+    },
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// 播放器核心（HLS + 缓存优先 + 进度保存）
+// ═══════════════════════════════════════════════════════
+let hls = null;
+let currentPlay = null;
+let lastSaveTime = 0;
+let userPaused = false;
+
+function openPlayer(title, src, id, target = 'browse') {
+  const pfx = target === 'private' ? 'private' : '';
+  const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+  const titleEl = $(pfx ? 'privateInlinePlayerTitle' : 'inlinePlayerTitle');
+  const video = $(pfx ? 'privateInlinePlayerVideo' : 'inlinePlayerVideo');
+  if (target === 'private') openPrivateApp();
+  else switchTab('browse');
+  titleEl.textContent = title;
+  box.hidden = false;
+  userPaused = false;
+  updateCacheBtnState(target, src);
+  if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
+  currentPlay = { id, title, src, time: 0, duration: 0, updatedAt: Date.now() };
+
+  if (hls) { hls.destroy(); hls = null; }
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+
+  const isHls = /\.m3u8($|\?)/i.test(src);
+  if (isHls && window.Hls && Hls.isSupported()) {
+    hls = new Hls({ enableWorker: true, maxBufferLength: 60 });
+    hls.loadSource(src);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.ERROR, (_e, data) => {
+      if (data.fatal) {
+        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) hls.startLoad();
+        else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) hls.recoverMediaError();
+        else showToast('播放失败：流地址不可用', true);
+      }
+    });
+  } else {
+    playFromCacheOrStream(video, src, target);
+  }
+
+  const prev = history.find(h => h.id === id);
+  video.onloadedmetadata = () => {
+    if (!currentPlay) return;
+    currentPlay.duration = video.duration || 0;
+    if (prev && prev.time > 3 && prev.time < (video.duration || Infinity) - 5) {
+      video.currentTime = prev.time;
+    }
+    if (!userPaused) video.play().catch(() => {});
+  };
+  video.ontimeupdate = () => {
+    if (!currentPlay) return;
+    currentPlay.time = video.currentTime || 0;
+    currentPlay.duration = video.duration || 0;
+    const now = Date.now();
+    if (now - lastSaveTime > 5000) {
+      lastSaveTime = now;
+      upsertHistory({ ...currentPlay, updatedAt: now });
+    }
+  };
+  video.onpause = () => { if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() }); };
+  video.onended = () => {
+    if (!currentPlay) return;
+    currentPlay.time = currentPlay.duration;
+    upsertHistory({ ...currentPlay, updatedAt: Date.now() });
+  };
+  video.onerror = () => showToast('播放失败：请确认链接可访问且格式受支持', true);
+}
+
+function closePlayer(target = 'browse') {
+  const pfx = target === 'private' ? 'private' : '';
+  const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+  const video = $(pfx ? 'privateInlinePlayerVideo' : 'inlinePlayerVideo');
+  if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
+  currentPlay = null;
+  if (hls) { hls.destroy(); hls = null; }
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  box.hidden = true;
+  if (target === 'browse') loadLibrary();
+}
+function closePrivatePlayerOnly() { closePlayer('private'); }
+
+function playLibrary(name) {
+  openPlayer(name, `/downloads/${encodeURIComponent(name)}`, `file:${name}`);
+}
+
+/** 私密 App 内播放：保持私密上下文（私密播放器） */
+function playPrivateVideo(name) {
+  openPlayer(name, `/downloads/${encodeURIComponent(name)}`, `file:${name}`, 'private');
+}
+
+function playUrl() {
+  const url = $('playUrlInput').value.trim();
+  if (!/^https?:\/\//i.test(url)) { showToast('请输入有效的 http(s) 链接', true); return; }
+  switchTab('browse');
+  openPlayer(url, url, `url:${url}`);
+}
+
+// ═══════════════════════════════════════════════════════
+// 设置页：服务状态
+// ═══════════════════════════════════════════════════════
+async function loadHealth() {
+  try {
+    const res = await fetch('/api/health');
+    if (!res.ok) throw new Error();
+    const h = await res.json();
+    $('healthVersion').textContent = h.version || '—';
+    $('healthUptime').textContent = `${Math.floor(h.uptime / 60)} 分钟`;
+    $('healthQueue').textContent = `${h.tasks.queued} / ${h.tasks.running}（上限 ${h.tasks.maxConcurrent}）`;
+    const eng = h.engines || {};
+    $('healthEngines').innerHTML = `${dot(eng.ffmpeg)} ffmpeg / ${dot(eng.ffprobe)} ffprobe`;
+    $('healthNre').innerHTML = `${dot(eng.n_m3u8dl_re)} 可用`;
+    $('healthDisk').textContent = h.disk || '—';
+  } catch {}
+}
+function dot(ok) { return `<span class="status-dot ${ok ? 'ok' : 'no'}"></span>`; }
+
+// ═══════════════════════════════════════════════════════
+// Toast / Sheet 弹窗
+// ═══════════════════════════════════════════════════════
+let toastTimer = null;
+function showToast(msg, isError = false) {
+  let t = document.querySelector('.toast');
+  if (!t) {
+    t = document.createElement('div');
+    t.className = 'toast';
+    document.body.appendChild(t);
+  }
+  t.textContent = msg;
+  t.classList.toggle('error', isError);
+  t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 3500);
+}
+
+const sheetMask = $('sheetMask');
+const sheetCard = $('sheetCard');
+function openSheet(html) {
+  sheetCard.innerHTML = html;
+  sheetMask.hidden = false;
+}
+function closeSheet() {
+  sheetMask.hidden = true;
+  sheetCard.innerHTML = '';
+  if (privateCtx) { privateCtx = false; setPrivateToken(''); }
+}
+sheetMask.addEventListener('click', (e) => { if (e.target === sheetMask) closeSheet(); });
+
+function showActionSheet({ title, message, confirmText = '删除', cancelText = '取消', danger = true, onConfirm }) {
+  openSheet(`
+    <div class="action-sheet">
+      <div class="as-title">${title}</div>
+      <div class="as-message">${message}</div>
+      <button class="as-btn ${danger ? 'danger' : ''}" id="asConfirm">${confirmText}</button>
+      <button class="as-btn cancel" onclick="closeSheet()">${cancelText}</button>
+    </div>`);
+  $('asConfirm').addEventListener('click', () => { closeSheet(); onConfirm && onConfirm(); });
+}
+
+// ═══════════════════════════════════════════════════════
+// 下载页：一键清理已完成
+// ═══════════════════════════════════════════════════════
+async function cleanCompleted() {
+  try {
+    const res = await fetch('/api/tasks/clean-completed', { method: 'POST' });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '清理失败');
+    showToast(`已清理 ${data.removed || 0} 条已完成记录`);
+    loadTasks();
+  } catch (err) { showToast(err.message, true); }
+}
+
+// ═══════════════════════════════════════════════════════
+// 列表数据 + 选择模式 + 批量操作
+// ═══════════════════════════════════════════════════════
+let selectionMode = false;
+let selectedSet = new Set();
+
+async function loadLists() {
+  try {
+    const res = await fetch('/api/lists');
+    if (!res.ok) return;
+    const data = await res.json();
+    myLists = data.lists || [];
+    if (data.hasPrivate && getPrivateToken()) loadPrivateLists();
+    renderBrowse();
+  } catch {}
+}
+async function loadPrivateLists() {
+  try {
+    const res = await privateFetch('/api/private/lists', {}, () => loadPrivateLists());
+    if (res === null) return;
+    if (res.ok) myPrivateLists = (await res.json()).lists || [];
+  } catch {}
+}
+
+function enterSelectionMode() {
+  selectionMode = true;
+  selectedSet.clear();
+  $('selectModeBtn').textContent = '取消';
+  $('batchBar').hidden = false;
+  renderBrowse();
+}
+function exitSelectionMode() {
+  selectionMode = false;
+  selectedSet.clear();
+  $('selectModeBtn').textContent = '选择';
+  $('batchBar').hidden = true;
+  renderBrowse();
+}
+function toggleSelect(name) {
+  if (selectedSet.has(name)) selectedSet.delete(name);
+  else selectedSet.add(name);
+  updateBatchBar();
+  renderBrowse();
+}
+function updateBatchBar() {
+  $('batchCount').textContent = `已选 ${selectedSet.size} 项`;
+  $('batchSelectAllBtn').textContent = (selectedSet.size === libraryFiles.length && libraryFiles.length) ? '全不选' : '全选';
+}
+function toggleSelectAll() {
+  if (selectedSet.size === libraryFiles.length) selectedSet.clear();
+  else libraryFiles.forEach(f => selectedSet.add(f.name));
+  updateBatchBar();
+  renderBrowse();
+}
+async function batchDeleteSelected() {
+  if (!selectedSet.size) { showToast('请先选择视频', true); return; }
+  const names = [...selectedSet];
+  showActionSheet({
+    title: '批量删除',
+    message: `确定删除选中的 ${names.length} 个视频文件？删除后无法恢复。`,
+    confirmText: '删除',
+    onConfirm: async () => {
+      let ok = 0;
+      for (const name of names) {
+        try {
+          const res = await fetch(`/api/library/${encodeURIComponent(name)}`, { method: 'DELETE' });
+          if (res.ok) { ok++; removeHistory('file:' + name); }
+        } catch {}
+      }
+      showToast(`已删除 ${ok} 个视频`);
+      exitSelectionMode();
+      loadLibrary();
+    },
+  });
+}
+
+function openBatchOps() {
+  if (!selectedSet.size) { showToast('请先选择视频', true); return; }
+  const n = selectedSet.size;
+  const listBtns = myLists.map(l => `
+    <button class="as-btn" onclick="addSelectedTo('${l.id}', false)">加入「${escapeHtml(l.name)}」</button>`).join('');
+  openSheet(`
+    <div class="action-sheet">
+      <div class="as-title">批量操作（${n} 项）</div>
+      <button class="as-btn danger" onclick="closeSheet();batchDeleteSelected()">删除选中视频</button>
+      ${listBtns}
+      <button class="as-btn" onclick="closeSheet();openPrivateListPicker()">加入私密列表</button>
+      <button class="as-btn" onclick="closeSheet();openCreateList(false)">新建列表并加入</button>
+      <button class="as-btn cancel" onclick="closeSheet()">取消</button>
+    </div>`);
+}
+
+function openAddToList(isPrivate = false) {
+  // 私密列表：统一走解锁门控，token 有效才加载并打开列表（过期时自动引导重新验证并续接）
+  if (isPrivate) {
+    ensurePrivateUnlock(async () => {
+      await loadPrivateLists();
+      openPrivateListPicker();
+    });
+    return;
+  }
+  const listArr = myLists;
+  if (!listArr.length) { showToast('暂无列表，请先创建', true); return; }
+  const items = listArr.map(l => `
+    <div class="list-tile" onclick="addSelectedTo('${l.id}', false)">
+      <span class="list-tile-icon">📁</span>
+      <span class="list-tile-main">
+        <span class="list-tile-name">${escapeHtml(l.name)}</span>
+        <span class="list-tile-meta">${l.items.length} 项</span>
+      </span>
+    </div>`).join('');
+  openSheet(`
+    <div class="sheet-head"><span class="sheet-title">加入列表</span></div>
+    <div class="sheet-body">
+      ${items || '<div class="empty">暂无列表</div>'}
+      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="closeSheet();openCreateList(false)">＋ 新建列表</button>
+    </div>`);
+}
+
+async function openPrivateListPicker() {
+  const listArr = myPrivateLists;
+  if (!listArr.length) { showToast('暂无私密列表，请先创建', true); return; }
+  const items = listArr.map(l => `
+    <div class="list-tile" onclick="addSelectedTo('${l.id}', true)">
+      <span class="list-tile-icon private">🔒</span>
+      <span class="list-tile-main">
+        <span class="list-tile-name">${escapeHtml(l.name)}</span>
+        <span class="list-tile-meta">${l.items.length} 项</span>
+      </span>
+    </div>`).join('');
+  openSheet(`
+    <div class="sheet-head"><span class="sheet-title">加入私密列表</span></div>
+    <div class="sheet-body">${items || '<div class="empty">暂无列表</div>'}</div>`);
+}
+
+async function addSelectedTo(listId, isPrivate) {
+  const names = [...selectedSet];
+  if (!names.length) { showToast('请先选择视频', true); return; }
+  try {
+    const res = await fetch(`/api/lists/${listId}/items`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ names }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '加入失败');
+    showToast(`已加入 ${names.length} 项`);
+    closeSheet();
+    exitSelectionMode();
+    loadLists();
+    loadLibrary();
+  } catch (err) { showToast(err.message, true); }
+}
+
+function openCreateList(isPrivate = false) {
+  openSheet(`
+    <div class="sheet-head"><span class="sheet-title">创建${isPrivate ? '私密' : ''}列表</span><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <input class="text-input" id="newListName" placeholder="列表名称" maxlength="40" style="width:100%;">
+      ${isPrivate ? '<p class="pin-tip">🔒 私密列表仅凭密码可见</p>' : ''}
+    </div>
+    <div class="sheet-foot">
+      <button class="btn-secondary" onclick="closeSheet()">取消</button>
+      <button class="btn-primary" onclick="submitCreateList(${isPrivate})">创建</button>
+    </div>`);
+  setTimeout(() => { const el = $('newListName'); if (el) el.focus(); }, 60);
+}
+
+async function submitCreateList(isPrivate) {
+  const name = ($('newListName')?.value || '').trim();
+  if (!name) { showToast('请输入列表名称', true); return; }
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    const bodyObj = { name };
+    if (isPrivate) bodyObj.private = true;
+    const res = isPrivate
+      ? await privateFetch('/api/lists', { method: 'POST', headers, body: JSON.stringify(bodyObj) }, () => submitCreateList(isPrivate))
+      : await fetch('/api/lists', { method: 'POST', headers, body: JSON.stringify(bodyObj) });
+    if (res === null) return;
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '创建失败');
+    showToast('列表已创建');
+    closeSheet();
+    loadLists();
+  } catch (err) { showToast(err.message, true); }
+}
+
+function removeList(listId) {
+  showActionSheet({
+    title: '删除列表',
+    message: '删除后列表中的视频会恢复显示在浏览页，视频文件不受影响。',
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        const res = await fetch(`/api/lists/${listId}`, { method: 'DELETE' });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '删除失败');
+        showToast('列表已删除');
+        closeSheet();
+        loadLists();
+        loadLibrary();
+      } catch (err) { showToast(err.message, true); }
+    },
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// 私密列表：PIN 认证 + 门控 + 私密浏览页
+// ═══════════════════════════════════════════════════════
+const PRIVATE_TOKEN_KEY = 'vd.private.token';
+function getPrivateToken() { return localStorage.getItem(PRIVATE_TOKEN_KEY) || ''; }
+function setPrivateToken(t) { if (t) localStorage.setItem(PRIVATE_TOKEN_KEY, t); else localStorage.removeItem(PRIVATE_TOKEN_KEY); }
+let privateCtx = false;
+let pinState = null;
+let pendingPrivateAction = null;
+let privateFolder = null;
+
+async function openPrivateEntry() {
+  try {
+    const res = await fetch('/api/private/status');
+    if (!res.ok) throw new Error();
+    const st = await res.json();
+    if (!st.hasPassword) openPrivateSetup();
+    else openPrivateVerify();
+  } catch { showToast('无法获取私密状态', true); }
+}
+
+async function ensurePrivateUnlock(action) {
+  const token = getPrivateToken();
+  if (!token) {
+    pendingPrivateAction = action;
+    openPrivateEntry();
+    return;
+  }
+  try {
+    const res = await fetch('/api/private/status', { headers: { 'X-Private-Token': token } });
+    const st = await res.json().catch(() => ({}));
+    if (res.ok && st.tokenValid) { action(); return; }
+  } catch {}
+  setPrivateToken('');
+  pendingPrivateAction = action;
+  openPrivateEntry();
+}
+
+async function privateFetch(url, opts = {}, reauthAction = null) {
+  const headers = { ...(opts.headers || {}), 'X-Private-Token': getPrivateToken() };
+  const res = await fetch(url, { ...opts, headers });
+  if (res.status === 401) {
+    setPrivateToken('');
+    pendingPrivateAction = reauthAction;
+    openPrivateEntry();
+    return null;
+  }
+  return res;
+}
+
+function openPinScreen({ title, sub, len, seg = false, autoBoth = false, onDone }) {
+  pinState = { title, sub, len, seg, autoBoth, pin: '', err: '', onDone };
+  renderPinScreen();
+}
+
+function renderPinScreen() {
+  const s = pinState;
+  if (!s) return;
+  const dots = Array.from({ length: s.len }, (_, i) => `<i class="pin-dot${i < s.pin.length ? ' filled' : ''}"></i>`).join('');
+  const segHtml = s.seg ? `
+    <div class="pin-seg">
+      <button class="${s.len === 4 ? 'active' : ''}" onclick="pinSetLen(4)">4 位</button>
+      <button class="${s.len === 6 ? 'active' : ''}" onclick="pinSetLen(6)">6 位</button>
+    </div>` : '';
+  openSheet(`
+    <div class="sheet-head"><span class="sheet-title">🔒 私密列表</span><button class="sheet-close" onclick="closeSheet()">✕</button></div>
+    <div class="sheet-body">
+      <div class="pin-screen">
+        <div class="pin-screen-title">${s.title}</div>
+        <div class="pin-screen-sub">${s.sub}</div>
+        ${segHtml}
+        <div class="pin-dots">${dots}</div>
+        <div class="numpad">
+          ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button onclick="pinKey(${n})">${n}</button>`).join('')}
+          <button class="key-del" onclick="pinKey('del')">⌫</button>
+          <button onclick="pinKey(0)">0</button>
+          <button style="visibility:hidden"></button>
+        </div>
+        <div class="pin-error" id="pinError">${s.err}</div>
+      </div>
+    </div>`);
+}
+
+function pinSetLen(n) {
+  pinState.len = n; pinState.pin = ''; pinState.err = '';
+  renderPinScreen();
+}
+
+function pinKey(k) {
+  if (!pinState) return;
+  if (k === 'del') { pinState.pin = pinState.pin.slice(0, -1); renderPinScreen(); return; }
+  if (typeof k !== 'number') return;
+  if (pinState.pin.length >= pinState.len) return;
+  pinState.pin += String(k);
+  renderPinScreen();
+  const reached = pinState.autoBoth
+    ? (pinState.pin.length === 4 || pinState.pin.length === 6)
+    : (pinState.pin.length === pinState.len);
+  if (reached) {
+    const p = pinState.pin;
+    pinState.pin = '';
+    setTimeout(() => pinState.onDone && pinState.onDone(p), 120);
+  }
+}
+
+function pinSetError(msg) {
+  if (!pinState) return;
+  pinState.err = msg;
+  renderPinScreen();
+}
+
+function openPrivateSetup() {
+  openPinScreen({
+    title: '设置密码', sub: '输入 4 位数字密码（可切 6 位）', len: 4, seg: true, autoBoth: true,
+    onDone: async (p) => {
+      openPinScreen({
+        title: '确认密码', sub: '再次输入以确认', len: p.length,
+        onDone: async (p2) => {
+          if (p2 !== p) { pinSetError('两次输入不一致，请重试'); return; }
+          try {
+            const res = await fetch('/api/private/password', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ password: p }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || '设置失败');
+            // ⭐ 后端 password 接口不签发 token：设置成功后需 verify 获取 token 再解锁
+            const vres = await fetch('/api/private/verify', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ password: p }),
+            });
+            const vdata = await vres.json().catch(() => ({}));
+            if (vres.ok && vdata.token) setPrivateToken(vdata.token);
+            privateCtx = true;
+            closeSheet();
+            showToast('私密密码已设置');
+            openPrivateApp();
+          } catch (e) { pinSetError(e.message + '，请重试'); }
+        },
+      });
+    },
+  });
+}
+
+function openPrivateVerify() {
+  openPinScreen({
+    title: '输入密码', sub: '进入私密列表', len: 4, autoBoth: true,
+    onDone: async (p) => {
+      try {
+        const res = await fetch('/api/private/verify', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: p }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const msg = data.needSetup ? '请先设置密码' : (data.error || '密码错误');
+          pinSetError(msg);
+          if (data.needSetup) { setTimeout(() => { closeSheet(); openPrivateSetup(); }, 600); }
+          return;
+        }
+        setPrivateToken(data.token);
+        privateCtx = true;
+        closeSheet();
+        afterPrivateUnlock();
+      } catch (e) { pinSetError(e.message + '，请重试'); }
+    },
+  });
+}
+
+function afterPrivateUnlock() {
+  if (pendingPrivateAction) {
+    const fn = pendingPrivateAction;
+    pendingPrivateAction = null;
+    fn();
+    return;
+  }
+  openPrivateApp();
+}
+
+function openPrivateApp() {
+  privateCtx = true;
+  privatePageActive = true;
+  browseFolder = null;
+  privateFolder = null;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  $('page-private').classList.add('active');
+  $('tabbar').hidden = true;
+  $('navTitle').textContent = '私密列表';
+  $('navTitle').classList.add('small');
+  $('navBack').hidden = false;
+  $('navBack').dataset.back = 'private:home';
+  loadPrivateLists().then(renderPrivateBrowse);
+}
+
+function closePrivateApp() {
+  privatePageActive = false;
+  $('tabbar').hidden = false;
+  $('navTitle').classList.remove('small');
+  const tk = getPrivateToken();
+  if (tk) { try { privateFetch('/api/private/logout', { method: 'POST' }); } catch (_) {} }
+  setPrivateToken('');
+  privateCtx = false;
+  privateFolder = null;
+  try {
+    const v = $('privateInlinePlayerVideo');
+    if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
+    $('privateInlinePlayer').hidden = true;
+  } catch (_) {}
+  switchTab('settings');
+  showToast('已退出私密浏览');
+}
+
+function renderPrivateBrowse() {
+  const grid = $('privateLibraryGrid');
+  const folderEl = $('privateFolderGrid');
+  const crumb = $('privateBrowseCrumb');
+  const view = settings.libraryView || 'grid';
+  const isList = privateFolder && privateFolder.id;
+
+  crumb.innerHTML = isList
+    ? `<button class="folder-back" onclick="privateFolder=null;renderPrivateBrowse()">‹ 私密列表</button> ${escapeHtml(privateFolder.name)}`
+    : '私密列表';
+  $('privateCount').textContent = '';
+
+  if (!isList) {
+    const pbox = $('privateInlinePlayer');
+    if (pbox && !pbox.hidden) closePrivatePlayerOnly();
+  }
+
+  if (isList) {
+    folderEl.hidden = true;
+    renderPrivateFolderVideos(privateFolder);
+    return;
+  }
+  folderEl.hidden = false;
+  const newBtn = `<div class="folder-card" data-pnew="1" onclick="openCreateList(true)">
+        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">＋</div>
+        <div class="folder-name" style="color:var(--accent);">新建私密列表</div>
+        <div class="folder-meta">创建后即可加入视频</div>
+      </div>`;
+  if (!myPrivateLists.length) {
+    folderEl.innerHTML = '<div class="empty" style="grid-column:1/-1;"><div class="big">🔒</div>暂无私密列表<br>点击下方新建</div>' + newBtn;
+  } else {
+    folderEl.innerHTML = myPrivateLists.map((l) => `
+      <div class="folder-card" data-pfolder="${l.id}" data-pname="${escapeHtml(l.name)}" onclick="enterPrivateFolder('${l.id}','${escapeHtml(l.name).replace(/'/g, "\\'")}')">
+        <div class="folder-icon private">🔒<span class="folder-badge">${l.items.length}</span></div>
+        <div class="folder-name">${escapeHtml(l.name)}</div>
+        <div class="folder-meta">${l.items.length} 个视频</div>
+      </div>`).join('') + newBtn;
+  }
+  grid.innerHTML = '';
+}
+
+function enterPrivateFolder(id, name) {
+  privateFolder = { id, name, isPrivate: true };
+  renderPrivateBrowse();
+}
+
+async function renderPrivateFolderVideos(folder) {
+  await renderListVideos({
+    grid: $('privateLibraryGrid'),
+    count: $('privateCount'),
+    folder,
+    nameAttr: 'data-pvideo',
+    rmAttr: 'data-prm',
+    isPrivate: true,
+    onLoaded: () => renderPrivateFolderVideos(folder),
+  });
+}
+
+function removePrivateList(listId) {
+  showActionSheet({
+    title: '删除私密列表',
+    message: '删除后列表中的视频会恢复显示在浏览页。',
+    confirmText: '删除',
+    onConfirm: async () => {
+      try {
+        const res = await privateFetch(`/api/lists/${listId}`, { method: 'DELETE' }, () => removePrivateList(listId));
+        if (res === null) return;
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || '删除失败');
+        showToast('私密列表已删除');
+        closeSheet();
+        loadLists();
+        loadLibrary();
+      } catch (err) { showToast(err.message, true); }
+    },
+  });
+}
+
+function openChangePin() {
+  openPinScreen({
+    title: '修改密码', sub: '输入原密码', len: 4,
+    onDone: async (oldP) => {
+      openPinScreen({
+        title: '修改密码', sub: '输入新密码（4 或 6 位数字）', len: 4, seg: true,
+        onDone: async (newP) => {
+          openPinScreen({
+            title: '修改密码', sub: '再次输入新密码', len: newP.length,
+            onDone: async (newP2) => {
+              if (newP2 !== newP) { showToast('两次输入不一致，请重新设置', true); openChangePin(); return; }
+              try {
+                const res = await privateFetch('/api/private/change', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ oldPassword: oldP, newPassword: newP }),
+                }, () => openChangePin());
+                if (res === null) return;
+                const data = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(data.error || '修改失败');
+                showToast('密码已修改');
+                closeSheet();
+              } catch (err) { showToast(err.message, true); }
+            },
+          });
+        },
+      });
+    },
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// 缓存管理（Cache API 优先本地播放）
+// ═══════════════════════════════════════════════════════
+const VIDEO_CACHE = 'vd-media-cache';
+
+async function refreshCacheStats() {
+  try {
+    const cachesObj = await caches.keys();
+    let total = 0;
+    for (const name of cachesObj) {
+      const cache = await caches.open(name);
+      const keys = await cache.keys();
+      for (const k of keys) {
+        const r = await cache.match(k);
+        total += (r && r.headers.get('content-length')) ? Number(r.headers.get('content-length')) : 0;
+      }
+    }
+    $('cacheStats').textContent = formatBytes(total) || '0 B';
+  } catch { $('cacheStats').textContent = '—'; }
+}
+
+async function clearAllCache() {
+  showActionSheet({
+    title: '清空视频缓存',
+    message: '确定清空全部视频缓存？已缓存视频将重新从服务器加载。',
+    confirmText: '清空',
+    onConfirm: async () => {
+      try {
+        await caches.delete(VIDEO_CACHE);
+        showToast('已清空视频缓存');
+        refreshCacheStats();
+        updateCacheBtnState('browse', currentPlay ? currentPlay.src : '');
+      } catch (err) { showToast('清理失败：' + err.message, true); }
+    },
+  });
+}
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+async function cacheVideo(src, target = 'browse') {
+  try {
+    const cache = await caches.open(VIDEO_CACHE);
+    const hit = await cache.match(src);
+    if (hit) { showToast('该视频已在本地缓存'); return; }
+    const res = await fetch(src);
+    if (!res.ok) throw new Error(`缓存失败 (${res.status})`);
+    const total = Number(res.headers.get('content-length')) || 0;
+    if (total && res.body && res.body.getReader) {
+      const reader = res.body.getReader();
+      const chunks = [];
+      let received = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        received += value.length;
+      }
+      const blob = new Blob(chunks, { type: res.headers.get('content-type') || 'video/mp4' });
+      await cache.put(src, new Response(blob, { status: 200, headers: { 'Content-Type': blob.type } }));
+    } else {
+      await cache.put(src, res);
+    }
+    showToast('视频已缓存到本地');
+    refreshCacheStats();
+    updateCacheBtnState(target, src);
+  } catch (err) {
+    showToast('缓存失败：' + err.message, true);
+    updateCacheBtnState(target, src);
+  }
+}
+
+async function playFromCacheOrStream(video, src, target = 'browse') {
+  try {
+    const cache = await caches.open(VIDEO_CACHE);
+    const hit = await cache.match(src);
+    if (hit) {
+      const blob = await hit.blob();
+      const url = URL.createObjectURL(blob);
+      video.src = url;
+      updateCacheBtnState(target, src);
+      return;
+    }
+  } catch (_) {}
+  video.src = src;
+  updateCacheBtnState(target, src);
+}
+
+async function updateCacheBtnState(target, src) {
+  const btn = $(target === 'private' ? 'privateCacheMenuBtn' : 'cacheMenuBtn');
+  if (!btn) return;
+  try {
+    const cache = await caches.open(VIDEO_CACHE);
+    const hit = await cache.match(src);
+    btn.textContent = hit ? '✓' : '⋯';
+    btn.classList.toggle('cached', !!hit);
+  } catch (_) {}
+}
+
+// ═══════════════════════════════════════════════════════
+// 登录鉴权
+// ═══════════════════════════════════════════════════════
+const AUTH_KEY = 'vd.auth.token';
+const USER_KEY = 'vd.auth.user';
+function getAuthToken() { return localStorage.getItem(AUTH_KEY) || ''; }
+function setAuthToken(t) { if (t) localStorage.setItem(AUTH_KEY, t); else localStorage.removeItem(AUTH_KEY); }
+function getAuthUser() { return localStorage.getItem(USER_KEY) || ''; }
+function setAuthUser(u) { if (u) localStorage.setItem(USER_KEY, u); else localStorage.removeItem(USER_KEY); }
+const _origFetch = window.fetch;
+window.fetch = async (input, init) => {
+  const opts = { ...(init || {}), headers: { ...((init && init.headers) || {}) } };
+  const tk = getAuthToken();
+  if (tk && !/\/api\/auth\//.test(String(input))) opts.headers['Authorization'] = 'Bearer ' + tk;
+  const res = await _origFetch(input, opts);
+  // 401 门控：仅普通业务请求的 401 视为登录失效；私密认证端点（/api/private/*）与私密业务请求（意图携带 X-Private-Token）的 401 由私密流程专门处理
+  const isPrivateReq = /\/api\/private\//.test(String(input)) || !!(opts.headers && ('X-Private-Token' in opts.headers));
+  if (res.status === 401 && !/\/api\/auth\//.test(String(input)) && !isPrivateReq) { setAuthToken(''); showLogin(); }
+  return res;
+};
+function showLogin() {
+  const s = $('loginScreen'); if (s) s.classList.remove('hidden');
+  const app = $('app'); if (app) app.hidden = true;
+  const lbl = $('currentUserLabel');
+  const u = getAuthUser();
+  if (lbl) lbl.textContent = u ? `当前用户：${u}` : '';
+}
+function hideLogin() {
+  const s = $('loginScreen'); if (s) s.classList.add('hidden');
+  const app = $('app'); if (app) app.hidden = false;
+}
+async function doLogout() {
+  try { await _origFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
+  setAuthToken(''); setAuthUser('');
+  socket.disconnect();
+  showLogin();
+  showToast('已退出登录');
+}
+async function doLogin() {
+  const user = ($('loginUser')?.value || '').trim();
+  const pass = $('loginPass')?.value || '';
+  const err = $('loginError');
+  if (err) err.textContent = '';
+  try {
+    const res = await _origFetch('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username: user, password: pass }) });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) { if (err) err.textContent = data.error || '登录失败'; return; }
+    setAuthToken(data.token); setAuthUser(data.username); hideLogin();
+    showToast('欢迎，' + data.username);
+    socket.auth = { token: data.token };
+    socket.disconnect();
+    socket.connect();
+    loadLists(); loadLibrary(); loadTasks();
+  } catch (e) { if (err) err.textContent = e.message; }
+}
+
+// ═══════════════════════════════════════════════════════
+// 播放器快捷键（物理键盘：空格/方向键）
+// ═══════════════════════════════════════════════════════
+document.addEventListener('keydown', (e) => {
+  const tag = (e.target && e.target.tagName) || '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+  const browseBox = $('inlinePlayer');
+  const privBox = $('privateInlinePlayer');
+  let video = null, box = null;
+  if (browseBox && !browseBox.hidden) { video = $('inlinePlayerVideo'); box = browseBox; }
+  else if (privBox && !privBox.hidden) { video = $('privateInlinePlayerVideo'); box = privBox; }
+  if (!video || !box) return;
+  if (e.code === 'Space') {
+    e.preventDefault(); e.stopPropagation();
+    if (video.paused) { userPaused = false; video.play().catch(() => {}); }
+    else { userPaused = true; video.pause(); }
+    if (currentPlay) upsertHistory({ ...currentPlay, time: video.currentTime || 0, duration: video.duration || 0, updatedAt: Date.now() });
+  } else if (e.key === 'ArrowLeft') {
+    e.preventDefault();
+    video.currentTime = Math.max(0, (video.currentTime || 0) - 30);
+  } else if (e.key === 'ArrowRight') {
+    e.preventDefault();
+    video.currentTime = Math.min(video.duration || Infinity, (video.currentTime || 0) + 30);
+  }
+});
+
+// ═══════════════════════════════════════════════════════
+// iOS 手势：左缘右滑返回（私密页/列表内）
+// ═══════════════════════════════════════════════════════
+let swipeStartX = null, swipeStartY = null;
+document.addEventListener('touchstart', (e) => {
+  const t = e.touches[0];
+  if (t.clientX < 32) { swipeStartX = t.clientX; swipeStartY = t.clientY; }
+}, { passive: true });
+document.addEventListener('touchmove', (e) => {
+  if (swipeStartX === null) return;
+  const t = e.touches[0];
+  const dx = t.clientX - swipeStartX;
+  const dy = Math.abs(t.clientY - swipeStartY);
+  if (dx > 90 && dy < 60) {
+    handleIosBack();
+    swipeStartX = null;
+  }
+}, { passive: true });
+document.addEventListener('touchend', () => { swipeStartX = null; });
+function handleIosBack() {
+  if (privatePageActive) {
+    if (privateFolder && privateFolder.id) { privateFolder = null; renderPrivateBrowse(); }
+    else closePrivateApp();
+    return;
+  }
+  if (browseFolder && browseFolder.id) { backToRoot(); return; }
+}
+
+// ═══════════════════════════════════════════════════════
+// 绑定事件 + 初始化
+// ═══════════════════════════════════════════════════════
+$('downloadBtn').addEventListener('click', submitDownload);
+$('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitDownload(); });
+$('playUrlBtn').addEventListener('click', playUrl);
+$('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
+$('inlinePlayerClose').addEventListener('click', () => closePlayer('browse'));
+$('privateInlinePlayerClose').addEventListener('click', () => closePrivatePlayerOnly());
+$('cacheMenuBtn').addEventListener('click', () => { if (currentPlay) cacheVideo(currentPlay.src, 'browse'); });
+$('privateCacheMenuBtn').addEventListener('click', () => { if (currentPlay) cacheVideo(currentPlay.src, 'private'); });
+$('cleanCompletedBtn').addEventListener('click', cleanCompleted);
+$('selectModeBtn').addEventListener('click', () => { selectionMode ? exitSelectionMode() : enterSelectionMode(); });
+$('batchSelectAllBtn').addEventListener('click', toggleSelectAll);
+$('batchOpsBtn').addEventListener('click', openBatchOps);
+$('batchCancelBtn').addEventListener('click', exitSelectionMode);
+$('openListsBtn').addEventListener('click', () => { browseFolder = null; renderBrowse(); });
+$('privateEntryBtn').addEventListener('click', openPrivateEntry);
+$('privateLockBtn').addEventListener('click', closePrivateApp);
+$('clearCacheBtn').addEventListener('click', clearAllCache);
+$('refreshHealth').addEventListener('click', loadHealth);
+$('parallelDownloadsInput').addEventListener('change', saveServerSettings);
+$('navBack').addEventListener('click', () => {
+  if (privatePageActive) {
+    if (privateFolder && privateFolder.id) { privateFolder = null; renderPrivateBrowse(); }
+    else closePrivateApp();
+  } else if (browseFolder && browseFolder.id) {
+    backToRoot();
+  }
+});
+$('loginBtn').addEventListener('click', doLogin);
+$('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('loginUser').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
+$('logoutBtn')?.addEventListener('click', (e) => { e.preventDefault(); doLogout(); });
+
+bindSettingsForm();
+applyTheme();
+applyWallpaper();
+renderSettingsForm();
+
+if (!getAuthToken()) showLogin();
+else {
+  hideLogin();
+  loadLists();
+  loadLibrary();
+  loadTasks();
+  loadHealth();
+  refreshCacheStats();
+}
+
+// 暴露给外部（e2e / 调试）的全局接口
+window.loadLists = loadLists;
+window.loadPrivateLists = loadPrivateLists;
+window.renderPrivateBrowse = renderPrivateBrowse;
+window.backToRoot = backToRoot;
+</script>
+</body>
+</html>
