@@ -526,16 +526,16 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 <div class="desktop" id="desktop">
   <div class="windows-layer">
     <div class="desktop-hint" id="desktopHint">
-      <div>点击底部 Dock 图标打开 App<br>${icon('download', 18)} 下载 · ${icon('film', 18)} 浏览 · ${icon('gear', 18)} 设置</div>
+      <div>点击底部 Dock 图标打开 App<br><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 8.5v6m0 0l-2.4-2.4M12 14.5l2.4-2.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg> 下载 · <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M2 8h20M2 16h20" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="12" r="2" fill="none" stroke="currentColor" stroke-width="1.4"/></svg> 浏览 · <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="3.2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 2.8l1 2.2 2.4-.6 1 2.1 2.3.8-.3 2.4 2 1.2-1.5 1.9 1.5 1.9-2 1.2.3 2.4-2.3.8-1 2.1-2.4-.6-1 2.2-1-2.2-2.4.6-1-2.1-2.3-.8.3-2.4-2-1.2 1.5-1.9L2.3 12l2-1.2-.3-2.4 2.3-.8 1-2.1 2.4.6z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg> 设置</div>
     </div>
 
     <!-- ═══ App：下载 ═══ -->
     <section class="window closed" id="win-downloads" data-app="downloads">
       <div class="titlebar">
         <div class="traffic">
-          <button class="tl red" data-act="close" title="关闭">${icon('xmark', 10)}</button>
-          <button class="tl yellow" data-act="min" title="最小化">${icon('minus', 10)}</button>
-          <button class="tl green" data-act="full" title="全屏">${icon('plus', 10)}</button>
+          <button class="tl red" data-act="close" title="关闭"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+          <button class="tl yellow" data-act="min" title="最小化"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+          <button class="tl green" data-act="full" title="全屏"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
         </div>
         <div class="win-title">下载</div>
         <span class="win-conn conn-dot off" title="连接状态"></span>
@@ -551,7 +551,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
           <button class="title-btn danger" id="cleanCompletedBtn" title="清理所有已完成任务记录（保留已下载文件）">清理已完成</button>
         </div>
         <div class="group" id="taskList">
-          <div class="empty"><div class="big">${icon('download', 42)}</div>还没有下载任务</div>
+          <div class="empty"><div class="big"><svg width="42" height="42" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M12 8.5v6m0 0l-2.4-2.4M12 14.5l2.4-2.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>还没有下载任务</div>
         </div>
       </div>
     </section>
@@ -560,9 +560,9 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
     <section class="window closed" id="win-browse" data-app="browse">
       <div class="titlebar">
         <div class="traffic">
-          <button class="tl red" data-act="close" title="关闭">${icon('xmark', 10)}</button>
-          <button class="tl yellow" data-act="min" title="最小化">${icon('minus', 10)}</button>
-          <button class="tl green" data-act="full" title="全屏">${icon('plus', 10)}</button>
+          <button class="tl red" data-act="close" title="关闭"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+          <button class="tl yellow" data-act="min" title="最小化"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+          <button class="tl green" data-act="full" title="全屏"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
         </div>
         <div class="win-title">浏览</div>
         <span class="win-conn conn-dot off" title="连接状态"></span>
@@ -571,8 +571,8 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
         <div class="inline-player" id="inlinePlayer" hidden>
           <div class="inline-player-bar">
             <span class="inline-player-title" id="inlinePlayerTitle"></span>
-            <button class="title-btn" id="cacheMenuBtn" title="缓存到本地">${icon('ellipsis', 18)}</button>
-            <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放">${icon('xmark', 14)}</button>
+            <button class="title-btn" id="cacheMenuBtn" title="缓存到本地"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></svg></button>
+            <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
           </div>
           <video id="inlinePlayerVideo" controls playsinline></video>
         </div>
@@ -585,8 +585,8 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
         </div>
         <div class="group-title">视频库 <span id="browseCrumb" style="text-transform:none;"></span><span id="libraryCount" style="text-transform:none;"></span>
           <span class="view-toggle" id="libraryViewToggle">
-            <button data-view="grid" class="active" title="网格视图">${icon('square-grid', 16)}</button>
-            <button data-view="list" title="列表视图">${icon('list-bullet', 16)}</button>
+            <button data-view="grid" class="active" title="网格视图"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+            <button data-view="list" title="列表视图"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="4" cy="6" r="1.5" fill="currentColor"/><circle cx="4" cy="12" r="1.5" fill="currentColor"/><circle cx="4" cy="18" r="1.5" fill="currentColor"/></svg></button>
           </span>
           <button class="title-btn" id="selectModeBtn" title="进入选择模式">选择</button>
           <button class="title-btn" id="openListsBtn" title="查看我的列表">我的列表</button>
@@ -599,7 +599,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
         </div>
         <div class="folder-grid" id="folderGrid" hidden></div>
         <div class="library-grid" id="libraryGrid">
-          <div class="empty"><div class="big">${icon('film', 42)}</div>视频库为空<br>下载完成后会出现在这里</div>
+          <div class="empty"><div class="big"><svg width="42" height="42" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="2" y="3" width="20" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M2 8h20M2 16h20" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="12" r="2" fill="none" stroke="currentColor" stroke-width="1.4"/></svg></div>视频库为空<br>下载完成后会出现在这里</div>
         </div>
       </div>
     </section>
@@ -608,9 +608,9 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
     <section class="window closed" id="win-settings" data-app="settings">
       <div class="titlebar">
         <div class="traffic">
-          <button class="tl red" data-act="close" title="关闭">${icon('xmark', 10)}</button>
-          <button class="tl yellow" data-act="min" title="最小化">${icon('minus', 10)}</button>
-          <button class="tl green" data-act="full" title="全屏">${icon('plus', 10)}</button>
+          <button class="tl red" data-act="close" title="关闭"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+          <button class="tl yellow" data-act="min" title="最小化"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+          <button class="tl green" data-act="full" title="全屏"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
         </div>
         <div class="win-title">设置</div>
         <span class="win-conn conn-dot off" title="连接状态"></span>
@@ -711,32 +711,32 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
     <section class="window closed" id="win-private" data-app="private">
       <div class="titlebar">
         <div class="traffic">
-          <button class="tl red" data-act="close" title="关闭">${icon('xmark', 10)}</button>
-          <button class="tl yellow" data-act="min" title="最小化">${icon('minus', 10)}</button>
-          <button class="tl green" data-act="full" title="全屏">${icon('plus', 10)}</button>
+          <button class="tl red" data-act="close" title="关闭"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
+          <button class="tl yellow" data-act="min" title="最小化"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+          <button class="tl green" data-act="full" title="全屏"><svg width="10" height="10" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
         </div>
-        <div class="win-title">${icon('lock', 16)} 私密列表</div>
+        <div class="win-title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8.5 10.5V8a3.5 3.5 0 017 0v2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="15" r="1.4" fill="currentColor"/></svg> 私密列表</div>
         <span class="win-conn conn-dot off" title="连接状态"></span>
       </div>
       <div class="win-content">
         <div class="inline-player" id="privateInlinePlayer" hidden>
           <div class="inline-player-bar">
             <span class="inline-player-title" id="privateInlinePlayerTitle"></span>
-            <button class="title-btn" id="privateCacheMenuBtn" title="缓存到本地">${icon('ellipsis', 18)}</button>
-            <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放">${icon('xmark', 14)}</button>
+            <button class="title-btn" id="privateCacheMenuBtn" title="缓存到本地"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></svg></button>
+            <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
           </div>
           <video id="privateInlinePlayerVideo" controls playsinline></video>
         </div>
         <div class="group-title">私密视频库 <span id="privateBrowseCrumb" style="text-transform:none;"></span><span id="privateCount" style="text-transform:none;"></span>
           <span class="view-toggle" id="privateViewToggle">
-            <button data-view="grid" class="active" title="网格视图">${icon('square-grid', 16)}</button>
-            <button data-view="list" title="列表视图">${icon('list-bullet', 16)}</button>
+            <button data-view="grid" class="active" title="网格视图"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
+            <button data-view="list" title="列表视图"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="4" cy="6" r="1.5" fill="currentColor"/><circle cx="4" cy="12" r="1.5" fill="currentColor"/><circle cx="4" cy="18" r="1.5" fill="currentColor"/></svg></button>
           </span>
           <button class="title-btn danger" id="privateLockBtn" title="锁定并退出私密浏览">锁定</button>
         </div>
         <div class="folder-grid" id="privateFolderGrid" hidden></div>
         <div class="library-grid" id="privateLibraryGrid">
-          <div class="empty"><div class="big">${icon('lock', 42)}</div>私密列表为空<br>认证后此处显示私密内容</div>
+          <div class="empty"><div class="big"><svg width="42" height="42" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="5" y="10.5" width="14" height="9.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8.5 10.5V8a3.5 3.5 0 017 0v2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="15" r="1.4" fill="currentColor"/></svg></div>私密列表为空<br>认证后此处显示私密内容</div>
         </div>
       </div>
     </section>

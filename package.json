@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
-    "test": "node --check src/index.js && node --check src/m3u8-interceptor.js && node --check src/downloader.js && node --check src/task-manager.js && node --check src/js-downloader.js && node --check src/browser-pool.js && node --check src/security.js && node --test test/*.test.js && echo '✅ 全部检查通过'"
+    "test": "node scripts/check-frontend-html.mjs && node --check src/index.js && node --check src/m3u8-interceptor.js && node --check src/downloader.js && node --check src/task-manager.js && node --check src/js-downloader.js && node --check src/browser-pool.js && node --check src/security.js && node --test test/*.test.js && echo '✅ 全部检查通过'",
+    "smoke:frontend": "node scripts/smoke-frontend.mjs"
   },
   "keywords": [
     "video",
