@@ -1806,6 +1806,8 @@ function closePrivateApp() {
   privatePageActive = false;
   $('tabbar').hidden = false;
   $('navTitle').classList.remove('small');
+  // 退出私密页必须移除 active，否则与设置页同时显示（switchTab 不处理 private）
+  $('page-private').classList.remove('active');
   const tk = getPrivateToken();
   if (tk) { try { privateFetch('/api/private/logout', { method: 'POST' }); } catch (_) {} }
   setPrivateToken('');
@@ -1815,6 +1817,10 @@ function closePrivateApp() {
     const v = $('privateInlinePlayerVideo');
     if (v) { v.pause(); v.removeAttribute('src'); v.load(); }
     $('privateInlinePlayer').hidden = true;
+    // 清空私密列表 DOM，避免内容残留
+    $('privateLibraryGrid').innerHTML = '';
+    $('privateFolderGrid').innerHTML = '';
+    $('privateBrowseCrumb').innerHTML = '';
   } catch (_) {}
   switchTab('settings');
   showToast('已退出私密浏览');
