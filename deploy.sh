@@ -127,6 +127,17 @@ else
   info "未发现旧实例，跳过清理"
 fi
 
+# 清理非 pm2 托管的裸进程（如历史 nohup 启动的 node src/index.js），
+# 防止旧进程占用端口导致新实例 EADDRINUSE 崩溃
+info "清理非 pm2 裸进程（node src/index.js）…"
+if command -v pkill >/dev/null 2>&1; then
+  run pkill -f "node src/index.js" || true
+  sleep 1
+  ok "裸进程清理完成（如有）"
+else
+  info "无 pkill，跳过裸进程清理（请手动确认 3456 端口空闲）"
+fi
+
 # ── 4. 启动新实例 ──────────────────────────────────────
 info "启动新实例（pm2 start ecosystem.config.cjs）…"
 run pm2 start ecosystem.config.cjs
