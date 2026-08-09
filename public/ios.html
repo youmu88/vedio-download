@@ -27,6 +27,7 @@
   --safe-t: env(safe-area-inset-top, 0px);
   --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-full: 9999px;
   --shadow: 0 0.5px 1px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03);
+  --shadow-lg: 0 2px 12px rgba(0,0,0,0.08), 0 4px 24px rgba(0,0,0,0.06);
   --touch-min: 44px;
 
 [data-theme="dark"] {
@@ -153,7 +154,8 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
   transition: opacity 0.15s cubic-bezier(0.4,0,0.2,1), transform 0.08s cubic-bezier(0.4,0,0.2,1);
 }
 .btn-primary:active { opacity: 0.7; transform: scale(0.97); }
-.btn-primary:disabled { opacity: 0.5; }
+  .btn-primary:disabled { opacity: 0.5; }
+.btn-primary.loading { opacity: 0.7; pointer-events: none; }
 .btn-secondary {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   background: var(--fill); color: var(--text); font-size: 16px; font-weight: 600;
@@ -179,6 +181,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .task-icon.failed { background: rgba(255,59,48,0.14); color: var(--red); }
 .task-icon.cancelled { background: rgba(255,149,0,0.14); color: var(--orange); }
 @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.45; } }
+@keyframes dots { 0% { content: '.'; } 33% { content: '..'; } 66% { content: '...'; } }
 .task-main { flex: 1; min-width: 0; }
 .task-url { font-size: 15px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task-meta { display: flex; align-items: center; gap: 8px; margin-top: 3px; font-size: 12px; color: var(--text2); flex-wrap: wrap; }
@@ -392,10 +395,10 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 /* ── 登录 ────────────────────────────────────── */
 #loginScreen { position: fixed; inset: 0; z-index: 900; display: flex; align-items: center; justify-content: center; background: var(--bg); padding: 24px; }
 #loginScreen.hidden { display: none; }
-.login-card { width: 100%; max-width: 380px; background: var(--card); border-radius: var(--radius-lg); padding: 32px 28px 24px; box-shadow: var(--shadow); text-align: center; }
-.login-avatar { width: 72px; height: 72px; border-radius: 50%; background: var(--fill); display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; color: var(--accent); }
+.login-card { width: 100%; max-width: 380px; background: var(--card); border-radius: var(--radius-lg); padding: 32px 28px 24px; box-shadow: var(--shadow-lg); text-align: center; }
+.login-avatar { width: 72px; height: 72px; border-radius: 50%; background: linear-gradient(145deg, #5AC8FA, #007AFF); display: flex; align-items: center; justify-content: center; margin: 0 auto 14px; color: #fff; box-shadow: 0 4px 12px rgba(0,122,255,0.3); }
 .login-avatar svg { display: block; }
-.login-title { font-size: 24px; font-weight: 700; margin-bottom: 4px; }
+.login-title { font-size: 24px; font-weight: 700; margin-bottom: 4px; color: var(--text); }
 .login-sub { font-size: 14px; color: var(--text2); margin-bottom: 18px; }
 .login-error { color: var(--red); font-size: 13px; min-height: 20px; margin-bottom: 6px; }
 
@@ -421,7 +424,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
     <div class="login-title">视频下载器</div>
     <div class="login-sub">登录后访问全部功能</div>
     <input class="text-input" id="loginUser" placeholder="用户名" autocomplete="username" inputmode="text" style="width:100%;margin-bottom:10px;">
-    <input class="text-input" id="loginPass" type="password" placeholder="密码" autocomplete="current-password" inputmode="numeric" style="width:100%;margin-bottom:14px;">
+    <input class="text-input" id="loginPass" type="password" placeholder="密码" autocomplete="current-password" style="width:100%;margin-bottom:14px;">
     <div class="login-error" id="loginError"></div>
     <button class="btn-primary" id="loginBtn" style="width:100%;">登录</button>
     <button class="btn-secondary" id="registerBtn" disabled style="width:100%;margin-top:10px;opacity:0.5;" title="暂不开放注册">注册（暂未开放）</button>
@@ -724,20 +727,22 @@ function switchTab(name) {
 
 // 大标题滚动动画：滚动时标题从 34px 缩为 17px
 function initNavScroll() {
-  const main = $('mainScroll');
-  const title = $('navTitle');
-  let ticking = false;
-  main.addEventListener('scroll', () => {
-    if (!ticking) {
-      requestAnimationFrame(() => {
-        const y = main.scrollTop;
-        if (y > 20) title.classList.add('small');
-        else title.classList.remove('small');
-        ticking = false;
-      });
-      ticking = true;
-    }
-  }, { passive: true });
+  try {
+    const main = $('mainScroll');
+    const title = $('navTitle');
+    if (!main || !title) return;
+    let ticking = false;
+    main.addEventListener('scroll', () => {
+      if (!ticking) {
+        requestAnimationFrame(() => {
+          const y = main.scrollTop;
+          title.classList.toggle('small', y > 20);
+          ticking = false;
+        });
+        ticking = true;
+      }
+    }, { passive: true });
+  } catch (_) {}
 }
 
 document.querySelectorAll('.tab').forEach((btn) => {
@@ -2164,8 +2169,9 @@ applyTheme();
 applyWallpaper();
 renderSettingsForm();
 
-  if (!getAuthToken()) showLogin();
-else {
+if (!getAuthToken()) {
+  showLogin();
+} else {
   hideLogin();
   loadLists();
   loadLibrary();
@@ -2176,7 +2182,7 @@ else {
 
 initNavScroll();
 
-  // 暴露给外部（e2e / 调试）的全局接口
+// 暴露给外部（e2e / 调试）的全局接口
 window.loadLists = loadLists;
 window.loadPrivateLists = loadPrivateLists;
 window.renderPrivateBrowse = renderPrivateBrowse;

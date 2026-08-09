@@ -22,9 +22,9 @@
   --text: #000000; --text2: rgba(60,60,67,0.6); --text3: rgba(60,60,67,0.38);
   --toolbar: rgba(246,246,250,0.78);
   --desktop-bg: linear-gradient(180deg, #F4F4F6 0%, #DEDEE4 100%);
-  --shadow: 0 1px 2px rgba(0,0,0,0.06), 0 8px 24px rgba(0,0,0,0.08);
-  --window-shadow: 0 18px 60px rgba(0,0,0,0.28), 0 2px 8px rgba(0,0,0,0.12);
-  --radius: 12px;
+  --shadow: 0 0.5px 1px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03);
+  --window-shadow: 0 8px 30px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.08);
+  --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-full: 9999px;
   --tl-red: #FF5F57; --tl-yellow: #FEBC2E; --tl-green: #28C840;
   --icon-sm: 36px; --touch-min: 44px;
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
@@ -37,7 +37,8 @@
   --text: #FFFFFF; --text2: rgba(235,235,245,0.6); --text3: rgba(235,235,245,0.45);
   --toolbar: rgba(18,18,20,0.78);
   --desktop-bg: linear-gradient(180deg, #1C1C20 0%, #0A0A0C 100%);
-  --window-shadow: 0 18px 60px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.4);
+  --window-shadow: 0 8px 30px rgba(0,0,0,0.4), 0 2px 6px rgba(0,0,0,0.2);
+  --accent: #0A84FF;
 }
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
@@ -46,7 +47,7 @@ body {
   font-family: var(--font);
   background: var(--bg); color: var(--text);
   -webkit-font-smoothing: antialiased;
-  transition: background 0.25s ease, color 0.25s ease;
+  transition: background 0.25s cubic-bezier(0.4,0,0.2,1), color 0.25s cubic-bezier(0.4,0,0.2,1);
 }
 button { font-family: inherit; border: none; background: none; color: inherit; cursor: pointer; }
 input, select { font-family: inherit; }
@@ -112,7 +113,7 @@ input, select { font-family: inherit; }
   position: absolute; display: flex; flex-direction: column;
   min-width: 300px; min-height: 220px;
   background: var(--bg); border: 0.5px solid var(--separator);
-  border-radius: 12px; box-shadow: var(--window-shadow); overflow: hidden;
+  border-radius: var(--radius-md); box-shadow: var(--window-shadow); overflow: hidden;
 }
 .window.closed { display: none; }
 .window.maximized { border-radius: 0; box-shadow: none; }
@@ -134,7 +135,7 @@ input, select { font-family: inherit; }
   width: 12px; height: 12px; border-radius: 50%;
   display: flex; align-items: center; justify-content: center;
   font-size: 9px; font-weight: 700; line-height: 1; color: transparent;
-  transition: color 0.12s ease;
+  transition: color 0.12s cubic-bezier(0.4,0,0.2,1);
 }
 .tl.red { background: var(--tl-red); }
 .tl.yellow { background: var(--tl-yellow); }
@@ -150,7 +151,7 @@ input, select { font-family: inherit; }
   position: absolute; left: 0; right: 0; bottom: 0; z-index: 800;
   display: flex; justify-content: center;
   padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
-  pointer-events: none; transition: opacity 0.22s ease, transform 0.22s ease;
+  pointer-events: none; transition: opacity 0.22s cubic-bezier(0.4,0,0.2,1), transform 0.22s cubic-bezier(0.4,0,0.2,1);
 }
 body.no-dock .dock { opacity: 0; transform: translateY(18px); pointer-events: none; }
 .dock-inner {
@@ -166,9 +167,9 @@ body.no-dock .dock { opacity: 0; transform: translateY(18px); pointer-events: no
   position: relative; width: 54px; height: 54px; border-radius: 14px;
   display: flex; align-items: center; justify-content: center; color: #fff;
   box-shadow: 0 4px 12px rgba(0,0,0,0.22);
-  transition: transform 0.18s cubic-bezier(0.3, 1.4, 0.5, 1);
+  transition: transform 0.18s cubic-bezier(0.3, 1.4, 0.5, 1), filter 0.18s ease;
 }
-.dock-icon:hover { transform: translateY(-6px) scale(1.1); }
+.dock-icon:hover { transform: translateY(-6px) scale(1.15); filter: brightness(1.08); }
 .dock-icon.active::after {
   content: ''; position: absolute; bottom: -8px; left: 50%; transform: translateX(-50%);
   width: 5px; height: 5px; border-radius: 50%; background: var(--text2);
@@ -177,7 +178,7 @@ body.no-dock .dock { opacity: 0; transform: translateY(18px); pointer-events: no
   position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
   background: rgba(28,28,30,0.92); color: #fff; font-size: 12px; font-weight: 500;
   padding: 4px 12px; border-radius: 8px; opacity: 0; pointer-events: none;
-  transition: opacity 0.15s ease; white-space: nowrap;
+  transition: opacity 0.15s cubic-bezier(0.4,0,0.2,1); white-space: nowrap;
 }
 .dock-icon:hover .label { opacity: 1; }
 .dock-icon.app-downloads { background: linear-gradient(145deg, #5AC8FA, #007AFF); }
@@ -203,7 +204,7 @@ body.no-dock .dock { opacity: 0; transform: translateY(18px); pointer-events: no
   font-size: 15px; color: var(--text2); transition: all 0.15s ease;
 }
 .view-toggle button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
-.group { background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.group { background: var(--card); border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow); }
 .row {
   display: flex; align-items: center; gap: 12px;
   padding: 12px 16px; min-height: 50px; border-bottom: 0.5px solid var(--separator);
@@ -216,7 +217,7 @@ body.no-dock .dock { opacity: 0; transform: translateY(18px); pointer-events: no
   flex: 1; min-width: 0; background: var(--fill); border-radius: 10px;
   padding: 12px 16px; font-size: 15px; color: var(--text);
   border: 1px solid transparent; outline: none;
-  transition: border 0.15s ease, background 0.15s ease;
+  transition: border 0.15s cubic-bezier(0.4,0,0.2,1), background 0.15s cubic-bezier(0.4,0,0.2,1);
 }
 .text-input:focus { border-color: var(--accent); background: var(--card); }
 select.text-input { appearance: none; -webkit-appearance: none; padding-right: 28px;
@@ -228,7 +229,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   background: var(--accent); color: #fff; font-size: 15px; font-weight: 600;
   padding: 12px 24px; border-radius: 10px; white-space: nowrap;
-  transition: background 0.15s ease, transform 0.08s ease;
+  transition: background 0.15s cubic-bezier(0.4,0,0.2,1), transform 0.08s cubic-bezier(0.4,0,0.2,1);
 }
 .btn-primary:active { background: var(--accent-press); transform: scale(0.97); }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -236,14 +237,14 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   background: var(--fill); color: var(--text); font-size: 14px; font-weight: 600;
   padding: 12px 16px; border-radius: 10px; white-space: nowrap;
-  transition: background 0.15s ease, transform 0.08s ease;
+  transition: background 0.15s cubic-bezier(0.4,0,0.2,1), transform 0.08s cubic-bezier(0.4,0,0.2,1);
 }
 .btn-secondary:active { transform: scale(0.97); }
 .btn-secondary.danger { color: var(--red); }
 .icon-btn {
   display: inline-flex; align-items: center; justify-content: center;
   width: var(--icon-sm); height: var(--icon-sm); border-radius: 10px; color: var(--accent);
-  transition: background 0.15s ease;
+  transition: background 0.15s cubic-bezier(0.4,0,0.2,1);
 }
 .icon-btn:hover { background: var(--fill); }
 .icon-btn.danger { color: var(--red); }
@@ -280,7 +281,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 /* ── 视频库网格 ───────────────────────────────── */
 .library-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); padding: 0 4px 4px; }
 .video-card {
-  position: relative; border-radius: var(--radius); overflow: hidden;
+  position: relative; border-radius: var(--radius-md); overflow: hidden;
   background: var(--card); box-shadow: var(--shadow); cursor: pointer;
   transition: transform 0.15s ease, box-shadow 0.15s ease;
 }
@@ -298,7 +299,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .video-delete {
   position: absolute; top: 8px; left: 8px; width: 30px; height: 30px; border-radius: 8px;
   background: rgba(0,0,0,0.45); color: #fff; display: flex; align-items: center; justify-content: center;
-  opacity: 0; transition: opacity 0.15s ease; backdrop-filter: blur(6px);
+  opacity: 0;   transition: opacity 0.15s cubic-bezier(0.4,0,0.2,1); backdrop-filter: blur(6px);
 }
 .video-card:hover .video-delete { opacity: 1; }
 @media (max-width: 700px) { .video-delete { opacity: 1; } }
@@ -318,7 +319,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .setting-row .row-label small { display: block; font-size: 12px; color: var(--text2); margin-top: 2px; font-weight: 400; }
 .switch { position: relative; width: 51px; height: 31px; flex-shrink: 0; }
 .switch input { display: none; }
-.switch .track { position: absolute; inset: 0; background: var(--fill-strong); border-radius: 16px; transition: background 0.2s ease; }
+.switch .track { position: absolute; inset: 0; background: var(--fill-strong); border-radius: 16px;   transition: background 0.2s cubic-bezier(0.4,0,0.2,1); }
 .switch .thumb { position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.25); transition: transform 0.2s cubic-bezier(0.3, 1.2, 0.5, 1); }
 .switch input:checked + .track { background: var(--green); }
 .switch input:checked + .track + .thumb { transform: translateX(20px); }
@@ -332,11 +333,11 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .status-dot.mid { background: var(--orange); }
 .footer-note { text-align: center; font-size: 12px; color: var(--text3); margin-top: 26px; }
 .segmented { display: flex; gap: 2px; padding: 2px; background: var(--fill); border-radius: 9px; }
-.segmented button { padding: 6px 12px; border-radius: 7px; font-size: 13px; font-weight: 600; color: var(--text2); transition: all 0.18s ease; }
+.segmented button { padding: 6px 12px; border-radius: 7px; font-size: 13px; font-weight: 600; color: var(--text2);   transition: all 0.18s cubic-bezier(0.4,0,0.2,1); }
 .segmented button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
 
 /* ── 内嵌播放器 ───────────────────────────────── */
-.inline-player { margin-top: 12px; background: var(--card); border-radius: var(--radius); overflow: hidden; box-shadow: var(--shadow); }
+.inline-player { margin-top: 12px; background: var(--card); border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow); }
 .inline-player-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 0.5px solid var(--separator); }
 .inline-player-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .inline-player video { display: block; width: 100%; max-height: 360px; background: #000; }
@@ -346,7 +347,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 
 /* ── 壁纸选择器 ───────────────────────────────── */
 .wallpaper-picker { display: flex; gap: 10px; flex-shrink: 0; }
-.swatch { width: 40px; height: 40px; border-radius: 11px; border: 2px solid transparent; position: relative; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1); transition: transform 0.15s ease, border-color 0.15s ease; }
+.swatch { width: 40px; height: 40px; border-radius: 11px; border: 2px solid transparent; position: relative; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.1);   transition: transform 0.15s cubic-bezier(0.4,0,0.2,1), border-color 0.15s cubic-bezier(0.4,0,0.2,1); }
 .swatch:hover { transform: scale(1.08); }
 .swatch.active { border-color: var(--accent); }
 .swatch.s-default { background: linear-gradient(160deg, #E8E8ED, #C9C9D2); }
@@ -371,7 +372,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .title-btn {
   margin-left: auto; min-height: 32px; padding: 8px 12px; border-radius: 8px;
   font-size: 12px; font-weight: 600; color: var(--accent);
-  background: var(--fill); transition: background 0.15s ease, color 0.15s ease; white-space: nowrap;
+  background: var(--fill);   transition: background 0.15s cubic-bezier(0.4,0,0.2,1), color 0.15s cubic-bezier(0.4,0,0.2,1); white-space: nowrap;
 }
 .title-btn:hover { background: var(--fill-strong); }
 .title-btn.danger { color: var(--red); }
@@ -386,7 +387,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
   display: flex; align-items: center; justify-content: center;
   backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
   border: 1.5px solid rgba(255,255,255,0.85);
-  transition: all 0.15s ease; pointer-events: none; font-size: 13px; font-weight: 700;
+  transition: all 0.15s cubic-bezier(0.4,0,0.2,1); pointer-events: none; font-size: 13px; font-weight: 700;
 }
 .video-card.selected .sel-check { background: var(--accent); border-color: var(--accent); color: #fff; }
 .selecting .video-card { cursor: pointer; }
@@ -405,7 +406,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .modal-card {
   width: min(440px, calc(100vw - 48px)); max-height: min(78vh, 680px);
   display: flex; flex-direction: column;
-  background: var(--bg); border-radius: 16px;
+  background: var(--bg); border-radius: var(--radius-lg);
   box-shadow: 0 24px 80px rgba(0,0,0,0.4); overflow: hidden;
   animation: modalUp 0.22s cubic-bezier(0.3, 1.3, 0.5, 1);
 }
@@ -419,7 +420,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .modal-foot .btn-primary { flex: 1; }
 
 /* ── 列表面板 ─────────────────────────────────── */
-.list-tile { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 8px; background: var(--card); border-radius: 12px; box-shadow: var(--shadow); cursor: pointer; transition: background 0.15s ease; }
+.list-tile { display: flex; align-items: center; gap: 12px; padding: 12px 16px; margin-bottom: 8px;   background: var(--card); border-radius: var(--radius-md); box-shadow: var(--shadow); cursor: pointer; transition: background 0.15s cubic-bezier(0.4,0,0.2,1); }
 .list-tile:hover { background: var(--fill); }
 .list-tile-icon { width: 36px; height: 36px; border-radius: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: center; background: var(--fill); color: var(--accent); font-size: 16px; }
 .list-tile-icon.private { color: var(--orange); }
@@ -434,7 +435,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 
 /* ── PIN 密码界面 ─────────────────────────────── */
 .pin-field { display: flex; gap: 12px; justify-content: center; padding: 16px 0 8px; }
-.pin-input { width: 60px; height: 64px; text-align: center; font-size: 28px; font-weight: 700; background: var(--card); border: 1.5px solid var(--fill-strong); border-radius: 12px; color: var(--text); outline: none; transition: border-color 0.15s ease, box-shadow 0.15s ease; -webkit-text-security: disc; }
+.pin-input { width: 60px; height: 64px; text-align: center; font-size: 28px; font-weight: 700; background: var(--card); border: 1.5px solid var(--fill-strong); border-radius: 12px; color: var(--text); outline: none;   transition: border-color 0.15s cubic-bezier(0.4,0,0.2,1), box-shadow 0.15s cubic-bezier(0.4,0,0.2,1); -webkit-text-security: disc; }
 .pin-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0,122,255,0.18); }
 .pin-tip { text-align: center; font-size: 13px; color: var(--text2); padding: 4px 0 12px; }
 .pin-error { text-align: center; font-size: 13px; color: var(--red); min-height: 20px; }
@@ -507,7 +508,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 <!-- 登录遮罩 -->
 <div id="loginScreen">
   <div class="login-card">
-    <div class="login-avatar">👤</div>
+    <div class="login-avatar"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4 21c0-5 3.6-9 8-9s8 4 8 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg></div>
     <div class="login-title">视频下载器</div>
     <div class="login-sub">登录后访问全部功能</div>
     <input class="text-input" id="loginUser" placeholder="用户名" autocomplete="username" style="width:100%;margin-bottom:10px;">
@@ -525,16 +526,16 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 <div class="desktop" id="desktop">
   <div class="windows-layer">
     <div class="desktop-hint" id="desktopHint">
-      <div>点击底部 Dock 图标打开 App<br>📥 下载 · 🎬 浏览 · ⚙️ 设置</div>
+      <div>点击底部 Dock 图标打开 App<br>${icon('download', 18)} 下载 · ${icon('film', 18)} 浏览 · ${icon('gear', 18)} 设置</div>
     </div>
 
     <!-- ═══ App：下载 ═══ -->
     <section class="window closed" id="win-downloads" data-app="downloads">
       <div class="titlebar">
         <div class="traffic">
-          <button class="tl red" data-act="close" title="关闭">×</button>
-          <button class="tl yellow" data-act="min" title="最小化">−</button>
-          <button class="tl green" data-act="full" title="全屏">⤢</button>
+          <button class="tl red" data-act="close" title="关闭">${icon('xmark', 10)}</button>
+          <button class="tl yellow" data-act="min" title="最小化">${icon('minus', 10)}</button>
+          <button class="tl green" data-act="full" title="全屏">${icon('plus', 10)}</button>
         </div>
         <div class="win-title">下载</div>
         <span class="win-conn conn-dot off" title="连接状态"></span>
@@ -550,7 +551,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
           <button class="title-btn danger" id="cleanCompletedBtn" title="清理所有已完成任务记录（保留已下载文件）">清理已完成</button>
         </div>
         <div class="group" id="taskList">
-          <div class="empty"><div class="big">📥</div>还没有下载任务</div>
+          <div class="empty"><div class="big">${icon('download', 42)}</div>还没有下载任务</div>
         </div>
       </div>
     </section>
@@ -559,9 +560,9 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
     <section class="window closed" id="win-browse" data-app="browse">
       <div class="titlebar">
         <div class="traffic">
-          <button class="tl red" data-act="close" title="关闭">×</button>
-          <button class="tl yellow" data-act="min" title="最小化">−</button>
-          <button class="tl green" data-act="full" title="全屏">⤢</button>
+          <button class="tl red" data-act="close" title="关闭">${icon('xmark', 10)}</button>
+          <button class="tl yellow" data-act="min" title="最小化">${icon('minus', 10)}</button>
+          <button class="tl green" data-act="full" title="全屏">${icon('plus', 10)}</button>
         </div>
         <div class="win-title">浏览</div>
         <span class="win-conn conn-dot off" title="连接状态"></span>
@@ -570,8 +571,8 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
         <div class="inline-player" id="inlinePlayer" hidden>
           <div class="inline-player-bar">
             <span class="inline-player-title" id="inlinePlayerTitle"></span>
-            <button class="title-btn" id="cacheMenuBtn" title="缓存到本地">⋯</button>
-            <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放">×</button>
+            <button class="title-btn" id="cacheMenuBtn" title="缓存到本地">${icon('ellipsis', 18)}</button>
+            <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放">${icon('xmark', 14)}</button>
           </div>
           <video id="inlinePlayerVideo" controls playsinline></video>
         </div>
@@ -584,8 +585,8 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
         </div>
         <div class="group-title">视频库 <span id="browseCrumb" style="text-transform:none;"></span><span id="libraryCount" style="text-transform:none;"></span>
           <span class="view-toggle" id="libraryViewToggle">
-            <button data-view="grid" class="active" title="网格视图">▦</button>
-            <button data-view="list" title="列表视图">☰</button>
+            <button data-view="grid" class="active" title="网格视图">${icon('square-grid', 16)}</button>
+            <button data-view="list" title="列表视图">${icon('list-bullet', 16)}</button>
           </span>
           <button class="title-btn" id="selectModeBtn" title="进入选择模式">选择</button>
           <button class="title-btn" id="openListsBtn" title="查看我的列表">我的列表</button>
@@ -598,7 +599,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
         </div>
         <div class="folder-grid" id="folderGrid" hidden></div>
         <div class="library-grid" id="libraryGrid">
-          <div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>
+          <div class="empty"><div class="big">${icon('film', 42)}</div>视频库为空<br>下载完成后会出现在这里</div>
         </div>
       </div>
     </section>
@@ -607,9 +608,9 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
     <section class="window closed" id="win-settings" data-app="settings">
       <div class="titlebar">
         <div class="traffic">
-          <button class="tl red" data-act="close" title="关闭">×</button>
-          <button class="tl yellow" data-act="min" title="最小化">−</button>
-          <button class="tl green" data-act="full" title="全屏">⤢</button>
+          <button class="tl red" data-act="close" title="关闭">${icon('xmark', 10)}</button>
+          <button class="tl yellow" data-act="min" title="最小化">${icon('minus', 10)}</button>
+          <button class="tl green" data-act="full" title="全屏">${icon('plus', 10)}</button>
         </div>
         <div class="win-title">设置</div>
         <span class="win-conn conn-dot off" title="连接状态"></span>
@@ -710,32 +711,32 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
     <section class="window closed" id="win-private" data-app="private">
       <div class="titlebar">
         <div class="traffic">
-          <button class="tl red" data-act="close" title="关闭">×</button>
-          <button class="tl yellow" data-act="min" title="最小化">−</button>
-          <button class="tl green" data-act="full" title="全屏">⤢</button>
+          <button class="tl red" data-act="close" title="关闭">${icon('xmark', 10)}</button>
+          <button class="tl yellow" data-act="min" title="最小化">${icon('minus', 10)}</button>
+          <button class="tl green" data-act="full" title="全屏">${icon('plus', 10)}</button>
         </div>
-        <div class="win-title">🔒 私密列表</div>
+        <div class="win-title">${icon('lock', 16)} 私密列表</div>
         <span class="win-conn conn-dot off" title="连接状态"></span>
       </div>
       <div class="win-content">
         <div class="inline-player" id="privateInlinePlayer" hidden>
           <div class="inline-player-bar">
             <span class="inline-player-title" id="privateInlinePlayerTitle"></span>
-            <button class="title-btn" id="privateCacheMenuBtn" title="缓存到本地">⋯</button>
-            <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放">×</button>
+            <button class="title-btn" id="privateCacheMenuBtn" title="缓存到本地">${icon('ellipsis', 18)}</button>
+            <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放">${icon('xmark', 14)}</button>
           </div>
           <video id="privateInlinePlayerVideo" controls playsinline></video>
         </div>
         <div class="group-title">私密视频库 <span id="privateBrowseCrumb" style="text-transform:none;"></span><span id="privateCount" style="text-transform:none;"></span>
           <span class="view-toggle" id="privateViewToggle">
-            <button data-view="grid" class="active" title="网格视图">▦</button>
-            <button data-view="list" title="列表视图">☰</button>
+            <button data-view="grid" class="active" title="网格视图">${icon('square-grid', 16)}</button>
+            <button data-view="list" title="列表视图">${icon('list-bullet', 16)}</button>
           </span>
           <button class="title-btn danger" id="privateLockBtn" title="锁定并退出私密浏览">锁定</button>
         </div>
         <div class="folder-grid" id="privateFolderGrid" hidden></div>
         <div class="library-grid" id="privateLibraryGrid">
-          <div class="empty"><div class="big">🔒</div>私密列表为空<br>认证后此处显示私密内容</div>
+          <div class="empty"><div class="big">${icon('lock', 42)}</div>私密列表为空<br>认证后此处显示私密内容</div>
         </div>
       </div>
     </section>
@@ -748,7 +749,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
       <button class="dock-icon app-browse" data-app="browse" title="浏览"><span class="label">浏览</span></button>
       <button class="dock-icon app-settings" data-app="settings" title="设置"><span class="label">设置</span></button>
       <span class="dock-sep" id="privateDockSep" hidden></span>
-      <button class="dock-icon app-private" id="privateDockIcon" data-app="private" title="🔒 私密列表" hidden><span class="label">私密</span></button>
+      <button class="dock-icon app-private" id="privateDockIcon" data-app="private" title="私密列表" hidden><span class="label">私密</span></button>
       <span class="dock-sep"></span>
       <span class="dock-conn conn-dot off" id="connDot" title="连接状态"></span>
     </div>
@@ -809,6 +810,20 @@ function icon(name, size = 18) {
     dlFile: '<path d="M12 4v10m0 0l-3.4-3.4M12 14l3.4-3.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 15.5V18a2 2 0 002 2h12a2 2 0 002-2v-2.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>',
     lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8.5 10.5V8a3.5 3.5 0 017 0v2.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="12" cy="15" r="1.4" fill="currentColor"/>',
     xmark: '<path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    person: '<circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M4 21c0-5 3.6-9 8-9s8 4 8 9" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    film: '<rect x="2" y="3" width="20" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M2 8h20M2 16h20" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="9" cy="12" r="2" fill="none" stroke="currentColor" stroke-width="1.4"/>',
+    folder: '<path d="M2.5 6.5V19c0 .8.7 1.5 1.5 1.5h16c.8 0 1.5-.7 1.5-1.5V8.5c0-.8-.7-1.5-1.5-1.5h-7l-2-3h-7c-.8 0-1.5.7-1.5 1.5z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>',
+    plus: '<path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
+    checkmark: '<path d="M6 12l4 4 8-8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    ellipsis: '<circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/>',
+    minus: '<path d="M5 12h14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>',
+'chevron-left': '<path d="M15 6l-6 6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'chevron-down': '<path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>',
+    'square-grid': '<rect x="3" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/>',
+    'list-bullet': '<path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="4" cy="6" r="1.5" fill="currentColor"/><circle cx="4" cy="12" r="1.5" fill="currentColor"/><circle cx="4" cy="18" r="1.5" fill="currentColor"/>',
+    'xmark-circle': '<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9 9l6 6M15 9l-6 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    magnifying: '<circle cx="11" cy="11" r="6" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M16 16l4 4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>',
+    backspace: '<path d="M7 7l10 10M17 7L7 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   };
   return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" aria-hidden="true">${paths[name] || paths.play}</svg>`;
 }
@@ -1320,7 +1335,7 @@ function renderTasks(tasks) {
   $('taskCount').textContent = tasks.length ? `(${tasks.length})` : '';
   $('cleanCompletedBtn').hidden = !tasks.some(t => t.status === 'completed');
   if (!tasks.length) {
-    list.innerHTML = '<div class="empty"><div class="big">📥</div>还没有下载任务</div>';
+    list.innerHTML = '<div class="empty"><div class="big">' + icon('download', 42) + '</div>还没有下载任务</div>';
     return;
   }
   const sorted = [...tasks].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
@@ -1350,7 +1365,7 @@ async function loadLibrary() {
     libraryFiles = await res.json();
     renderBrowse();
   } catch {
-    $('libraryGrid').innerHTML = '<div class="empty"><div class="big">⚠️</div>视频库读取失败</div>';
+    $('libraryGrid').innerHTML = '<div class="empty"><div class="big">' + icon('xmark-circle', 42) + '</div>视频库读取失败</div>';
   }
 }
 let browseFolder = null; // null=根视图 | {id,name,isPrivate}
@@ -1381,13 +1396,13 @@ function renderRootFolders() {
   const el = $('folderGrid');
   const pubs = myLists.map((l) => `
     <div class="folder-card" data-enter="list" data-id="${l.id}" data-name="${escapeHtml(l.name)}">
-      <div class="folder-icon">📁</div>
+      <div class="folder-icon">${icon('folder', 24)}</div>
       <div class="folder-name">${escapeHtml(l.name)}</div>
       <div class="folder-meta">${l.items.length} 个视频</div>
       <button class="list-item-del" data-del-list="${l.id}" onclick="event.stopPropagation();removeList('${l.id}')">删除列表</button>
     </div>`).join('');
   const newCard = `<div class="folder-card" data-new="1" style="border:1.5px dashed var(--separator);background:transparent;box-shadow:none;">
-        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">＋</div>
+        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">${icon('plus', 24)}</div>
         <div class="folder-name" style="color:var(--accent);">新建列表</div>
         <div class="folder-meta">按主题创建列表，将视频加入</div>
       </div>`;
@@ -1403,7 +1418,7 @@ function renderLibraryGrid(files) {
   const view = settings.libraryView || 'grid';
   grid.className = view === 'list' ? 'library-list' : 'library-grid';
   if (!files.length) {
-    grid.innerHTML = '<div class="empty"><div class="big">🎬</div>视频库为空<br>下载完成后会出现在这里</div>';
+    grid.innerHTML = '<div class="empty"><div class="big">' + icon('film', 42) + '</div>视频库为空<br>下载完成后会出现在这里</div>';
     return;
   }
   grid.innerHTML = files.map((f) => {
@@ -1412,7 +1427,7 @@ function renderLibraryGrid(files) {
       ? `<div class="video-progress">${pct}%<span class="bar" style="width:${pct}%"></span></div>`
       : `<span class="video-progress">${pct}%</span>`;
     const selCls = selectedSet.has(f.name) ? ' selected' : '';
-    const sel = selectionMode ? `<i class="sel-check">✓</i>` : '';
+    const sel = selectionMode ? `<i class="sel-check">${icon('checkmark', 14)}</i>` : '';
     if (view === 'list') {
       return `
       <div class="video-card${selCls}" data-name="${escapeHtml(f.name)}">
@@ -1479,7 +1494,7 @@ async function renderListVideos({ grid, count, folder, nameAttr, rmAttr, isPriva
     }
   } catch (_) {}
   if (!items.length) {
-    grid.innerHTML = '<div class="empty"><div class="big">📂</div>列表为空<br>在浏览页选择视频后可加入</div>';
+    grid.innerHTML = '<div class="empty"><div class="big">' + icon('folder', 42) + '</div>列表为空<br>在浏览页选择视频后可加入</div>';
     return;
   }
   grid.innerHTML = items.map((i) => {
@@ -1851,17 +1866,17 @@ function openAddToList(isPrivate = false) {
   if (!listArr.length) { showToast('暂无列表，请先创建', true); return; }
   const items = listArr.map(l => `
     <div class="list-tile" onclick="addSelectedTo('${l.id}', false)">
-      <span class="list-tile-icon">📁</span>
+      <span class="list-tile-icon">${icon('folder', 18)}</span>
       <span class="list-tile-main">
         <span class="list-tile-name">${escapeHtml(l.name)}</span>
         <span class="list-tile-meta">${l.items.length} 项</span>
       </span>
     </div>`).join('');
   openModal(`
-    <div class="modal-head"><span class="modal-title">加入列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><span class="modal-title">加入列表</span><button class="modal-close" onclick="closeModal()">${icon('xmark', 16)}</button></div>
     <div class="modal-body">
       ${items || '<div class="empty">暂无列表</div>'}
-      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="closeModal();openCreateList(false)">＋ 新建列表</button>
+      <button class="list-tile" style="justify-content:center;color:var(--accent);" onclick="closeModal();openCreateList(false)">${icon('plus', 16)} 新建列表</button>
     </div>`);
 }
 
@@ -1870,14 +1885,14 @@ async function openPrivateListPicker() {
   if (!listArr.length) { showToast('暂无私密列表，请先创建', true); return; }
   const items = listArr.map(l => `
     <div class="list-tile" onclick="addSelectedTo('${l.id}', true)">
-      <span class="list-tile-icon private">🔒</span>
+      <span class="list-tile-icon private">${icon('lock', 18)}</span>
       <span class="list-tile-main">
         <span class="list-tile-name">${escapeHtml(l.name)}</span>
         <span class="list-tile-meta">${l.items.length} 项</span>
       </span>
     </div>`).join('');
   openModal(`
-    <div class="modal-head"><span class="modal-title">加入私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><span class="modal-title">加入私密列表</span><button class="modal-close" onclick="closeModal()">${icon('xmark', 16)}</button></div>
     <div class="modal-body">${items || '<div class="empty">暂无列表</div>'}</div>`);
 }
 
@@ -1903,10 +1918,10 @@ async function addSelectedTo(listId, isPrivate) {
 // ── 创建列表 ──
 function openCreateList(isPrivate = false) {
   openModal(`
-    <div class="modal-head"><span class="modal-title">创建${isPrivate ? '私密' : ''}列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><span class="modal-title">${isPrivate ? icon('lock', 16)+' ' : ''}创建${isPrivate ? '私密' : ''}列表</span><button class="modal-close" onclick="closeModal()">${icon('xmark', 16)}</button></div>
     <div class="modal-body">
       <input class="text-input" id="newListName" placeholder="列表名称" maxlength="40" style="width:100%;">
-      ${isPrivate ? '<p class="pin-tip">🔒 私密列表仅凭密码可见</p>' : ''}
+      ${isPrivate ? '<p class="pin-tip">' + icon('lock', 14) + ' 私密列表仅凭密码可见</p>' : ''}
     </div>
     <div class="modal-foot">
       <button class="btn-secondary" onclick="closeModal()">取消</button>
@@ -2014,7 +2029,7 @@ function renderPinScreen() {
       <button class="${s.len === 6 ? 'active' : ''}" onclick="pinSetLen(6)">6 位</button>
     </div>` : '';
   openModal(`
-    <div class="modal-head"><span class="modal-title">🔒 私密列表</span><button class="modal-close" onclick="closeModal()">✕</button></div>
+    <div class="modal-head"><span class="modal-title">${icon('lock', 18)} 私密列表</span><button class="modal-close" onclick="closeModal()">${icon('xmark', 16)}</button></div>
     <div class="modal-body">
       <div class="pin-screen">
         <div class="pin-screen-title">${s.title}</div>
@@ -2179,16 +2194,16 @@ function renderPrivateBrowse() {
   }
   folderEl.hidden = false;
   const newBtn = `<div class="folder-card" data-pnew="1" style="border:1.5px dashed var(--separator);background:transparent;box-shadow:none;">
-        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">＋</div>
+        <div class="folder-icon" style="background:var(--fill);color:var(--accent);">${icon('plus', 24)}</div>
         <div class="folder-name" style="color:var(--accent);">新建私密列表</div>
         <div class="folder-meta">创建后即可加入视频</div>
       </div>`;
   if (!myPrivateLists.length) {
-    folderEl.innerHTML = '<div class="empty"><div class="big">🔒</div>暂无私密列表<br>点击右上角新建</div>' + newBtn;
+    folderEl.innerHTML = '<div class="empty"><div class="big">' + icon('lock', 42) + '</div>暂无私密列表<br>点击右上角新建</div>' + newBtn;
   } else {
     folderEl.innerHTML = myPrivateLists.map((l) => `
       <div class="folder-card" data-pfolder="${l.id}" data-pname="${escapeHtml(l.name)}">
-        <div class="folder-icon private">🔒<span class="folder-badge">${l.items.length}</span></div>
+        <div class="folder-icon private">${icon('lock', 24)}<span class="folder-badge">${l.items.length}</span></div>
         <div class="folder-name">${escapeHtml(l.name)}</div>
         <div class="folder-meta">${l.items.length} 个视频</div>
       </div>`).join('') + newBtn;
@@ -2363,7 +2378,7 @@ async function updateCacheBtnState(target, src) {
   try {
     const cache = await caches.open(VIDEO_CACHE);
     const hit = await cache.match(src);
-    btn.textContent = hit ? '✓' : '⋯';
+    btn.innerHTML = hit ? icon('checkmark', 16) : icon('ellipsis', 16);
     btn.classList.toggle('cached', !!hit);
   } catch (_) {}
 }
