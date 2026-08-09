@@ -815,6 +815,12 @@
           </div>
         </div>
 
+        <div class="group-title">缓存管理</div>
+        <div class="group">
+          <div class="row status-row"><span class="row-label">缓存占用</span><span class="status-value" id="cacheStats">—</span></div>
+          <div class="row"><button class="row-label" id="clearCacheBtn" style="color:var(--red);text-align:left;">一键清理全部缓存</button></div>
+        </div>
+
 
         <div class="group-title">下载默认设置</div>
         <div class="group">
@@ -2641,10 +2647,99 @@ $('parallelDownloadsInput').addEventListener('change', saveServerSettings);
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('inlinePlayer').hidden) closePlayer(); });
 
 // ═══════════════════════════════════════════════════════
+// 缓存统计 / 一键清理 / Service Worker 注册
+// ═══════════════════════════════════════════════════════
+async function refreshCacheStats() {
+  const el = $('cacheStats');
+  if (!el) return;
+  try {
+    const cache = await caches.open(VIDEO_CACHE);
+    const keys = await cache.keys();
+    let bytes = 0;
+    await Promise.all(keys.map(async (k) => {
+      try { bytes += Number((await cache.match(k))?.headers?.get('content-length')) || 0; } catch {}
+    }));
+    // 部分响应无 content-length，用 storage.estimate 兜底总量
+    let total = formatBytes(bytes);
+    try {
+      const est = await navigator.storage.estimate();
+      if (est && est.usage) total = `${formatBytes(est.usage)}（${keys.length} 项）`;
+    } catch {}
+    el.textContent = total;
+  } catch { el.textContent = '不可用'; }
+}
+async function clearAllCache() {
+  if (!confirm('确定清空全部视频缓存？已缓存视频将重新从服务器加载。')) return;
+  try {
+    await caches.delete(VIDEO_CACHE);
+    showToast('已清空视频缓存');
+    refreshCacheStats();
+    updateCacheBtnState('browse', currentPlay ? currentPlay.src : '');
+  } catch (err) { showToast('清理失败：' + err.message, true); }
+}
+$('clearCacheBtn').addEventListener('click', clearAllCache);
+
+// 注册 Service Worker（HLS 分片缓存命中）
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+
+// ═══════════════════════════════════════════════════════
 // 视频缓存（Cache API）：播放优先本地缓存，无缓存走 server 流
 // ═══════════════════════════════════════════════════════
 let userPaused = false; // 用户手动暂停标志（修复空格抢占）
 const VIDEO_CACHE = 'vd-media-cache';
+
+// ═══════════════════════════════════════════════════════
+// HLS(m3u8) 流缓存：解析清单 → 预下载分片 → Cache API
+// ═══════════════════════════════════════════════════════
+function resolveUrl(base, rel) {
+  try { return new URL(rel, base).href; } catch { return rel; }
+}
+
+/** 解析 m3u8 清单中的分片 URL 列表（含多级变体递归） */
+async function parseM3u8Uris(m3u8Url, onProg) {
+  const out = [m3u8Url];
+  const seen = new Set([m3u8Url]);
+  const queue = [m3u8Url];
+  while (queue.length) {
+    const cur = queue.shift();
+    try {
+      const res = await fetch(cur);
+      if (!res.ok) continue;
+      const text = await res.text();
+      for (const line of text.split(/\r?\n/)) {
+        const t = line.trim();
+        if (!t || t.startsWith('#')) continue; // 跳过标签与注释
+        const u = resolveUrl(cur, t);
+        if (seen.has(u)) continue;
+        seen.add(u);
+        out.push(u);
+        if (/\.m3u8($|\?)/i.test(u)) queue.push(u); // 变体清单继续递归
+      }
+    } catch {}
+  }
+  return out;
+}
+
+/** 缓存 HLS 流：清单 + 全部分片（进度按资源数） */
+async function cacheHls(m3u8Url, onProg) {
+  const cache = await caches.open(VIDEO_CACHE);
+  const uris = await parseM3u8Uris(m3u8Url, onProg);
+  let done = 0;
+  for (const u of uris) {
+    try {
+      const hit = await cache.match(u);
+      if (!hit) {
+        const res = await fetch(u);
+        if (res.ok) await cache.put(u, res);
+      }
+    } catch {}
+    done++;
+    onProg(Math.min(99, Math.round((done / uris.length) * 100)));
+  }
+  return { total: uris.length };
+}
 
 async function cacheVideo(src, target = 'browse') {
   const btn = $(target === 'private' ? 'privateCacheMenuBtn' : 'cacheMenuBtn');
@@ -2652,8 +2747,17 @@ async function cacheVideo(src, target = 'browse') {
   try {
     const cache = await caches.open(VIDEO_CACHE);
     const hit = await cache.match(src);
-    if (hit) { showToast('已缓存，播放将使用本地副本'); onProg(100); updateCacheBtnState(target, src); return; }
+    if (hit && !/\/m3u8($|\?)/i.test(src)) { showToast('已缓存，播放将优先使用本地副本'); onProg(100); updateCacheBtnState(target, src); return; }
     onProg(0);
+    // HLS 流：走清单+分片缓存
+    if (/\/m3u8($|\?)/i.test(src)) {
+      const r = await cacheHls(src, onProg);
+      onProg(100);
+      showToast(`HLS 已缓存（${r.total} 个资源）`);
+      refreshCacheStats();
+      updateCacheBtnState(target, src);
+      return;
+    }
     const res = await fetch(src);
     if (!res.ok) throw new Error(`缓存失败 (${res.status})`);
     const total = Number(res.headers.get('content-length')) || 0;
@@ -2676,6 +2780,7 @@ async function cacheVideo(src, target = 'browse') {
     }
     onProg(100);
     showToast('视频已缓存到本地');
+    refreshCacheStats();
     updateCacheBtnState(target, src);
   } catch (err) {
     showToast('缓存失败：' + err.message, true);
