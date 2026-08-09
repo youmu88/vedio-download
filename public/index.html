@@ -31,11 +31,8 @@
   var target = forced === 'macos' ? 'macos.html'
     : forced === 'ios' ? 'ios.html'
     : isMobile ? 'ios.html' : 'macos.html';
-  // 自动跳转；保留选择页可达（?platform 参数 + 手动选择链接）
-  if (forced === 'auto' || !forced) {
-    location.replace(target + (location.search ? '&' : '?') + 'from=auto');
-  }
-  window.__target = target;
+  // 自动跳转：显式 ?platform=macos|ios 强制指定，缺省按 UA 检测；本页仅作兜底选择页
+  location.replace(target + (location.search ? '&' : '?') + 'from=auto');
 })();
 </script>
 </head>
