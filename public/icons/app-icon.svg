@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5AC8FA"/>
+      <stop offset="1" stop-color="#007AFF"/>
+    </linearGradient>
+    <linearGradient id="shine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <!-- iOS 风格圆角方形（squircle 近似，rx=22.5%），系统会自动遮罩真正的 iOS 圆角 -->
+  <rect width="512" height="512" rx="115" fill="url(#bg)"/>
+  <!-- 顶部高光，营造玻璃质感 -->
+  <rect x="16" y="16" width="480" height="240" rx="108" fill="url(#shine)"/>
+  <!-- 下载箭头：与 App 内 download 图标语义一致 -->
+  <circle cx="256" cy="240" r="118" fill="none" stroke="#FFFFFF" stroke-opacity="0.55" stroke-width="26"/>
+  <path d="M256 186v104M256 290l-46-46M256 290l46-46" fill="none" stroke="#FFFFFF" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- 底部托盘线（下载完成落点） -->
+  <rect x="206" y="338" width="100" height="24" rx="12" fill="#FFFFFF" fill-opacity="0.92"/>
+</svg>
