@@ -13,6 +13,7 @@
 <title>视频下载器</title>
 <script src="/vendor/socket.io/socket.io.min.js"></script>
 <script src="/vendor/hls.js/hls.min.js"></script>
+<script src="/js/media-cache.js"></script>
 <style>
 /* ═══════════════════════════════════════════════
    iOS 设计系统（独立一套，不复用 macOS 变体）
@@ -91,6 +92,7 @@ input, select { font-family: inherit; font-size: 16px; }
   font-size: 15px; font-weight: 500; color: var(--accent);
 }
 .nav-btn.danger { color: var(--red); }
+.nav-btn.cached { color: var(--green); opacity: 0.7; }
 .nav-conn { width: 9px; height: 9px; border-radius: 50%; background: var(--gray); }
 .nav-conn.on { background: var(--green); }
 .nav-conn.off { background: var(--red); }
@@ -530,7 +532,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
       <div class="inline-player" id="inlinePlayer" hidden>
         <div class="inline-player-bar">
           <span class="inline-player-title" id="inlinePlayerTitle"></span>
-          <button class="nav-btn" id="cacheMenuBtn" style="min-height:32px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></svg></button>
+          <button class="nav-btn" id="cacheMenuBtn" style="min-height:32px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7v10a2 2 0 002 2h12a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H6a2 2 0 00-2 2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 13v-3m0 3l-1.5-1.5M12 13l1.5-1.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <button class="inline-player-close" id="inlinePlayerClose" title="关闭播放"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
         </div>
         <video id="inlinePlayerVideo" controls playsinline></video>
@@ -590,8 +592,8 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 
       <div class="group-title">缓存管理</div>
       <div class="group">
-        <div class="row status-row"><span class="row-label">缓存占用</span><span class="status-value" id="cacheStats">—</span></div>
-        <div class="row" style="cursor:pointer;" onclick="clearAllCache()"><span class="row-label" style="color:var(--red);text-align:left;">一键清理全部缓存</span></div>
+        <div class="row status-row"><span class="row-label">缓存占用</span><span class="status-value" id="cacheStats" style="flex:1;text-align:right;font-size:12px;word-break:break-all;">—</span></div>
+        <div class="row" style="cursor:pointer;" onclick="clearAllCache();showToast('已清空视频缓存');refreshCacheStats(document.getElementById('cacheStats'));"><span class="row-label" style="color:var(--red);text-align:left;">一键清理全部缓存</span></div>
       </div>
 
       <div class="group-title">下载默认设置</div>
@@ -659,7 +661,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
       <div class="inline-player" id="privateInlinePlayer" hidden>
         <div class="inline-player-bar">
           <span class="inline-player-title" id="privateInlinePlayerTitle"></span>
-          <button class="nav-btn" id="privateCacheMenuBtn" style="min-height:32px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="5" cy="12" r="1.5" fill="currentColor"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><circle cx="19" cy="12" r="1.5" fill="currentColor"/></svg></button>
+          <button class="nav-btn" id="privateCacheMenuBtn" style="min-height:32px;"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 7v10a2 2 0 002 2h12a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H6a2 2 0 00-2 2z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M12 13v-3m0 3l-1.5-1.5M12 13l1.5-1.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></button>
           <button class="inline-player-close" id="privateInlinePlayerClose" title="关闭播放"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
         </div>
         <video id="privateInlinePlayerVideo" controls playsinline></video>
@@ -1311,7 +1313,6 @@ function openPlayer(title, src, id, target = 'browse') {
   titleEl.textContent = title;
   box.hidden = false;
   userPaused = false;
-  updateCacheBtnState(target, src);
   if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
   currentPlay = { id, title, src, time: 0, duration: 0, updatedAt: Date.now() };
 
@@ -1322,7 +1323,7 @@ function openPlayer(title, src, id, target = 'browse') {
 
   const isHls = /\.m3u8($|\?)/i.test(src);
   if (isHls && window.Hls && Hls.isSupported()) {
-    hls = new Hls({ enableWorker: true, maxBufferLength: 60 });
+    hls = new Hls({ enableWorker: true, maxBufferLength: 60, fLoader: CachedFragmentLoader });
     hls.loadSource(src);
     hls.attachMedia(video);
     hls.on(Hls.Events.ERROR, (_e, data) => {
@@ -1332,8 +1333,31 @@ function openPlayer(title, src, id, target = 'browse') {
         else showToast('播放失败：流地址不可用', true);
       }
     });
+    // 启动预加载
+    preloadManager.start(hls);
+    // 缓存状态指示器：更新缓存按钮标题
+    preloadManager.onStatusUpdate((status) => {
+      const btn = $(pfx ? 'privateCacheMenuBtn' : 'cacheMenuBtn');
+      if (!btn) return;
+      if (status.cached >= status.total) {
+        btn.title = '全部已缓存 ✓';
+        btn.classList.add('cached');
+      } else if (status.cached + status.preloaded >= status.total) {
+        btn.title = '已预加载 ' + (status.cached + status.preloaded) + '/' + status.total;
+      } else if (status.cached > 0 || status.preloaded > 0) {
+        btn.title = '已缓存 ' + status.cached + '/' + status.total + ' · 预加载 ' + status.preloaded;
+      }
+    });
   } else {
-    playFromCacheOrStream(video, src, target);
+    // 非 HLS 流（mp4 直链），检查缓存
+    mediaCache.get(src).then(cached => {
+      if (cached && cached.data) {
+        const blob = cached.data instanceof Blob ? cached.data : new Blob([cached.data]);
+        video.src = URL.createObjectURL(blob);
+      } else {
+        video.src = src;
+      }
+    });
   }
 
   const prev = history.find(h => h.id === id);
@@ -1371,6 +1395,10 @@ function closePlayer(target = 'browse') {
   if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
   currentPlay = null;
   if (hls) { hls.destroy(); hls = null; }
+  preloadManager.stop();
+  // 恢复缓存按钮默认标题
+  const b = $(pfx ? 'privateCacheMenuBtn' : 'cacheMenuBtn');
+  if (b) { b.title = '缓存视频'; b.classList.remove('cached'); }
   video.pause();
   video.removeAttribute('src');
   video.load();
@@ -2007,106 +2035,6 @@ function openChangePin() {
 }
 
 // ═══════════════════════════════════════════════════════
-// 缓存管理（Cache API 优先本地播放）
-// ═══════════════════════════════════════════════════════
-const VIDEO_CACHE = 'vd-media-cache';
-
-async function refreshCacheStats() {
-  try {
-    const cachesObj = await caches.keys();
-    let total = 0;
-    for (const name of cachesObj) {
-      const cache = await caches.open(name);
-      const keys = await cache.keys();
-      for (const k of keys) {
-        const r = await cache.match(k);
-        total += (r && r.headers.get('content-length')) ? Number(r.headers.get('content-length')) : 0;
-      }
-    }
-    $('cacheStats').textContent = formatBytes(total) || '0 B';
-  } catch { $('cacheStats').textContent = '—'; }
-}
-
-async function clearAllCache() {
-  showActionSheet({
-    title: '清空视频缓存',
-    message: '确定清空全部视频缓存？已缓存视频将重新从服务器加载。',
-    confirmText: '清空',
-    onConfirm: async () => {
-      try {
-        await caches.delete(VIDEO_CACHE);
-        showToast('已清空视频缓存');
-        refreshCacheStats();
-        updateCacheBtnState('browse', currentPlay ? currentPlay.src : '');
-      } catch (err) { showToast('清理失败：' + err.message, true); }
-    },
-  });
-}
-
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
-}
-
-async function cacheVideo(src, target = 'browse') {
-  try {
-    const cache = await caches.open(VIDEO_CACHE);
-    const hit = await cache.match(src);
-    if (hit) { showToast('该视频已在本地缓存'); return; }
-    const res = await fetch(src);
-    if (!res.ok) throw new Error(`缓存失败 (${res.status})`);
-    const total = Number(res.headers.get('content-length')) || 0;
-    if (total && res.body && res.body.getReader) {
-      const reader = res.body.getReader();
-      const chunks = [];
-      let received = 0;
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        received += value.length;
-      }
-      const blob = new Blob(chunks, { type: res.headers.get('content-type') || 'video/mp4' });
-      await cache.put(src, new Response(blob, { status: 200, headers: { 'Content-Type': blob.type } }));
-    } else {
-      await cache.put(src, res);
-    }
-    showToast('视频已缓存到本地');
-    refreshCacheStats();
-    updateCacheBtnState(target, src);
-  } catch (err) {
-    showToast('缓存失败：' + err.message, true);
-    updateCacheBtnState(target, src);
-  }
-}
-
-async function playFromCacheOrStream(video, src, target = 'browse') {
-  try {
-    const cache = await caches.open(VIDEO_CACHE);
-    const hit = await cache.match(src);
-    if (hit) {
-      const blob = await hit.blob();
-      const url = URL.createObjectURL(blob);
-      video.src = url;
-      updateCacheBtnState(target, src);
-      return;
-    }
-  } catch (_) {}
-  video.src = src;
-  updateCacheBtnState(target, src);
-}
-
-async function updateCacheBtnState(target, src) {
-  const btn = $(target === 'private' ? 'privateCacheMenuBtn' : 'cacheMenuBtn');
-  if (!btn) return;
-  try {
-    const cache = await caches.open(VIDEO_CACHE);
-    const hit = await cache.match(src);
-    btn.innerHTML = hit ? icon('checkmark', 16) : icon('ellipsis', 16);
-    btn.classList.toggle('cached', !!hit);
-  } catch (_) {}
-}
-
-// ═══════════════════════════════════════════════════════
 // 登录鉴权
 // ═══════════════════════════════════════════════════════
 const AUTH_KEY = 'vd.auth.token';
@@ -2366,8 +2294,46 @@ $('playUrlBtn').addEventListener('click', playUrl);
 $('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
 $('inlinePlayerClose').addEventListener('click', () => closePlayer('browse'));
 $('privateInlinePlayerClose').addEventListener('click', () => closePrivatePlayerOnly());
-$('cacheMenuBtn').addEventListener('click', () => { if (currentPlay) cacheVideo(currentPlay.src, 'browse'); });
-$('privateCacheMenuBtn').addEventListener('click', () => { if (currentPlay) cacheVideo(currentPlay.src, 'private'); });
+$('cacheMenuBtn').addEventListener('click', () => {
+  if (!currentPlay) return;
+  const btn = $('cacheMenuBtn');
+  if (preloadManager.isCaching) { showToast('正在缓存中…'); return; }
+  btn.innerHTML = '<span style="font-size:11px;">0%</span>';
+  btn.style.width = '36px';
+  preloadManager.startCache((pct) => {
+    if (pct >= 100) {
+      btn.innerHTML = icon('checkmark', 16);
+      btn.style.width = '';
+      showToast('视频已缓存到本地');
+      refreshCacheStats(document.getElementById('cacheStats'));
+    } else {
+      btn.innerHTML = '<span style="font-size:11px;">' + pct + '%</span>';
+    }
+  }).catch(() => {
+    btn.innerHTML = icon('folder', 16);
+    btn.style.width = '';
+  });
+});
+$('privateCacheMenuBtn').addEventListener('click', () => {
+  if (!currentPlay) return;
+  const btn = $('privateCacheMenuBtn');
+  if (preloadManager.isCaching) { showToast('正在缓存中…'); return; }
+  btn.innerHTML = '<span style="font-size:11px;">0%</span>';
+  btn.style.width = '36px';
+  preloadManager.startCache((pct) => {
+    if (pct >= 100) {
+      btn.innerHTML = icon('checkmark', 16);
+      btn.style.width = '';
+      showToast('视频已缓存到本地');
+      refreshCacheStats(document.getElementById('cacheStats'));
+    } else {
+      btn.innerHTML = '<span style="font-size:11px;">' + pct + '%</span>';
+    }
+  }).catch(() => {
+    btn.innerHTML = icon('folder', 16);
+    btn.style.width = '';
+  });
+});
 $('cleanCompletedBtn').addEventListener('click', cleanCompleted);
 $('selectModeBtn').addEventListener('click', () => { selectionMode ? exitSelectionMode() : enterSelectionMode(); });
 $('batchSelectAllBtn').addEventListener('click', toggleSelectAll);
@@ -2406,7 +2372,7 @@ if (!getAuthToken()) {
   loadLibrary();
   loadTasks();
   loadHealth();
-  refreshCacheStats();
+  refreshCacheStats(document.getElementById('cacheStats'));
 }
 
 initNavScroll();
