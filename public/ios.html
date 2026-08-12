@@ -668,6 +668,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
       </div>
       <div class="group-title">私密视频库 <span id="privateBrowseCrumb" style="text-transform:none;"></span><span id="privateCount" style="text-transform:none;"></span>
         <button class="nav-btn danger" id="privateLockBtn" style="margin-left:auto;min-height:32px;">锁定</button>
+        <button class="nav-btn" id="privateChangePinBtn" style="min-height:32px;">修改密码</button>
       </div>
       <div class="folder-grid" id="privateFolderGrid" hidden></div>
       <div class="library-grid" id="privateLibraryGrid">
@@ -1415,7 +1416,9 @@ function playLibrary(name) {
 
 /** 私密 App 内播放：保持私密上下文（私密播放器） */
 function playPrivateVideo(name) {
-  openPlayer(name, `/downloads/${encodeURIComponent(name)}`, `file:${name}`, 'private');
+  const tk = getAuthToken();
+  const q = tk ? `?token=${encodeURIComponent(tk)}` : '';
+  openPlayer(name, `/downloads/${encodeURIComponent(name)}${q}`, `file:${name}`, 'private');
 }
 
 function playUrl() {
@@ -2342,6 +2345,7 @@ $('batchCancelBtn').addEventListener('click', exitSelectionMode);
 $('openListsBtn').addEventListener('click', () => { browseFolder = null; renderBrowse(); });
 // 私密列表入口已改为行点击（onclick="openPrivateEntry()"）
 $('privateLockBtn').addEventListener('click', closePrivateApp);
+if ($('privateChangePinBtn')) $('privateChangePinBtn').addEventListener('click', openChangePin);
 // 清理缓存已改为行点击（onclick="clearAllCache()"）
 // 刷新状态已改为行点击（onclick="loadHealth()"）
 $('parallelDownloadsInput').addEventListener('change', saveServerSettings);

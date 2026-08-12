@@ -739,7 +739,8 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
             <button data-view="grid" class="active" title="网格视图"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="3" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="3" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="14" width="7" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/></svg></button>
             <button data-view="list" title="列表视图"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="4" cy="6" r="1.5" fill="currentColor"/><circle cx="4" cy="12" r="1.5" fill="currentColor"/><circle cx="4" cy="18" r="1.5" fill="currentColor"/></svg></button>
           </span>
-          <button class="title-btn danger" id="privateLockBtn" title="锁定并退出私密浏览">锁定</button>
+          <button class="title-btn" id="privateLockBtn" title="锁定并退出私密浏览">锁定</button>
+          <button class="title-btn" id="privateChangePinBtn" title="修改私密密码" style="margin-left:6px;">修改密码</button>
         </div>
         <div class="folder-grid" id="privateFolderGrid" hidden></div>
         <div class="library-grid" id="privateLibraryGrid">
@@ -2277,7 +2278,9 @@ async function removePrivateList(listId) {
 
 function playPrivateVideo(name) {
   // ⭐ 私密 App 内播放：私密窗口内嵌播放器（保持私密浏览上下文）
-  openPlayer(name, `/downloads/${encodeURIComponent(name)}`, `file:${name}`, 'private');
+  const tk = getAuthToken();
+  const q = tk ? `?token=${encodeURIComponent(tk)}` : '';
+  openPlayer(name, `/downloads/${encodeURIComponent(name)}${q}`, `file:${name}`, 'private');
 }
 
 async function removePrivateItem(listId, name) {
@@ -2397,6 +2400,7 @@ $('batchCancelBtn').addEventListener('click', exitSelectionMode);
 $('openListsBtn').addEventListener('click', () => { browseFolder = null; renderBrowse(); });
 $('privateEntryBtn').addEventListener('click', openPrivateEntry);
 $('privateLockBtn').addEventListener('click', closePrivateApp);
+$('privateChangePinBtn')?.addEventListener('click', openChangePin);
 $('downloadBtn').addEventListener('click', submitDownload);
 $('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitDownload(); });
 $('playUrlBtn').addEventListener('click', playUrl);
