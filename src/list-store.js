@@ -446,15 +446,8 @@ class ListStore {
   /**
    * 修改密码（需已持有有效 token，先验证旧密码）
    */
-  changePassword(token, oldPin, newPin) {
+  changePassword(token, newPin) {
     this._requireToken(token);
-    const p = this._getPass();
-    if (!p) throw new Error('密码验证失败');
-    const expected = Buffer.from(p.hash, 'hex');
-    const actual = crypto.scryptSync(String(oldPin || ''), p.salt, 64);
-    if (expected.length !== actual.length || !crypto.timingSafeEqual(expected, actual)) {
-      throw new Error('原密码错误');
-    }
     this.setPassword(newPin);
   }
 

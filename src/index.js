@@ -797,13 +797,13 @@ app.post('/api/private/logout', (req, res) => {
 });
 
 /**
- * POST /api/private/change — 修改私密密码（需 token + 原密码）
- * Body: { oldPassword, newPassword }
+ * POST /api/private/change — 修改私密密码（需 token，已认证无需原密码）
+ * Body: { newPassword }
  */
 app.post('/api/private/change', (req, res) => {
-  const { oldPassword, newPassword } = req.body || {};
+  const { newPassword } = req.body || {};
   try {
-    listStore.changePassword(privateToken(req), oldPassword, newPassword);
+    listStore.changePassword(privateToken(req), newPassword);
     log.info('修改私密密码');
     res.json({ ok: true });
   } catch (err) {

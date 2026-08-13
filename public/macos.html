@@ -1611,7 +1611,10 @@ function openPlayer(title, src, id, target = 'browse') {
   const titleEl = $(pfx ? 'privateInlinePlayerTitle' : 'inlinePlayerTitle');
   const video = $(pfx ? 'privateInlinePlayerVideo' : 'inlinePlayerVideo');
   ensureOpen(target === 'private' ? 'private' : 'browse');
-  titleEl.textContent = title;
+  // 私密模式：不重新渲染列表（避免打断播放）
+  if (target !== 'private') {
+    titleEl.textContent = title;
+  }
   box.hidden = false;
   userPaused = false;
   if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
@@ -2302,29 +2305,24 @@ async function removePrivateItem(listId, name) {
 
 function openChangePin() {
   openPinScreen({
-    title: '修改密码', sub: '输入原密码', len: 4,
-    onDone: async (oldP) => {
+    title: '修改密码', sub: '输入新密码（4 或 6 位数字）', len: 4, seg: true,
+    onDone: async (newP) => {
       openPinScreen({
-        title: '修改密码', sub: '输入新密码（4 或 6 位数字）', len: 4, seg: true,
-        onDone: async (newP) => {
-          openPinScreen({
-            title: '修改密码', sub: '再次输入新密码', len: newP.length,
-            onDone: async (newP2) => {
-              if (newP2 !== newP) { showToast('两次输入不一致，请重新设置', true); openChangePin(); return; }
-              try {
-                const res = await privateFetch('/api/private/change', {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ oldPassword: oldP, newPassword: newP }),
-                }, () => openChangePin());
-                if (res === null) return;
-                const data = await res.json().catch(() => ({}));
-                if (!res.ok) throw new Error(data.error || '修改失败');
-                showToast('密码已修改');
-                closeModal();
-              } catch (err) { showToast(err.message, true); }
-            },
-          });
+        title: '修改密码', sub: '再次输入新密码', len: newP.length,
+        onDone: async (newP2) => {
+          if (newP2 !== newP) { showToast('两次输入不一致，请重新设置', true); openChangePin(); return; }
+          try {
+            const res = await privateFetch('/api/private/change', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ newPassword: newP }),
+            }, () => openChangePin());
+            if (res === null) return;
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || '修改失败');
+            showToast('密码已修改');
+            closeModal();
+          } catch (err) { showToast(err.message, true); }
         },
       });
     },
