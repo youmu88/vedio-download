@@ -276,7 +276,7 @@ function applyTheme() {
     (settings.theme === 'auto' && window.matchMedia('(prefers-color-scheme: dark)').matches);
   document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
   document.querySelector('meta[name="theme-color"]').setAttribute('content', dark ? '#000000' : '#F2F2F7');
-  document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('active', b.dataset.theme === settings.theme));
+  document.querySelectorAll('#themeSeg button').forEach(b => b.classList.toggle('active', b.dataset.themeOpt === settings.theme));
 }
 function applyWallpaper() {
   const name = settings.wallpaper || 'default';
@@ -308,7 +308,7 @@ function bindSettingsForm() {
   $('themeSeg').addEventListener('click', (e) => {
     const btn = e.target.closest('button');
     if (!btn) return;
-    settings.theme = btn.dataset.theme;
+    settings.theme = btn.dataset.themeOpt;
     saveSettings(); applyTheme();
   });
   $('wallpaperPicker').addEventListener('click', (e) => {
