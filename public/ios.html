@@ -207,11 +207,12 @@ main {
 #pinScreen {
   position: fixed; inset: 0; z-index: 800;
   display: flex; flex-direction: column;
+  background: var(--wall-grad);
   overflow: hidden;
 }
 #pinScreen::before {
-  content: ''; position: absolute; inset: 0; pointer-events: none;
-  background: linear-gradient(180deg, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.42) 100%);
+  content: ''; position: absolute; inset: 0; pointer-events: none; z-index: -1;
+  background: linear-gradient(180deg, rgba(0,0,0,0.5) 0%, rgba(0,0,0,0.62) 100%);
 }
 .pin-lock-label {
   margin-top: calc(var(--safe-t) + 22px);
@@ -240,7 +241,8 @@ main {
 /* 数字键盘（iOS 锁屏：白字大圆，第四行 取消/0/删除） */
 .pin-numpad { width: 100%; max-width: 340px; margin: 0 auto; padding: 0 28px calc(var(--safe-b) + 26px); display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 8px; }
 .pin-numpad button {
-  height: 76px; border-radius: 38px; font-size: 32px; font-weight: 400; color: #fff;
+  height: 76px; border-radius: 38px; font-size: 32px; font-weight: 500; color: #fff;
+  text-shadow: 0 1px 6px rgba(0,0,0,0.45);
   background: transparent;
   display: flex; align-items: center; justify-content: center;
   transition: background 0.12s cubic-bezier(0.4,0,0.2,1), transform 0.12s cubic-bezier(0.4,0,0.2,1);

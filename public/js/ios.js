@@ -1859,6 +1859,22 @@ applyTheme();
 applyWallpaper();
 renderSettingsForm();
 
+// iOS 动态视口同步：键盘弹收时视觉视口（visualViewport）高度变化，
+// 根元素背景画布必须跟随真实可见区域，否则底部露出未渲染白带。
+if (window.visualViewport) {
+  const syncVisualViewport = () => {
+    const vv = window.visualViewport;
+    // 键盘收起（高度恢复到接近布局视口）后立即复位，避免残留锁定
+    if (vv.height >= window.innerHeight - 2) {
+      document.documentElement.style.minHeight = '';
+    } else {
+      document.documentElement.style.minHeight = vv.height + 'px';
+    }
+  };
+  window.visualViewport.addEventListener('resize', syncVisualViewport);
+  syncVisualViewport();
+}
+
 if (!getAuthToken()) {
   showLogin();
 } else {
