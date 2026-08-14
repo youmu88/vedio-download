@@ -70,12 +70,12 @@ try {
   // ── 设置 App → 私密入口 → 首次设置 PIN 1234（自动转确认）──
   await page.waitForTimeout(300)
   await page.click('div[onclick*="openPrivateEntry"]')
-  await page.waitForSelector('.numpad', { timeout: 5000 })
+  await page.waitForSelector('#pinScreen .pin-numpad', { timeout: 5000 })
   check('PIN 设置界面弹出（首次）', true)
 
   for (let round = 0; round < 2; round++) {
     for (const d of ['1', '2', '3', '4']) {
-      await page.click(`.numpad button:has-text("${d}")`)
+      await page.click(`.pin-numpad button:has-text("${d}")`)
       await page.waitForTimeout(120)
     }
     await page.waitForTimeout(500) // 等待自动转确认 / 提交

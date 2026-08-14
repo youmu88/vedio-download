@@ -68,7 +68,7 @@ html { background: var(--wall-grad); }
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
-html, body { height: 100%; overflow: hidden; }
+html, body { height: 100%; height: 100dvh; overflow: hidden; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
   background: var(--wall-grad); color: var(--text);
@@ -208,6 +208,53 @@ main {
   position: fixed; inset: 0; z-index: 200;
   background: transparent; will-change: transform;
 }
+
+/* ── PIN 锁屏（全屏覆盖，iOS 锁屏密码风格：壁纸 + 白色圆点 + 底部数字键盘） ── */
+#pinScreen {
+  position: fixed; inset: 0; z-index: 800;
+  display: flex; flex-direction: column;
+  background: var(--wall-grad);
+  overflow: hidden;
+}
+#pinScreen::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(180deg, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.42) 100%);
+}
+.pin-lock-label {
+  margin-top: calc(var(--safe-t) + 22px);
+  text-align: center; font-size: 13px; font-weight: 600; letter-spacing: 0.4px;
+  color: rgba(255,255,255,0.85);
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.pin-center {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding-bottom: 4vh;
+}
+.pin-screen-title { font-size: 28px; font-weight: 700; letter-spacing: 0.3px; color: #fff; text-shadow: 0 1px 4px rgba(0,0,0,0.25); }
+.pin-screen-sub { font-size: 14px; color: rgba(255,255,255,0.82); margin-top: 8px; text-shadow: 0 1px 3px rgba(0,0,0,0.3); }
+.pin-dots { display: flex; gap: 14px; justify-content: center; align-items: center; margin-top: 28px; }
+.pin-dot {
+  display: block; flex-shrink: 0;
+  width: 15px; height: 15px; border-radius: 50%;
+  border: 1.5px solid rgba(255,255,255,0.92);
+  transition: background 0.18s cubic-bezier(0.4,0,0.2,1), transform 0.18s cubic-bezier(0.4,0,0.2,1);
+}
+.pin-dot.filled { background: #fff; transform: scale(1.12); }
+.pin-seg { display: flex; gap: 2px; justify-content: center; padding: 2px; background: rgba(255,255,255,0.18); border-radius: var(--radius-sm); margin-top: 26px; backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); }
+.pin-seg button { padding: 8px 24px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 600; color: rgba(255,255,255,0.8); min-height: 36px; }
+.pin-seg button.active { background: rgba(255,255,255,0.85); color: #000; }
+.pin-error { margin-top: 14px; font-size: 13px; color: #FFD60A; font-weight: 600; min-height: 18px; text-shadow: 0 1px 3px rgba(0,0,0,0.4); }
+/* 数字键盘（iOS 锁屏：白字大圆，第四行 取消/0/删除） */
+.pin-numpad { width: 100%; max-width: 340px; margin: 0 auto; padding: 0 28px calc(var(--safe-b) + 26px); display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 8px; }
+.pin-numpad button {
+  height: 76px; border-radius: 38px; font-size: 32px; font-weight: 400; color: #fff;
+  background: transparent;
+  display: flex; align-items: center; justify-content: center;
+  transition: background 0.12s cubic-bezier(0.4,0,0.2,1), transform 0.12s cubic-bezier(0.4,0,0.2,1);
+}
+.pin-numpad button:active { background: rgba(255,255,255,0.22); transform: scale(0.96); }
+.pin-numpad .key-fn { font-size: 16px; font-weight: 600; color: rgba(255,255,255,0.88); }
+.pin-numpad .key-del svg { width: 30px; height: 30px; }
 
 /* ── 滑动返回手势层（iOS 交互式返回：跟手 + 缩放 + 回弹） ── */
 #gestureLayer { position: fixed; inset: 0; z-index: 300; overflow: hidden; }
@@ -497,18 +544,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .as-btn.cancel { background: var(--fill); color: var(--text2); font-weight: 500; margin-top: 4px; }
 
 /* ── PIN 密码界面 ────────────────────────────── */
-.pin-screen { text-align: center; padding: 6px 0 2px; }
-.pin-screen-title { font-size: 22px; font-weight: 700; letter-spacing: 0.3px; }
-.pin-screen-sub { font-size: 14px; color: var(--text2); margin-top: 6px; }
-.pin-dots { display: flex; gap: 12px; justify-content: center; margin: 24px 0 20px; }
-.pin-dot { width: 14px; height: 14px; border-radius: 50%; background: var(--fill-strong);   transition: background 0.15s cubic-bezier(0.4,0,0.2,1), transform 0.15s cubic-bezier(0.4,0,0.2,1); }
-.pin-dot.filled { background: var(--accent); transform: scale(1.15); }
-  .pin-seg { display: flex; gap: 2px; justify-content: center; padding: 2px; background: var(--fill); border-radius: var(--radius-sm); margin: 0 auto 20px; width: fit-content; }
-.pin-seg button { padding: 10px 26px; border-radius: var(--radius-sm); font-size: 15px; font-weight: 600; color: var(--text2); min-height: var(--touch-min); }
-.pin-seg button.active { background: var(--card); color: var(--text); box-shadow: 0 1px 3px rgba(0,0,0,0.12); }
-.numpad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; max-width: 300px; margin: 0 auto 4px; }
-  .numpad button { height: 72px; border-radius: var(--radius-md); font-size: 26px; font-weight: 500; background: var(--card); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,0.06), 0 2px 6px rgba(0,0,0,0.05); min-height: 0; }
-.numpad button:active { transform: scale(0.94); background: var(--fill); }
+
 .numpad button.key-del { font-size: 22px; color: var(--text2); }
 .pin-tip { text-align: center; font-size: 13px; color: var(--text2); padding: 4px 0 12px; }
 .pin-error { text-align: center; font-size: 13px; color: var(--red); min-height: 20px; }
@@ -811,6 +847,9 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 <div class="sheet-mask" id="sheetMask" hidden>
   <div class="sheet-card" id="sheetCard"></div>
 </div>
+
+<!-- PIN 锁屏（全屏覆盖，iOS 锁屏密码风格） -->
+<div id="pinScreen" hidden></div>
 
 <script src="/js/ios.js"></script>
 </body>

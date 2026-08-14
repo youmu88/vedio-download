@@ -1220,6 +1220,10 @@ async function privateFetch(url, opts = {}, reauthAction = null) {
 
 function openPinScreen({ title, sub, len, seg = false, autoBoth = false, onDone }) {
   pinState = { title, sub, len, seg, autoBoth, pin: '', err: '', onDone };
+  // 锁屏沉浸：立即隐藏当前 Toast，避免「欢迎」提示透出破坏隐私氛围
+  clearTimeout(toastTimer);
+  const t = document.querySelector('.toast');
+  if (t) t.classList.remove('show');
   renderPinScreen();
 }
 
@@ -1232,23 +1236,28 @@ function renderPinScreen() {
       <button class="${s.len === 4 ? 'active' : ''}" onclick="pinSetLen(4)">4 位</button>
       <button class="${s.len === 6 ? 'active' : ''}" onclick="pinSetLen(6)">6 位</button>
     </div>` : '';
-  openSheet(`
-    <div class="sheet-head"><span class="sheet-title">${icon('lock', 18)} 私密列表</span><button class="sheet-close" onclick="closeSheet()">${icon('xmark', 16)}</button></div>
-    <div class="sheet-body">
-      <div class="pin-screen">
-        <div class="pin-screen-title">${s.title}</div>
-        <div class="pin-screen-sub">${s.sub}</div>
-        ${segHtml}
-        <div class="pin-dots">${dots}</div>
-        <div class="numpad">
-          ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button onclick="pinKey(${n})">${n}</button>`).join('')}
-          <button class="key-del" onclick="pinKey('del')">${icon('backspace', 22)}</button>
-          <button onclick="pinKey(0)">0</button>
-          <button style="visibility:hidden"></button>
-        </div>
-        <div class="pin-error" id="pinError">${s.err}</div>
-      </div>
-    </div>`);
+  $('pinScreen').innerHTML = `
+    <div class="pin-lock-label">${icon('lock', 15)} 私密列表</div>
+    <div class="pin-center">
+      <div class="pin-screen-title">${s.title}</div>
+      <div class="pin-screen-sub">${s.sub}</div>
+      ${segHtml}
+      <div class="pin-dots">${dots}</div>
+      <div class="pin-error">${s.err}</div>
+    </div>
+    <div class="pin-numpad">
+      ${[1, 2, 3, 4, 5, 6, 7, 8, 9].map(n => `<button onclick="pinKey(${n})">${n}</button>`).join('')}
+      <button class="key-fn" onclick="closePinScreen()">取消</button>
+      <button onclick="pinKey(0)">0</button>
+      <button class="key-fn key-del" onclick="pinKey('del')">${icon('backspace', 26)}</button>
+    </div>`;
+  $('pinScreen').hidden = false;
+}
+
+function closePinScreen() {
+  $('pinScreen').hidden = true;
+  $('pinScreen').innerHTML = '';
+  pinState = null;
 }
 
 function pinSetLen(n) {
@@ -1304,7 +1313,7 @@ function openPrivateSetup() {
             const vdata = await vres.json().catch(() => ({}));
             if (vres.ok && vdata.token) setPrivateToken(vdata.token);
             privateCtx = true;
-            closeSheet();
+            closePinScreen();
             showToast('私密密码已设置');
             openPrivateApp();
           } catch (e) { pinSetError(e.message + '，请重试'); }
@@ -1328,12 +1337,12 @@ function openPrivateVerify() {
         if (!res.ok) {
           const msg = data.needSetup ? '请先设置密码' : (data.error || '密码错误');
           pinSetError(msg);
-          if (data.needSetup) { setTimeout(() => { closeSheet(); openPrivateSetup(); }, 600); }
+          if (data.needSetup) { setTimeout(() => { closePinScreen(); openPrivateSetup(); }, 600); }
           return;
         }
         setPrivateToken(data.token);
         privateCtx = true;
-        closeSheet();
+        closePinScreen();
         afterPrivateUnlock();
       } catch (e) { pinSetError(e.message + '，请重试'); }
     },
@@ -1484,7 +1493,7 @@ function openChangePin() {
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data.error || '修改失败');
             showToast('密码已修改');
-            closeSheet();
+            closePinScreen();
           } catch (err) { showToast(err.message, true); }
         },
       });
