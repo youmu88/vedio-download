@@ -38,19 +38,21 @@
   --shadow: 0 0.5px 1px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03);
   --shadow-lg: 0 2px 8px rgba(0,0,0,0.05), 0 4px 16px rgba(0,0,0,0.04);
   --touch-min: 44px;
+  --wall-grad: linear-gradient(160deg, #E8E8ED 0%, #C9C9D2 100%);
 }
 
-/* ── 壁纸（body 类切换；App 内背景与桌面一致） ── */
-body.wallpaper-default { background: linear-gradient(160deg, #E8E8ED 0%, #C9C9D2 100%); }
-body.wallpaper-aurora { background: linear-gradient(160deg, #E0EAFC 0%, #CFDEF3 100%); }
-body.wallpaper-sunset { background: linear-gradient(160deg, #FAD0C4 0%, #FFD1FF 100%); }
-body.wallpaper-ocean { background: linear-gradient(160deg, #A1C4FD 0%, #C2E9FB 100%); }
-body.wallpaper-graphite { background: linear-gradient(160deg, #E3E3E6 0%, #C7C7CC 100%); }
-[data-theme="dark"] body.wallpaper-default { background: linear-gradient(160deg, #2C2C31 0%, #101012 100%); }
-[data-theme="dark"] body.wallpaper-aurora { background: linear-gradient(160deg, #0F2027 0%, #2C5364 100%); }
-[data-theme="dark"] body.wallpaper-sunset { background: linear-gradient(160deg, #3A1C2E 0%, #6B2D4E 100%); }
-[data-theme="dark"] body.wallpaper-ocean { background: linear-gradient(160deg, #0B486B 0%, #175D78 100%); }
-[data-theme="dark"] body.wallpaper-graphite { background: linear-gradient(160deg, #2A2A2E 0%, #161618 100%); }
+/* ── 壁纸（html 类切换，html/body 双端继承变量；全屏覆盖含 overscroll/safe-area） ── */
+html.wallpaper-default { --wall-grad: linear-gradient(160deg, #E8E8ED 0%, #C9C9D2 100%); }
+html.wallpaper-aurora { --wall-grad: linear-gradient(160deg, #E0EAFC 0%, #CFDEF3 100%); }
+html.wallpaper-sunset { --wall-grad: linear-gradient(160deg, #FAD0C4 0%, #FFD1FF 100%); }
+html.wallpaper-ocean { --wall-grad: linear-gradient(160deg, #A1C4FD 0%, #C2E9FB 100%); }
+html.wallpaper-graphite { --wall-grad: linear-gradient(160deg, #E3E3E6 0%, #C7C7CC 100%); }
+html.wallpaper-default[data-theme="dark"] { --wall-grad: linear-gradient(160deg, #2C2C31 0%, #101012 100%); }
+html.wallpaper-aurora[data-theme="dark"] { --wall-grad: linear-gradient(160deg, #0F2027 0%, #2C5364 100%); }
+html.wallpaper-sunset[data-theme="dark"] { --wall-grad: linear-gradient(160deg, #3A1C2E 0%, #6B2D4E 100%); }
+html.wallpaper-ocean[data-theme="dark"] { --wall-grad: linear-gradient(160deg, #0B486B 0%, #175D78 100%); }
+html.wallpaper-graphite[data-theme="dark"] { --wall-grad: linear-gradient(160deg, #2A2A2E 0%, #161618 100%); }
+html { background: var(--wall-grad); }
 
 [data-theme="dark"] {
   color-scheme: dark;
@@ -69,7 +71,7 @@ body.wallpaper-graphite { background: linear-gradient(160deg, #E3E3E6 0%, #C7C7C
 html, body { height: 100%; overflow: hidden; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
-  background: var(--bg-grad); color: var(--text);
+  background: var(--wall-grad); color: var(--text);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
 }
@@ -412,7 +414,21 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .switch .thumb { position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,0.2); transition: transform 0.25s cubic-bezier(0.3, 1.2, 0.5, 1); }
 .switch input:checked + .track { background: var(--green); }
 .switch input:checked + .track + .thumb { transform: translateX(20px); }
-.num-input { width: 76px; text-align: center; background: var(--fill); border: none; border-radius: var(--radius-sm); padding: 10px 4px; font-size: 16px; color: var(--text); outline: none; }
+.num-input { width: 84px; text-align: right; background: none; border: none; padding: 10px 0; font-size: 16px; color: var(--accent); font-weight: 600; outline: none; -moz-appearance: textfield; appearance: textfield; }
+.num-input::-webkit-outer-spin-button, .num-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.setting-value { font-size: 15px; color: var(--text2); font-weight: 500; }
+/* Action Sheet 选项列表（iOS 设置跳转页样式） */
+.sheet-options { display: flex; flex-direction: column; gap: 8px; }
+.sheet-option {
+  display: flex; align-items: center; justify-content: space-between;
+  min-height: var(--touch-min); padding: 10px 14px;
+  background: var(--fill); border-radius: var(--radius-sm);
+  font-size: 16px; font-weight: 500; color: var(--text);
+  transition: background 0.15s cubic-bezier(0.4,0,0.2,1);
+}
+.sheet-option:active { background: var(--fill-strong); }
+.sheet-option.selected { color: var(--accent); }
+.sheet-option.selected::after { content: '✓'; font-weight: 700; }
 .chevron-right { width: 8px; height: 8px; border-right: 1.5px solid var(--text3); border-top: 1.5px solid var(--text3); transform: rotate(45deg); flex-shrink: 0; margin-right: 4px; }
 .status-row { justify-content: space-between; }
 .status-value { display: flex; align-items: center; gap: 7px; font-size: 15px; font-weight: 500; }
@@ -697,23 +713,13 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
           <div class="row-label">并行下载数<small>同时下载的任务数量（1～10）</small></div>
           <input class="num-input" id="parallelDownloadsInput" type="number" min="1" max="10" value="3">
         </div>
-        <div class="row setting-row">
+        <div class="row setting-row" style="cursor:pointer;" onclick="openEnginePicker()">
           <div class="row-label">下载引擎<small>N_m3u8DL-RE → ffmpeg → JS</small></div>
-          <select class="text-input" id="engineSelect" style="width:130px;">
-            <option value="auto">自动选择</option>
-            <option value="n_m3u8dl_re">N_m3u8DL-RE</option>
-            <option value="ffmpeg">ffmpeg</option>
-            <option value="js">JS 原生</option>
-          </select>
+          <span class="setting-value" id="engineValue">自动选择</span><span class="chevron-right"></span>
         </div>
-        <div class="row setting-row">
+        <div class="row setting-row" style="cursor:pointer;" onclick="openFormatPicker()">
           <div class="row-label">输出格式</div>
-          <select class="text-input" id="formatSelect" style="width:110px;">
-            <option value="auto">自动</option>
-            <option value="mp4">MP4</option>
-            <option value="ts">TS</option>
-            <option value="mkv">MKV</option>
-          </select>
+          <span class="setting-value" id="formatValue">自动</span><span class="chevron-right"></span>
         </div>
         <div class="row setting-row">
           <div class="row-label">并行分片下载<small>HLS 分片并发加速</small></div>

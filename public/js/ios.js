@@ -259,12 +259,25 @@ function applyTheme() {
 }
 function applyWallpaper() {
   const name = settings.wallpaper || 'default';
-  document.body.className = 'wallpaper-' + name;
+  document.documentElement.className = 'wallpaper-' + name;
   document.querySelectorAll('#wallpaperPicker .swatch').forEach((s) => s.classList.toggle('active', s.dataset.wallpaper === name));
 }
+const ENGINE_OPTIONS = [
+  { v: 'auto', label: '自动选择' },
+  { v: 'n_m3u8dl_re', label: 'N_m3u8DL-RE' },
+  { v: 'ffmpeg', label: 'ffmpeg' },
+  { v: 'js', label: 'JS 原生' },
+];
+const FORMAT_OPTIONS = [
+  { v: 'auto', label: '自动' },
+  { v: 'mp4', label: 'MP4' },
+  { v: 'ts', label: 'TS' },
+  { v: 'mkv', label: 'MKV' },
+];
+
 function renderSettingsForm() {
-  $('engineSelect').value = settings.engine;
-  $('formatSelect').value = settings.format;
+  $('engineValue').textContent = ENGINE_OPTIONS.find(o => o.v === settings.engine)?.label || settings.engine;
+  $('formatValue').textContent = FORMAT_OPTIONS.find(o => o.v === settings.format)?.label || settings.format;
   $('parallelSwitch').checked = settings.parallel;
   $('parallelCountInput').value = settings.parallelCount;
   $('maxSpeedInput').value = settings.maxSpeedMB;
@@ -283,8 +296,6 @@ function bindSettingsForm() {
     settings.wallpaper = btn.dataset.wallpaper;
     saveSettings(); applyWallpaper();
   });
-  $('engineSelect').addEventListener('change', (e) => { settings.engine = e.target.value; saveSettings(); });
-  $('formatSelect').addEventListener('change', (e) => { settings.format = e.target.value; saveSettings(); });
   $('parallelSwitch').addEventListener('change', (e) => { settings.parallel = e.target.checked; saveSettings(); });
   $('parallelCountInput').addEventListener('change', (e) => { settings.parallelCount = Math.min(16, Math.max(1, parseInt(e.target.value, 10) || 4)); e.target.value = settings.parallelCount; saveSettings(); });
   $('maxSpeedInput').addEventListener('change', (e) => { settings.maxSpeedMB = Math.max(0, parseFloat(e.target.value) || 0); e.target.value = settings.maxSpeedMB; saveSettings(); });
@@ -298,6 +309,28 @@ function bindSettingsForm() {
     renderBrowse();
   });
 }
+
+// iOS 风格：点击设置行弹 Action Sheet 选择器
+function openEnginePicker() {
+  openSheet(`
+    <div class="sheet-head"><span class="sheet-title">下载引擎</span><button class="sheet-close" onclick="closeSheet()">${icon('xmark', 16)}</button></div>
+    <div class="sheet-body">
+      <div class="sheet-options">
+        ${ENGINE_OPTIONS.map(o => `<button class="sheet-option${settings.engine === o.v ? ' selected' : ''}" onclick="pickEngine('${o.v}')">${o.label}</button>`).join('')}
+      </div>
+    </div>`);
+}
+function pickEngine(v) { settings.engine = v; saveSettings(); renderSettingsForm(); closeSheet(); }
+function openFormatPicker() {
+  openSheet(`
+    <div class="sheet-head"><span class="sheet-title">输出格式</span><button class="sheet-close" onclick="closeSheet()">${icon('xmark', 16)}</button></div>
+    <div class="sheet-body">
+      <div class="sheet-options">
+        ${FORMAT_OPTIONS.map(o => `<button class="sheet-option${settings.format === o.v ? ' selected' : ''}" onclick="pickFormat('${o.v}')">${o.label}</button>`).join('')}
+      </div>
+    </div>`);
+}
+function pickFormat(v) { settings.format = v; saveSettings(); renderSettingsForm(); closeSheet(); }
 
 async function loadServerSettings() {
   try {
@@ -865,12 +898,15 @@ async function loadHealth() {
     $('healthUptime').textContent = `${Math.floor(h.uptime / 60)} 分钟`;
     $('healthQueue').textContent = `${h.tasks.queued} / ${h.tasks.running}（上限 ${h.tasks.maxConcurrent}）`;
     const eng = h.engines || {};
-    $('healthEngines').innerHTML = `${dot(eng.ffmpeg)} ffmpeg / ${dot(eng.ffprobe)} ffprobe`;
-    $('healthNre').innerHTML = `${dot(eng.n_m3u8dl_re)} 可用`;
+    $('healthEngines').innerHTML = `${statusTag(eng.ffmpeg, 'ffmpeg')}  ${statusTag(eng.ffprobe, 'ffprobe')}`;
+    $('healthNre').innerHTML = statusTag(eng.n_m3u8dl_re, 'N_m3u8DL-RE');
     $('healthDisk').textContent = h.disk || '—';
   } catch {}
 }
-function dot(ok) { return `<span class="status-dot ${ok ? 'ok' : 'no'}"></span>`; }
+// iOS 风格状态标签：绿色「可用」/ 红色「不可用」文字
+function statusTag(ok, name) {
+  return `<span style="color:${ok ? 'var(--green)' : 'var(--red)'};font-weight:600;">${ok ? '✓' : '✕'} ${name}</span>`;
+}
 
 // ═══════════════════════════════════════════════════════
 // Toast / Sheet 弹窗

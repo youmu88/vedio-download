@@ -129,8 +129,29 @@ try {
     // 交互：壁纸切换（设置 App 内点 ocean 色板）
     await page.click('.swatch.s-ocean')
     await page.waitForTimeout(400)
-    const wall = await page.evaluate(() => ({ cls: document.body.className, saved: localStorage.getItem('vd.settings.v2')?.includes('ocean') }))
+    const wall = await page.evaluate(() => ({
+      htmlCls: document.documentElement.className,
+      htmlBg: getComputedStyle(document.documentElement).backgroundImage.slice(0, 40),
+      bodyBg: getComputedStyle(document.body).backgroundImage.slice(0, 40),
+      saved: localStorage.getItem('vd.settings.v2')?.includes('ocean'),
+    }))
     console.log('📊 ios 壁纸切换:', JSON.stringify(wall))
+
+    // 交互：下载引擎 → Action Sheet 选择器
+    await page.click('div[onclick*="openEnginePicker"]')
+    await page.waitForTimeout(400)
+    const sheet = await page.evaluate(() => ({
+      visible: !document.getElementById('sheetMask').hidden,
+      options: document.querySelectorAll('.sheet-option').length,
+    }))
+    console.log('📊 ios 引擎选择 Sheet:', JSON.stringify(sheet))
+    await page.click('.sheet-option:has-text("JS 原生")')
+    await page.waitForTimeout(400)
+    const picked = await page.evaluate(() => ({
+      value: document.getElementById('engineValue')?.textContent || '',
+      sheetClosed: document.getElementById('sheetMask').hidden,
+    }))
+    console.log('📊 ios 引擎已选:', JSON.stringify(picked))
 
     // 交互：navBack 返回桌面
     await page.click('#navBack')
