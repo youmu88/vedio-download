@@ -1,4 +1,25 @@
 // ═══════════════════════════════════════════════════════
+// 视口校准：iOS standalone（添加到主屏幕）中布局视口高度存在已知偏差
+// （documentElement.clientHeight < 物理屏幕高），根画布与 fixed inset:0 层
+// 底部会露出 WebView 默认白色。CSS 的 100%/100dvh 均基于该偏差视口，无法自愈，
+// 因此用 screen.height（iOS 上即逻辑像素）做一次性校准。
+// 仅在检测到偏差时生效（clientHeight < screen.height），正常环境零影响。
+// ═══════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', function calibrateViewport() {
+  try {
+    const doc = document.documentElement;
+    const physical = window.screen && window.screen.height;
+    if (!physical) return;
+    if (doc.clientHeight < physical) {
+      doc.style.minHeight = physical + 'px';
+    }
+  } catch (e) { /* 视口校准失败不阻塞功能 */ }
+});
+
+// ═══════════════════════════════════════════════════════
+// 工具函数
+// ═══════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════
 // 工具函数
 // ═══════════════════════════════════════════════════════
 const $ = (id) => document.getElementById(id);
@@ -1866,8 +1887,7 @@ document.addEventListener('focusout', (e) => {
   if (tag !== 'input' && tag !== 'textarea' && tag !== 'select') return;
   setTimeout(() => {
     window.scrollTo(0, 0);
-    document.documentElement.style.minHeight = ''; // 复位，回到 CSS min-height:100%
-    void document.documentElement.offsetHeight;    // 强制重排，触发 iOS 视口回弹
+    void document.documentElement.offsetHeight; // 强制重排，触发 iOS 视口回弹
   }, 80);
 });
 

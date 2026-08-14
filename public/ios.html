@@ -52,7 +52,7 @@ html.wallpaper-aurora[data-theme="dark"] { --wall-grad: linear-gradient(160deg, 
 html.wallpaper-sunset[data-theme="dark"] { --wall-grad: linear-gradient(160deg, #3A1C2E 0%, #6B2D4E 100%); }
 html.wallpaper-ocean[data-theme="dark"] { --wall-grad: linear-gradient(160deg, #0B486B 0%, #175D78 100%); }
 html.wallpaper-graphite[data-theme="dark"] { --wall-grad: linear-gradient(160deg, #2A2A2E 0%, #161618 100%); }
-html { background: var(--wall-grad); }
+html { background: var(--wall-grad); min-height: 100%; min-height: 100dvh; }
 
 [data-theme="dark"] {
   color-scheme: dark;
@@ -68,13 +68,15 @@ html { background: var(--wall-grad); }
 
 * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
-html { min-height: 100%; }
 html, body { overflow: hidden; }
 body {
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "PingFang SC", "Helvetica Neue", sans-serif;
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   overscroll-behavior: none;
+  /* WebKit 规则：overscroll/rubber-band 露出的区域渲染 body 背景（html 背景不参与），
+     必须与壁纸同源，否则回弹露出白色。 */
+  background: var(--wall-grad);
 }
 button { font-family: inherit; border: none; background: none; color: inherit; cursor: pointer; }
 input, select { font-family: inherit; font-size: 16px; }
