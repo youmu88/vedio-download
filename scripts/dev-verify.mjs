@@ -93,13 +93,15 @@ try {
     await page.waitForTimeout(600)
 
     const checks = await page.evaluate(() => ({
-      gestureLayer: !!document.getElementById('gestureLayer'),
-      tabs: document.querySelectorAll('.tab').length,
-      navTitle: document.getElementById('navTitle')?.textContent || '',
+      homeScreen: !!document.getElementById('homeScreen'),
+      gridApps: document.querySelectorAll('#homeIconGrid .home-app').length,
+      dockApps: document.querySelectorAll('#homeDock .home-app').length,
+      search: !!document.getElementById('homeSearchInput'),
+      stageHidden: document.getElementById('appStage').hidden,
       loadLists: typeof window.loadLists,
-      safeTop: getComputedStyle(document.documentElement).getPropertyValue('--safe-t').trim(),
       themeAttr: document.body.getAttribute('data-theme') || '(auto/默认)',
       wallpapers: document.querySelectorAll('.swatch').length,
+      gestureLayer: !!document.getElementById('gestureLayer'),
     }))
     console.log('📊 ios 静态断言:', JSON.stringify(checks))
 
@@ -111,22 +113,59 @@ try {
     console.log('📊 ios 登录成功，loginScreen 已隐藏')
     errors.length = 0 // 清空登录前预期 401，登录后必须零错误
 
-    // 交互：tab 切换
-    await page.click('.tab[data-tab="settings"]')
-    await page.waitForTimeout(400)
-    const tabAfter = await page.evaluate(() => ({
-      activeTab: document.querySelector('.tab.active')?.dataset.tab || '',
+    // 交互：点主屏「设置」图标启动 App（iOS 缩放动画）
+    await page.click('#homeIconGrid .home-app[data-app="settings"]')
+    await page.waitForTimeout(700)
+    const appOpen = await page.evaluate(() => ({
+      stageHidden: document.getElementById('appStage').hidden,
+      settingsActive: document.getElementById('page-settings').classList.contains('active'),
       navTitle: document.getElementById('navTitle')?.textContent || '',
-      settingsVisible: getComputedStyle(document.getElementById('page-settings')).display !== 'none',
     }))
-    console.log('📊 ios tab 切换:', JSON.stringify(tabAfter))
+    console.log('📊 ios App 启动:', JSON.stringify(appOpen))
 
-    // 手势返回层检查：左缘 swipe 模拟（touchscreen）
-    const g = await page.evaluate(() => {
-      const layer = document.getElementById('gestureLayer')
-      return { hidden: layer ? layer.hidden : null }
+    await page.screenshot({ path: join(OUT_DIR, 'ios-app-settings.png') })
+    console.log('📸 ios-app-settings.png 已保存')
+
+    // 交互：壁纸切换（设置 App 内点 ocean 色板）
+    await page.click('.swatch.s-ocean')
+    await page.waitForTimeout(400)
+    const wall = await page.evaluate(() => ({ cls: document.body.className, saved: localStorage.getItem('vd.settings.v2')?.includes('ocean') }))
+    console.log('📊 ios 壁纸切换:', JSON.stringify(wall))
+
+    // 交互：navBack 返回桌面
+    await page.click('#navBack')
+    await page.waitForTimeout(600)
+    const backHome = await page.evaluate(() => ({
+      stageHidden: document.getElementById('appStage').hidden,
+      homeVisible: !!document.getElementById('homeScreen') && getComputedStyle(document.getElementById('homeScreen')).display !== 'none',
+    }))
+    console.log('📊 ios 返回桌面:', JSON.stringify(backHome))
+
+    // 交互：搜索过滤（输入「服务器」→ 其余图标淡出）
+    await page.fill('#homeSearchInput', '服务器')
+    await page.waitForTimeout(300)
+    const filter = await page.evaluate(() => {
+      const apps = [...document.querySelectorAll('#homeIconGrid .home-app')]
+      return apps.map(b => ({ app: b.dataset.app, opacity: b.style.opacity || '1' }))
     })
-    console.log('📊 ios gestureLayer 初始状态:', JSON.stringify(g))
+    console.log('📊 ios 搜索过滤:', JSON.stringify(filter))
+    await page.fill('#homeSearchInput', '')
+    await page.waitForTimeout(200)
+
+    // 交互：打开「服务器」状态 App
+    await page.click('#homeIconGrid .home-app[data-app="status"]')
+    await page.waitForTimeout(800)
+    const statusApp = await page.evaluate(() => ({
+      stageHidden: document.getElementById('appStage').hidden,
+      statusActive: document.getElementById('page-status').classList.contains('active'),
+      version: document.getElementById('healthVersion')?.textContent || '',
+      conn: document.getElementById('statusConnText')?.textContent || '',
+    }))
+    console.log('📊 ios 状态 App:', JSON.stringify(statusApp))
+    await page.screenshot({ path: join(OUT_DIR, 'ios-app-status.png') })
+    console.log('📸 ios-app-status.png 已保存')
+    await page.click('#navBack')
+    await page.waitForTimeout(600)
 
     await page.screenshot({ path: join(OUT_DIR, 'ios-mobile.png') })
     console.log('📸 ios-mobile.png 已保存')

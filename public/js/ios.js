@@ -70,36 +70,149 @@ function icon(name, size = 18) {
 }
 
 // ═══════════════════════════════════════════════════════
-// Tab 导航（Tab Bar + 大标题 + 返回按钮）
+// 桌面引擎（iOS 主屏幕：图标启动 App + 返回桌面）
 // ═══════════════════════════════════════════════════════
-const TABS = ['downloads', 'browse', 'settings'];
-const TAB_TITLES = { downloads: '下载', browse: '浏览', settings: '设置' };
-let activeTab = 'downloads';
-let privatePageActive = false; // 私密浏览页（全屏覆盖，Tab Bar 隐藏）
+const APP_META = {
+  downloads: { title: '视频下载', load: () => {} },
+  browse: { title: '视频库', load: () => { loadLibrary(); loadLists(); } },
+  settings: { title: '设置', load: () => { loadServerSettings(); } },
+  status: { title: '服务器', load: () => { loadHealth(); renderStatusPage(); } },
+};
+const APP_ORDER = ['downloads', 'browse', 'settings', 'status'];
+let activeApp = null;           // 当前打开的 App（null = 桌面）
+let privatePageActive = false;  // 私密浏览页（App 内全屏覆盖）
 
-function switchTab(name) {
-  if (privatePageActive && name === 'private') return; // 私密页由锁定/返回控制
-  const prevTab = activeTab;
-  activeTab = name;
-  TABS.forEach((t) => {
-    $('page-' + t).classList.toggle('active', t === name);
-    document.querySelector(`.tab[data-tab="${t}"]`)?.classList.toggle('active', t === name);
-  });
-  // dock 弹性 pop：选中 tab 图标放大回弹（iOS dock 切换手感）
-  if (prevTab !== name) {
-    const tabEl = document.querySelector(`.tab[data-tab="${name}"]`);
-    if (tabEl) {
-      tabEl.classList.remove('pop');
-      void tabEl.offsetWidth; // 强制重排以重置动画
-      tabEl.classList.add('pop');
-    }
-  }
-  $('navTitle').textContent = TAB_TITLES[name];
-  $('navBack').hidden = true;
-  $('navBack').dataset.back = '';
-  if (name === 'browse') { loadLibrary(); loadLists(); }
-  if (name === 'settings') { loadServerSettings(); loadHealth(); }
+function appTitle(name) { return APP_META[name]?.title || ''; }
+
+function navBackTo(text) {
+  $('navBack').innerHTML = icon('chevron-left', 22) + ' ' + text;
+}
+
+// App 内直接切换页面（无启动动画，用于私密页退出等场景）
+function switchAppTo(name) {
+  if (!APP_META[name]) return;
+  activeApp = name;
+  document.querySelectorAll('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + name));
+  $('navTitle').textContent = appTitle(name);
+  $('navTitle').classList.remove('small');
+  $('navBack').hidden = false;
+  $('navBack').dataset.back = 'home';
+  navBackTo('桌面');
+  APP_META[name].load();
   $('mainScroll').scrollTop = 0;
+}
+
+// 从图标位置启动 App（iOS 缩放动画）
+function launchApp(name) {
+  if (!APP_META[name] || privatePageActive) return;
+  const icon = document.querySelector(`.home-app[data-app="${name}"]`);
+  const stage = $('appStage');
+  const r = icon ? icon.getBoundingClientRect() : { left: innerWidth / 2, top: innerHeight / 2, width: 60, height: 60 };
+  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+  activeApp = name;
+  document.querySelectorAll('.page').forEach((p) => p.classList.toggle('active', p.id === 'page-' + name));
+  $('navTitle').textContent = appTitle(name);
+  $('navTitle').classList.remove('small');
+  $('navBack').hidden = false;
+  $('navBack').dataset.back = 'home';
+  navBackTo('桌面');
+  $('mainScroll').scrollTop = 0;
+  APP_META[name].load();
+  $('homeScreen').style.visibility = 'hidden'; // 桌面退场（App 层透明，避免图标透出）
+  stage.style.transformOrigin = `${cx}px ${cy}px`;
+  stage.style.transform = 'scale(0.12)';
+  stage.style.borderRadius = '18px';
+  stage.style.transition = 'none';
+  stage.hidden = false;
+  stage.offsetWidth; // 强制重排，确保起始帧生效
+  stage.style.transition = 'transform 0.42s cubic-bezier(0.3,0.85,0.32,1), border-radius 0.42s cubic-bezier(0.3,0.85,0.32,1)';
+  stage.style.transform = 'scale(1)';
+  stage.style.borderRadius = '0px';
+  setTimeout(() => { stage.style.transition = ''; stage.style.transformOrigin = ''; }, 450);
+}
+
+// 返回桌面（反向缩放动画收回到图标）
+function closeApp() {
+  const stage = $('appStage');
+  const name = activeApp;
+  const icon = document.querySelector(`.home-app[data-app="${name}"]`);
+  const r = icon ? icon.getBoundingClientRect() : null;
+  const cx = r ? r.left + r.width / 2 : innerWidth / 2;
+  const cy = r ? r.top + r.height / 2 : innerHeight / 2;
+  $('homeScreen').style.visibility = 'visible'; // 桌面浮现承接收起动画
+  stage.style.transformOrigin = `${cx}px ${cy}px`;
+  stage.style.transition = 'transform 0.36s cubic-bezier(0.4,0.7,0.4,1), border-radius 0.36s cubic-bezier(0.4,0.7,0.4,1)';
+  stage.style.transform = 'scale(0.12)';
+  stage.style.borderRadius = '18px';
+  setTimeout(() => {
+    stage.hidden = true;
+    stage.style.transition = '';
+    stage.style.transformOrigin = '';
+    stage.style.transform = '';
+    stage.style.borderRadius = '';
+    activeApp = null;
+    // 回桌面图标弹跳反馈
+    const iconEl = document.querySelector(`.home-app[data-app="${name}"]`);
+    if (iconEl) { iconEl.classList.remove('pop'); void iconEl.offsetWidth; iconEl.classList.add('pop'); }
+  }, 370);
+}
+
+// ── 返回桌面手势（拖动 appStage，桌面在下方缩放浮现）──
+let homeSwiping = false;
+function homeSwipeBegin() {
+  const stage = $('appStage');
+  const home = $('homeScreen');
+  if (!stage || !home) return false;
+  homeSwiping = true;
+  swipeActive = true;
+  home.style.visibility = 'visible'; // 拖动 App 时桌面在下方露出
+  stage.style.transition = 'none';
+  stage.style.transform = 'translateX(0px)';
+  home.style.transition = 'none';
+  home.style.transform = 'scale(0.92)';
+  document.documentElement.style.touchAction = 'none';
+  document.body.style.overflow = 'hidden';
+  return true;
+}
+function homeSwipeMove(dx) {
+  const w = innerWidth;
+  const p = Math.min(Math.max(dx, 0) / w, 1);
+  const ease = 1 - Math.pow(1 - p, 2.2); // iOS 式轻微缓动
+  $('appStage').style.transform = `translateX(${dx * 0.92}px)`;
+  $('homeScreen').style.transform = `scale(${0.92 + ease * 0.08})`;
+}
+function homeSwipeFinish(commit) {
+  const stage = $('appStage');
+  const home = $('homeScreen');
+  const appName = activeApp;
+  if (commit) {
+    stage.style.transition = 'transform 0.34s var(--spring-settle)';
+    stage.style.transform = 'translateX(100%)';
+    home.style.transition = 'transform 0.34s var(--spring-settle)';
+    home.style.transform = 'scale(1)';
+    setTimeout(() => {
+      stage.hidden = true;
+      stage.style.transition = ''; stage.style.transform = '';
+      home.style.transition = ''; home.style.transform = '';
+      activeApp = null;
+      homeSwiping = false;
+      swipeActive = false;
+      document.documentElement.style.touchAction = '';
+      document.body.style.overflow = '';
+      const iconEl = document.querySelector(`.home-app[data-app="${appName}"]`);
+      if (iconEl) { iconEl.classList.remove('pop'); void iconEl.offsetWidth; iconEl.classList.add('pop'); }
+    }, 350);
+  } else {
+    stage.style.transition = 'transform 0.28s var(--spring-settle)';
+    stage.style.transform = 'translateX(0)';
+    home.style.transition = 'transform 0.28s var(--spring-settle)';
+    home.style.transform = 'scale(1)';
+    setTimeout(() => {
+      homeSwiping = false; swipeActive = false;
+      home.style.visibility = 'hidden'; // 取消返回：桌面重新退场
+      document.documentElement.style.touchAction = ''; document.body.style.overflow = '';
+    }, 300);
+  }
 }
 
 // 大标题滚动动画：滚动时标题从 34px 缩为 17px
@@ -121,10 +234,6 @@ function initNavScroll() {
     }, { passive: true });
   } catch (_) {}
 }
-
-document.querySelectorAll('.tab').forEach((btn) => {
-  btn.addEventListener('click', () => switchTab(btn.dataset.tab));
-});
 
 // ═══════════════════════════════════════════════════════
 // 设置持久化（本地 + 服务端）
@@ -606,13 +715,12 @@ function openPlayer(title, src, id, target = 'browse') {
     privatePageActive = true;
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     $('page-private').classList.add('active');
-    $('tabbar').hidden = true;
     $('navTitle').textContent = '私密列表';
     $('navTitle').classList.add('small');
     $('navBack').hidden = false;
     $('navBack').dataset.back = 'private:home';
   } else {
-    switchTab('browse');
+    switchAppTo('browse');
   }
   titleEl.textContent = title;
   box.hidden = false;
@@ -727,9 +835,23 @@ function playPrivateVideo(name) {
 function playUrl() {
   const url = $('playUrlInput').value.trim();
   if (!/^https?:\/\//i.test(url)) { showToast('请输入有效的 http(s) 链接', true); return; }
-  switchTab('browse');
+  switchAppTo('browse');
   openPlayer(url, url, `url:${url}`);
 }
+
+// ═══════════════════════════════════════════════════════
+// 服务器状态 App（图标启动）
+// ═══════════════════════════════════════════════════════
+function renderStatusPage() {
+  const u = getAuthUser();
+  const su = $('statusUser'); if (su) su.textContent = u || '—';
+  const on = socket && socket.connected;
+  const dot = $('statusConnDot'); if (dot) dot.className = 'status-dot ' + (on ? 'ok' : 'no');
+  const txt = $('statusConnText'); if (txt) txt.textContent = on ? '已连接' : '已断开';
+  refreshCacheStats(document.getElementById('statusCacheStats'));
+}
+socket.on('connect', renderStatusPage);
+socket.on('disconnect', renderStatusPage);
 
 // ═══════════════════════════════════════════════════════
 // 设置页：服务状态
@@ -1199,17 +1321,16 @@ function openPrivateApp() {
   privateFolder = null;
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   $('page-private').classList.add('active');
-  $('tabbar').hidden = true;
   $('navTitle').textContent = '私密列表';
   $('navTitle').classList.add('small');
   $('navBack').hidden = false;
   $('navBack').dataset.back = 'private:home';
+  navBackTo('返回');
   loadPrivateLists().then(renderPrivateBrowse);
 }
 
 function closePrivateApp() {
   privatePageActive = false;
-  $('tabbar').hidden = false;
   $('navTitle').classList.remove('small');
   // 退出私密页必须移除 active，否则与设置页同时显示（switchTab 不处理 private）
   $('page-private').classList.remove('active');
@@ -1227,7 +1348,7 @@ function closePrivateApp() {
     $('privateFolderGrid').innerHTML = '';
     $('privateBrowseCrumb').innerHTML = '';
   } catch (_) {}
-  switchTab('settings');
+  switchAppTo('settings');
   showToast('已退出私密浏览');
 }
 
@@ -1368,6 +1489,10 @@ function showLogin() {
 function hideLogin() {
   const s = $('loginScreen'); if (s) s.classList.add('hidden');
   const app = $('app'); if (app) app.hidden = false;
+  // 登录后回到桌面（主屏幕）
+  const stage = $('appStage'); if (stage) stage.hidden = true;
+  const home = $('homeScreen'); if (home) home.style.visibility = 'visible';
+  activeApp = null;
 }
 async function doLogout() {
   try { await _origFetch('/api/auth/logout', { method: 'POST' }); } catch (_) {}
@@ -1431,12 +1556,18 @@ let gestureCommitted = false; // 松手后动画进行中
 let frontSnapshot = null;     // 前页 DOM 快照
 
 function canIosBack() {
-  if (privatePageActive) return true;
-  if (browseFolder && browseFolder.id) return true;
-  return false;
+  if (!activeApp) return false;                        // 桌面：无返回
+  if (privatePageActive) return true;                  // 私密页：返回设置 App
+  if (browseFolder && browseFolder.id && activeApp === 'browse') return true; // 文件夹：返回浏览根
+  if (selectionMode) return false;                     // 批量选择模式禁用手势
+  return true;                                         // App 根页：返回桌面
 }
 
 function gestureBegin() {
+  // App 根页：直接拖动 appStage 返回桌面（无需克隆层）
+  if (!privatePageActive && !(browseFolder && browseFolder.id)) {
+    return homeSwipeBegin();
+  }
   const layer = $('gestureLayer');
   const front = $('gestureFront');
   const back = $('gestureBack');
@@ -1463,6 +1594,7 @@ function gestureBegin() {
 }
 
 function gestureMove(dx) {
+  if (homeSwiping) { homeSwipeMove(dx); return; }
   const w = innerWidth;
   const p = Math.min(Math.max(dx, 0) / w, 1);
   const ease = 1 - Math.pow(1 - p, 2.2); // iOS 式轻微缓动
@@ -1472,6 +1604,7 @@ function gestureMove(dx) {
 }
 
 function gestureFinish(commit) {
+  if (homeSwiping) { homeSwipeFinish(commit); return; }
   const w = innerWidth;
   const layer = $('gestureLayer');
   const front = $('gestureFront');
@@ -1584,6 +1717,7 @@ function handleIosBack() {
     return;
   }
   if (browseFolder && browseFolder.id) { backToRoot(); return; }
+  closeApp(); // App 根页兜底：返回桌面
 }
 
 // ═══════════════════════════════════════════════════════
@@ -1606,7 +1740,7 @@ $('cacheMenuBtn').addEventListener('click', () => {
       btn.innerHTML = icon('checkmark', 16);
       btn.style.width = '';
       showToast('视频已缓存到本地');
-      refreshCacheStats(document.getElementById('cacheStats'));
+      refreshCacheStats(document.getElementById('statusCacheStats'));
     } else {
       btn.innerHTML = '<span style="font-size:11px;">' + pct + '%</span>';
     }
@@ -1626,7 +1760,7 @@ $('privateCacheMenuBtn').addEventListener('click', () => {
       btn.innerHTML = icon('checkmark', 16);
       btn.style.width = '';
       showToast('视频已缓存到本地');
-      refreshCacheStats(document.getElementById('cacheStats'));
+      refreshCacheStats(document.getElementById('statusCacheStats'));
     } else {
       btn.innerHTML = '<span style="font-size:11px;">' + pct + '%</span>';
     }
@@ -1653,7 +1787,21 @@ $('navBack').addEventListener('click', () => {
     else closePrivateApp();
   } else if (browseFolder && browseFolder.id) {
     backToRoot();
+  } else {
+    closeApp(); // App 根页：返回桌面
   }
+});
+
+// 桌面：图标启动 App + 搜索过滤
+document.querySelectorAll('.home-app').forEach((btn) => {
+  btn.addEventListener('click', () => launchApp(btn.dataset.app));
+});
+$('homeSearchInput')?.addEventListener('input', (e) => {
+  const q = String(e.target.value || '').trim().toLowerCase();
+  document.querySelectorAll('.home-app').forEach((b) => {
+    const title = APP_META[b.dataset.app]?.title || '';
+    b.style.opacity = q && !title.toLowerCase().includes(q) ? '0.22' : '';
+  });
 });
 $('loginBtn').addEventListener('click', doLogin);
 $('loginPass').addEventListener('keydown', (e) => { if (e.key === 'Enter') doLogin(); });
@@ -1671,10 +1819,7 @@ if (!getAuthToken()) {
 } else {
   hideLogin();
   loadLists();
-  loadLibrary();
   loadTasks();
-  loadHealth();
-  refreshCacheStats(document.getElementById('cacheStats'));
 }
 
 initNavScroll();
