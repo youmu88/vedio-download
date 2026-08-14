@@ -121,6 +121,13 @@ main {
 .page { display: none; padding: 0 16px 24px; }
 .page.active { display: block; }
 
+/* ── 壁纸背景层（fixed 铺满视口：PWA standalone 下 Safe Area/状态栏区域壁纸兜底） ── */
+#wallpaperLayer {
+  position: fixed; inset: 0; z-index: 0;
+  background: var(--wall-grad);
+  pointer-events: none;
+}
+
 /* ── iOS 主屏幕（桌面：壁纸 + App 图标网格 + 搜索 + Dock） ── */
 #homeScreen {
   position: fixed; inset: 0; z-index: 10;
@@ -200,17 +207,6 @@ main {
 #appStage {
   position: fixed; inset: 0; z-index: 200;
   background: transparent; will-change: transform;
-}
-
-/* Home Indicator（iOS 底部指示条） */
-.home-indicator {
-  position: fixed; bottom: 7px; left: 50%; transform: translateX(-50%);
-  width: 134px; height: 5px; border-radius: 3px;
-  background: rgba(0,0,0,0.85); z-index: 260; pointer-events: none;
-}
-[data-theme="dark"] .home-indicator { background: rgba(255,255,255,0.85); }
-#homeScreen .home-indicator {
-  position: absolute; top: auto; bottom: calc(var(--safe-b) + 6px);
 }
 
 /* ── 滑动返回手势层（iOS 交互式返回：跟手 + 缩放 + 回弹） ── */
@@ -577,6 +573,9 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
   </div>
 </div>
 
+<!-- 壁纸背景层（PWA 全屏兜底） -->
+<div id="wallpaperLayer" aria-hidden="true"></div>
+
 <!-- 主界面 -->
 <div id="app" hidden>
   <!-- ═══ iOS 主屏幕（桌面：壁纸 + 图标网格 + 搜索 + Dock） ═══ -->
@@ -611,7 +610,6 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
         <button class="home-app" data-app="status"><span class="home-icon app-status"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 12l4.6-3.4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="12" cy="12" r="1.7" fill="currentColor"/><path d="M9.3 9.9a4.3 4.3 0 015.4 0" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></span></button>
       </div>
     </div>
-    <div class="home-indicator"></div>
   </div>
 
   <!-- ═══ 全屏 App 层（图标缩放启动） ═══ -->
@@ -791,7 +789,6 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
       </div>
     </section>
   </main>
-  <div class="home-indicator"></div>
   </div><!-- /appStage -->
 
   <!-- 滑动返回手势层（交互式返回动画容器） -->
