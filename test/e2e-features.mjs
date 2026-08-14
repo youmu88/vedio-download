@@ -374,6 +374,65 @@ try {
   await page.click('#privateLockBtn').catch(() => {});
   await page.waitForTimeout(300);
 
+  // ── 4.8 本轮新增：进入私密列表后修改密码（两次输入新密码，无需旧密码） ──
+  // 解锁进入私密 App（当前密码 1234）
+  await page.click('.dock-icon[data-app="settings"]');
+  await page.waitForTimeout(400);
+  await page.click('#privateEntryBtn');
+  await page.waitForTimeout(400);
+  const preTitle = await page.$eval('#modalCard .pin-screen-title', el => el.textContent).catch(() => '');
+  if (preTitle.includes('输入密码')) {
+    for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+    await page.waitForTimeout(800);
+  }
+  const winOpenPre = await page.$eval('#win-private', el => !el.classList.contains('closed')).catch(() => false);
+  check('修改密码前：解锁进入私密 App', winOpenPre);
+
+  // 私密 App 内点击「修改密码」→ 弹出第一次输入新密码
+  await page.click('#privateChangePinBtn');
+  await page.waitForTimeout(400);
+  const changeTitle = await page.$eval('#modalCard .pin-screen-title', el => el.textContent).catch(() => '');
+  check('私密 App 内提供「修改密码」入口（首次输入新密码）', changeTitle.includes('修改密码'), `title=${changeTitle}`);
+
+  // 第一次输入新密码 6543 → 满位自动进入第二次输入
+  for (const d of ['6', '5', '4', '3']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(400);
+  const againSub = await page.$eval('#modalCard .pin-screen-sub', el => el.textContent).catch(() => '');
+  check('满位自动进入「再次输入新密码」', againSub.includes('再次输入'), `sub=${againSub}`);
+
+  // 第二次输入不一致（6544）→ 提示错误并重新开始
+  for (const d of ['6', '5', '4', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(700);
+  const toastText = await page.$eval('.toast', el => el.textContent).catch(() => '');
+  check('两次输入不一致提示并重试', toastText.includes('不一致'), toastText.slice(0, 60));
+  const retryTitle = await page.$eval('#modalCard .pin-screen-title', el => el.textContent).catch(() => '');
+  check('不一致后重新开始修改密码流程', retryTitle.includes('修改密码'), `title=${retryTitle}`);
+
+  // 两次输入一致（6543 + 6543）→ 修改成功：PIN 关闭且私密 App 保持打开（token 未失效，无需重新验证）
+  for (const d of ['6', '5', '4', '3']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(400);
+  for (const d of ['6', '5', '4', '3']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(900);
+  const pinClosedAfterChange = await page.$eval('#modalMask', el => el.hidden).catch(() => true);
+  const winStillOpen = await page.$eval('#win-private', el => !el.classList.contains('closed')).catch(() => false);
+  check('修改成功：PIN 界面关闭且私密 App 保持打开', pinClosedAfterChange && winStillOpen);
+
+  // 锁定后重新进入：旧密码 1234 应失效，新密码 6543 应生效
+  await page.click('#privateLockBtn');
+  await page.waitForTimeout(400);
+  await page.click('#privateEntryBtn');
+  await page.waitForTimeout(400);
+  for (const d of ['1', '2', '3', '4']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(700);
+  const oldPinErr = await page.$eval('#pinError', el => el.textContent).catch(() => '');
+  check('旧密码 1234 已失效（提示密码错误）', oldPinErr.includes('密码错误'), oldPinErr);
+  for (const d of ['6', '5', '4', '3']) { await page.click(`#modalCard .numpad button:text-is("${d}")`); await page.waitForTimeout(80); }
+  await page.waitForTimeout(800);
+  const winOpenNew = await page.$eval('#win-private', el => !el.classList.contains('closed')).catch(() => false);
+  check('新密码 6543 解锁成功', winOpenNew);
+  await page.click('#privateLockBtn').catch(() => {});
+  await page.waitForTimeout(300);
+
   // ── 5. API 层冒烟（走 HTTP 直接验证） ──
   const api = await apiCall(`${BASE}/api/private/status`).then(r => r.json());
   check('API: private/status 返回 hasPassword=true', api.hasPassword === true, JSON.stringify(api));
