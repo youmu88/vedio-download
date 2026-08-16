@@ -98,7 +98,10 @@ const mediaCache = {
     const tx = this._db.transaction(MEDIA_CACHE_STORE, 'readwrite');
     const store = tx.objectStore(MEDIA_CACHE_STORE);
     return new Promise((resolve, reject) => {
-      store.put({ url, data, type, timestamp: Date.now(), size }).onsuccess = () => {
+      // ⚠️ 只能 put 一次：onsuccess/onerror 必须绑定在同一个 request 上
+      // （此前对同一事务执行两次 put，若首次失败则 promise 永不 settle，预加载挂死）
+      const req = store.put({ url, data, type, timestamp: Date.now(), size });
+      req.onsuccess = () => {
         this._recalcStats();
         // 自动 LRU 淘汰：超出上限时清理最旧的数据
         if (this._cacheBytes + this._preloadBytes > MAX_CACHE_BYTES) {
@@ -106,7 +109,7 @@ const mediaCache = {
         }
         resolve();
       };
-      store.put({ url, data, type, timestamp: Date.now(), size }).onerror = (e) => reject(e.target.error);
+      req.onerror = (e) => reject(e.target.error);
     });
   },
 
@@ -317,23 +320,33 @@ class CachedFragmentLoader {
   constructor(config) {
     this._defaultLoader = new (Hls.DefaultConfig.loader)(config);
     this._abortController = null;
+    this._aborted = false;
   }
 
   load(context, config, callbacks) {
     // 仅处理分片加载（frag），不拦截 manifest/key
     if (context.type === 'frag' && context.frag && context.url) {
       const url = context.url;
+      this._aborted = false;
       mediaCache.get(url).then(cached => {
+        if (this._aborted) return; // 已被 abort，丢弃过期回调
         if (cached && cached.data) {
-          // 缓存命中
-          const data = cached.data instanceof Blob ? cached.data : new Blob([cached.data]);
-          const now = performance.now();
-          callbacks.onSuccess(
-            { url, data },
-            { trequest: now - 10, tfirst: now - 5, tload: now, loaded: data.size, total: data.size },
-            context,
-            null
-          );
+          // ⚠️ 缓存命中必须转 ArrayBuffer：hls.js 对 payload 执行 new Uint8Array(data)，
+          // 传 Blob 会得到空数组导致分片解析失败（seek 到已缓存区域即中断）
+          const blob = cached.data instanceof Blob ? cached.data : new Blob([cached.data]);
+          blob.arrayBuffer().then(buf => {
+            if (this._aborted) return;
+            const now = performance.now();
+            callbacks.onSuccess(
+              { url, data: buf },
+              { trequest: now - 10, tfirst: now - 5, tload: now, loaded: buf.byteLength, total: buf.byteLength },
+              context,
+              null
+            );
+          }).catch(err => {
+            if (this._aborted) return;
+            callbacks.onError({ url, message: err.message, code: 0 }, context, null);
+          });
           return;
         }
         // 缓存未命中，走网络
@@ -359,6 +372,7 @@ class CachedFragmentLoader {
       }
       return res.arrayBuffer();
     }).then(data => {
+      if (this._aborted) return;
       const now = performance.now();
       const blob = new Blob([data]);
       // 如果当前正在缓存，存为永久；否则存为预加载
@@ -373,6 +387,7 @@ class CachedFragmentLoader {
       );
     }).catch(err => {
       if (err.name === 'AbortError') return;
+      if (this._aborted) return;
       callbacks.onError(
         { url, message: err.message, code: 0 },
         context,
@@ -382,11 +397,15 @@ class CachedFragmentLoader {
   }
 
   abort() {
+    // ⚠️ 不能调用 this._defaultLoader.abort()：hls.js 的 abort 流程会触发
+    // onAbort → resetLoader → destroy() → 本 abort() → _defaultLoader.abort() → onAbort…
+    // 无限递归导致 Maximum call stack size exceeded（已实测复现）。
+    // 只需取消自身的 fetch 并标记，让过期回调被丢弃。
+    this._aborted = true;
     if (this._abortController) {
       this._abortController.abort();
       this._abortController = null;
     }
-    this._defaultLoader.abort();
   }
 
   destroy() {
@@ -414,8 +433,11 @@ const preloadManager = {
   _onCacheProgress: null,  // 缓存进度回调
   _preloadedUrls: new Set(),
      _fragmentList: [],        // 当前 HLS 分片列表
+  _fragmentTimes: [],       // 分片起始时间（seek 感知预加载用）
   _statusTimer: null,        // 缓存状态更新定时器
   _onStatusUpdate: null,     // 缓存状态回调
+  _abortCtrl: null,          // 在途预加载请求的取消控制器
+  _preloadSeq: 0,            // 预加载轮次号（丢弃过期轮次结果）
 
   /** 启动预加载，绑定到 hls 实例 */
   start(hls) {
@@ -423,17 +445,27 @@ const preloadManager = {
     this._hls = hls;
     this._active = true;
     this._fragmentList = [];
+    this._fragmentTimes = [];
     this._preloadedUrls.clear();
     bandwidthEstimator.reset();
 
     // 监听分片列表加载完成
     hls.on(Hls.Events.LEVEL_LOADED, (_e, data) => {
       if (data.details && data.details.fragments) {
-        this._fragmentList = data.details.fragments.map(f => ({
-          url: f.url || (f._url || f.relurl),
-          sn: f.sn,
-          duration: f.duration || 0,
-        })).filter(f => f.url);
+        // 记录每个分片的起始时间，供 seek 感知预加载定位
+        let acc = 0;
+        this._fragmentTimes = [];
+        this._fragmentList = data.details.fragments.map(f => {
+          const rec = {
+            url: f.url || (f._url || f.relurl),
+            sn: f.sn,
+            duration: f.duration || 0,
+            start: acc,
+          };
+          acc += (f.duration || 0);
+          this._fragmentTimes.push(acc);
+          return rec;
+        }).filter(f => f.url);
         // 分片列表更新后立即刷新缓存状态
         this._updateStatus();
       }
@@ -453,6 +485,12 @@ const preloadManager = {
 
   stop() {
     this._active = false;
+    // 取消所有在途预加载请求（切换视频/关闭播放器时立即释放带宽与连接）
+    if (this._abortCtrl) {
+      this._abortCtrl.abort();
+      this._abortCtrl = null;
+    }
+    this._preloadSeq++; // 使过期轮次的结果全部失效
     if (this._timer) {
       clearTimeout(this._timer);
       this._timer = null;
@@ -491,9 +529,18 @@ const preloadManager = {
       bufferedEnd = buffered.end(buffered.length - 1);
     }
 
-    // 找出需要预加载的分片
+    // ⚠️ seek 感知：优先预加载当前播放位置附近的未缓存分片，
+    // 而不是永远从列表头开始（此前快进后仍在预加载开头分片，浪费带宽且对快进无帮助）
     let pendingFragments = this._fragmentList.filter(f => {
       return !this._preloadedUrls.has(f.url);
+    });
+
+    // 找出最接近当前播放位置、且尚未预加载的分片（按起始时间排序取前 batchSize）
+    const horizon = Math.max(currentTime, bufferedEnd - 2);
+    pendingFragments.sort((a, b) => {
+      const da = Math.max(0, a.start - horizon);
+      const db = Math.max(0, b.start - horizon);
+      return da - db;
     });
 
     // 动态批量大小：根据带宽自动调整
@@ -505,13 +552,18 @@ const preloadManager = {
       return;
     }
 
+    // 本轮代际：结果只有在代际一致时才生效（防止切换视频后旧轮次覆盖）
+    const seq = this._preloadSeq;
+    const abortCtrl = new AbortController();
+    this._abortCtrl = abortCtrl;
+    const signal = abortCtrl.signal;
+
     // 并行预加载（使用带宽估算记录耗时）
     const startTime = performance.now();
     let totalBytes = 0;
-    let loaded = 0;
 
     await Promise.all(toPreload.map(async (frag) => {
-      if (!this._active) return;
+      if (!this._active || seq !== this._preloadSeq) return;
       if (this._preloadedUrls.has(frag.url)) return;
       try {
         const cached = await mediaCache.get(frag.url);
@@ -519,17 +571,19 @@ const preloadManager = {
           this._preloadedUrls.add(frag.url);
           return;
         }
-        const res = await fetch(frag.url, { credentials: 'omit' });
+        const res = await fetch(frag.url, { credentials: 'omit', signal });
         if (!res.ok && res.status !== 206) return;
         const data = await res.arrayBuffer();
+        if (!this._active || seq !== this._preloadSeq) return; // 已切换，丢弃
         totalBytes += data.byteLength;
         const blob = new Blob([data]);
         const storeType = this._isCaching ? 'cache' : 'preload';
         await mediaCache.put(frag.url, blob, storeType);
         this._preloadedUrls.add(frag.url);
-        loaded++;
-      } catch (_) {}
+      } catch (_) { /* AbortError 或网络错误静默忽略 */ }
     }));
+
+    if (!this._active || seq !== this._preloadSeq) return; // 已切换/停止，丢弃本轮
 
     // 记录带宽样本
     if (totalBytes > 0) {
@@ -571,9 +625,11 @@ const preloadManager = {
 
   async _processCacheQueue() {
     const batchSize = 3;
+    this._abortCtrl = new AbortController();
+    const signal = this._abortCtrl.signal;
     while (this._cacheQueue.length > 0 && this._isCaching) {
       const batch = this._cacheQueue.splice(0, batchSize);
-      await Promise.all(batch.map(url => this._cacheOne(url)));
+      await Promise.all(batch.map(url => this._cacheOne(url, signal)));
       const pct = Math.min(99, Math.round((this._cacheDone / this._cacheTotal) * 100));
       if (this._onCacheProgress) this._onCacheProgress(pct);
     }
@@ -583,9 +639,9 @@ const preloadManager = {
     }
   },
 
-  async _cacheOne(url) {
+  async _cacheOne(url, signal) {
     try {
-      const res = await fetch(url, { credentials: 'omit' });
+      const res = await fetch(url, { credentials: 'omit', signal });
       if (!res.ok && res.status !== 206) return;
       const data = await res.arrayBuffer();
       const blob = new Blob([data]);
@@ -597,6 +653,10 @@ const preloadManager = {
   stopCache() {
     this._isCaching = false;
     this._cacheQueue = [];
+    if (this._abortCtrl) {
+      this._abortCtrl.abort();
+      this._abortCtrl = null;
+    }
   },
 
   get isCaching() { return this._isCaching; },

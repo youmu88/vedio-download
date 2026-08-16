@@ -158,6 +158,8 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 // ⭐ P2-11: 全局 API 速率限制
+// ⚠️ 仅挂 /api 路由：/downloads 视频流是播放器高频 Range 请求路径，
+// 挂全局会导致快进/拖拽/切换视频时被限流误伤（实测第 78 个请求即 429），播放直接不可用。
 const globalLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 分钟
   max: 100,
@@ -165,7 +167,7 @@ const globalLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
 });
-app.use(globalLimiter);
+app.use('/api', globalLimiter);
 
 // ⭐ P2-11: 下载 API 速率限制（更严格）
 const downloadLimiter = rateLimit({
