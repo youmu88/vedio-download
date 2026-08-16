@@ -140,6 +140,10 @@ fi
 
 # ── 4. 启动新实例 ──────────────────────────────────────
 info "启动新实例（pm2 start ecosystem.config.cjs）…"
+# ⚠️ 显式固定部署端口：本项目默认 3456（parse_ecosystem_port 已从
+# ecosystem.config.cjs 解析）。防止外部 shell 环境变量 PORT 污染
+# （如 PORT=52134）覆盖端口，导致 EADDRINUSE 崩溃。
+export PORT="${PORT}"
 run pm2 start ecosystem.config.cjs
 run pm2 save
 ok "pm2 进程列表已保存"
