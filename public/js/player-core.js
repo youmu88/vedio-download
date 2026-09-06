@@ -43,6 +43,7 @@ window.PlayerCore = (() => {
     navigateTo(target);
     setTitle(titleEl, title, target);
     box.hidden = false;
+    removeTranscodeNotice(pfx); // 新播放会话开始时清掉上一轮的转码提示条
     userPaused = false;
     if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
     currentPlay = { id, title, src, time: 0, duration: 0, updatedAt: Date.now() };
@@ -140,7 +141,16 @@ window.PlayerCore = (() => {
       currentPlay.time = currentPlay.duration;
       upsertHistory({ ...currentPlay, updatedAt: Date.now() });
     };
-    video.onerror = () => { if (session === playSession) showToast('播放失败：请确认链接可访问且格式受支持', true); };
+    video.onerror = () => {
+      if (session !== playSession) return;
+      // ⭐ MKV 等浏览器无法直接播放的库内文件：给出去转码入口而非裸报错
+      if (currentPlay && typeof currentPlay.id === 'string' && currentPlay.id.startsWith('file:')
+        && needsTranscode(currentPlay.title)) {
+        showTranscodeNotice(pfx, currentPlay.title);
+      } else {
+        showToast('播放失败：请确认链接可访问且格式受支持', true);
+      }
+    };
   }
 
   function closePlayer(target = 'browse') {
@@ -160,6 +170,7 @@ window.PlayerCore = (() => {
     video.pause();
     video.removeAttribute('src');
     video.load();
+    removeTranscodeNotice(pfx);
     box.hidden = true;
     if (target === 'browse') loadLibrary();
   }
@@ -191,9 +202,89 @@ window.PlayerCore = (() => {
   function getUserPaused() { return userPaused; }
   function isHlsActive() { return !!hls; }
 
+  // ═══ MKV 等不可直播格式的服务端转码 ═══
+  // 浏览器 <video> 无法直接播放的容器/编码（.ts 容器 Chrome/Firefox 不支持；白名单已拦在库外）
+  const TRANSCODE_EXTS = new Set(['.mkv', '.ts', '.avi', '.wmv', '.flv', '.mpg', '.mpeg', '.vob', '.3gp']);
+
+  function extOf(name) {
+    return (String(name || '').match(/\.[a-z0-9]+$/i) || [''])[0].toLowerCase();
+  }
+
+  /** 该文件是否需要服务端转码才能播放（供浏览页渲染「需转码」标记复用） */
+  function needsTranscode(name) {
+    return TRANSCODE_EXTS.has(extOf(name));
+  }
+
+  function removeTranscodeNotice(pfx) {
+    const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+    box?.querySelector('.transcode-notice')?.remove();
+  }
+
+  /** 播放失败且属于可转码格式时：在播放器盒内展示提示条 + 「转码后播放」按钮 */
+  function showTranscodeNotice(pfx, name) {
+    const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+    if (!box || box.querySelector('.transcode-notice')) return;
+    const bar = document.createElement('div');
+    bar.className = 'transcode-notice';
+    bar.setAttribute('style', 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;'
+      + 'background:rgba(255,204,0,.12);border-top:1px solid rgba(255,204,0,.35);font-size:13px;');
+    const label = document.createElement('span');
+    label.textContent = `${extOf(name).toUpperCase()} 格式浏览器无法直接播放，可转码为 MP4 后观看`;
+    const btn = document.createElement('button');
+    btn.textContent = '转码后播放';
+    btn.setAttribute('style', 'flex-shrink:0;padding:4px 12px;border:none;border-radius:14px;'
+      + 'background:var(--accent,#0a84ff);color:#fff;font-size:13px;cursor:pointer;');
+    btn.addEventListener('click', () => { bar.remove(); requestTranscodeAndPlay(name); });
+    bar.appendChild(label);
+    bar.appendChild(btn);
+    box.appendChild(bar);
+  }
+
+  // 转码进度经 socket → macos.js/ios.js 转发为 window CustomEvent，此处订阅并自动续播
+  let transcodeWaitOutput = null;
+  let transcodeListenerBound = false;
+
+  function ensureTranscodeListener() {
+    if (transcodeListenerBound) return;
+    transcodeListenerBound = true;
+    window.addEventListener('transcode-status', (ev) => {
+      const s = ev.detail || {};
+      if (!transcodeWaitOutput || s.output !== transcodeWaitOutput) return;
+      if (s.status === 'running') {
+        showToast(`转码中 ${s.progress ?? 0}%`);
+      } else if (s.status === 'done') {
+        transcodeWaitOutput = null;
+        showToast('转码完成，开始播放');
+        playLibrary(s.output);
+      } else if (s.status === 'failed') {
+        transcodeWaitOutput = null;
+        showToast(`转码失败：${s.error || '未知错误'}`, true);
+      }
+    });
+  }
+
+  /** 请求服务端转码，完成后自动播放产物 MP4 */
+  async function requestTranscodeAndPlay(name) {
+    try {
+      const res = await fetch('/api/transcode', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { showToast(data.error || `转码请求失败 (${res.status})`, true); return; }
+      transcodeWaitOutput = data.output;
+      ensureTranscodeListener();
+      showToast('已提交转码任务，完成后自动播放');
+    } catch (err) {
+      showToast(`转码请求失败: ${err.message}`, true);
+    }
+  }
+
   return {
     configure, openPlayer, closePlayer, closePrivatePlayerOnly,
     playLibrary, playPrivateVideo, playUrl,
     getCurrentPlay, setUserPaused, getUserPaused, isHlsActive,
+    needsTranscode,
   };
 })();

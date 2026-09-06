@@ -470,6 +470,10 @@ socket.on('disconnect', () => document.querySelectorAll('.conn-dot').forEach(d =
 socket.on('task-status', (task) => updateTaskCard(task));
 socket.on('task-list-update', (tasks) => renderTasks(tasks));
 socket.on('task-finalized', ({ taskId }) => socket.emit('unsubscribe', taskId));
+// ⭐ 视频库自动刷新：服务端 fs.watch/下载完成推送 library-update（browse 未打开时不打扰，进页必刷兑底）
+socket.on('library-update', () => { if (activeApp === 'browse') loadLibrary(); });
+// 转码进度 → PlayerCore（socket 实例在本文件，跨文件经 window CustomEvent 解耦）
+socket.on('transcode-status', (s) => window.dispatchEvent(new CustomEvent('transcode-status', { detail: s })));
 
 // ═══════════════════════════════════════════════════════
 // 下载页：提交任务
@@ -604,6 +608,12 @@ async function loadLibrary() {
     $('libraryGrid').innerHTML = '<div class="empty"><div class="big">' + icon('xmark-circle', 42) + '</div>视频库读取失败</div>';
   }
 }
+// ⭐ 视频库自动刷新兑底：macOS Docker Desktop 的 bind mount 下宿主拹入不触发容器内 fs.watch，
+// 「页面重新可见 + ≤15s 轮询」是唯一可靠的自动更新途径（进 browse 页必刷仍在 ensureOpen 保留）
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && activeApp === 'browse') loadLibrary();
+});
+setInterval(() => { if (activeApp === 'browse' && !document.hidden) loadLibrary(); }, 15000);
 let browseFolder = null; // null=根视图 | {id,name,isPrivate}
 
 function renderBrowse() {
@@ -659,6 +669,7 @@ function renderLibraryGrid(files) {
   }
   grid.innerHTML = files.map((f) => {
     const pct = libraryProgress(f.name);
+    const needTc = PlayerCore.needsTranscode(f.name);
     const progressHtml = pct === null ? '' : view === 'list'
       ? `<div class="video-progress">${pct}%<span class="bar" style="width:${pct}%"></span></div>`
       : `<span class="video-progress">${pct}%</span>`;
@@ -671,7 +682,7 @@ function renderLibraryGrid(files) {
         <div class="video-thumb"><span class="play-badge">${icon('play', 16)}</span></div>
         <div class="video-info">
           <div class="video-name" title="${escapeHtml(f.name)}">${escapeHtml(f.name)}</div>
-          <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}</div>
+          <div class="video-meta">${formatBytes(f.size)} · ${formatDate(f.mtime)}${needTc ? ' · <span class="video-progress">需转码</span>' : ''}</div>
           ${progressHtml}
         </div>
         <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" title="删除视频">${icon('trash', 15)}</button>
@@ -682,6 +693,7 @@ function renderLibraryGrid(files) {
       ${sel}
       <div class="video-thumb">
         <span class="play-badge">${icon('play', 20)}</span>
+        ${needTc ? '<span class="video-progress">需转码</span>' : ''}
         ${progressHtml}
         <button class="video-delete" data-delete-name="${escapeHtml(f.name)}" title="删除视频">${icon('trash', 14)}</button>
       </div>

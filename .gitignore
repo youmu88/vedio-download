@@ -12,3 +12,4 @@ config/
 sessions/
 *.part
 task_*/
+.handoff/

@@ -43,13 +43,20 @@ import { createLogger, taskLogger } from './logger.js';
 import { assertPublicUrl } from './security.js';
 import browserPool from './browser-pool.js';
 import listStore from './list-store.js';
+import { probeFfmpeg, isTranscoding, startTranscode, cancelAllTranscodes } from './transcode.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DOWNLOADS_DIR = path.resolve(__dirname, '../downloads');
+// ⭐ 下载目录支持环境变量覆盖：测试/隔离环境可用 VD_DOWNLOADS_DIR 指向独立目录，避免污染真实下载
+const DOWNLOADS_DIR = process.env.VD_DOWNLOADS_DIR ? path.resolve(process.env.VD_DOWNLOADS_DIR) : path.resolve(__dirname, '../downloads');
+
+// ⭐ 视频库扩展名白名单：/api/library 仅列出浏览器可直接播放或可服务端转码的媒体格式。
+// .ts 容器（Chrome/Firefox <video> 不支持）且无转码入口 → 不入库；
+// 本集合同时作为 fs.watch 变更事件的过滤依据（非白名单文件变更不触发刷新推送）。
+const VIDEO_EXTS = new Set(['.mp4', '.webm', '.mkv', '.mov', '.m3u8']);
 
 const PORT = process.env.PORT || 3456;
 const MAX_GLOBAL_BANDWIDTH = process.env.MAX_BANDWIDTH ? parseInt(process.env.MAX_BANDWIDTH, 10) : 0; // 0 = 无限制
@@ -241,6 +248,11 @@ function broadcastTaskList(owner) {
   io.to(`user:${owner}`).emit('task-list-update', taskManager.listByOwner(owner));
 }
 
+// ⭐ 视频库变更定向推送：fs.watch / 下载完成 / 转码后按 owner 房间通知前端刷新视频库
+function broadcastLibrary(owner) {
+  io.to(`user:${owner}`).emit('library-update', { owner });
+}
+
 taskManager.on('task-updated', (task) => {
   io.to(`task:${task.id}`).emit('task-status', task);
   broadcastTaskList(task.owner || 'wilsonwen');
@@ -256,6 +268,7 @@ taskManager.on('task-retry', (task) => {
 
 taskManager.on('task-completed', (task) => {
   broadcastTaskList(task.owner || 'wilsonwen');
+  broadcastLibrary(task.owner || 'wilsonwen'); // ⭐ 下载完成是最高频入库事件，立即推送视频库刷新
   // ⭐ Socket.IO 房间清理：通知客户端退订已完成任务
   io.to(`task:${task.id}`).emit('task-finalized', { taskId: task.id });
 });
@@ -280,6 +293,39 @@ taskManager.on('task-removed', ({ taskId, owner }) => {
 taskManager.on('task-retry-ready', () => {
   scheduleNext();
 });
+
+// ─── 视频库自动扫描：fs.watch 递归监听 downloads → 防抖 → 定向推送 library-update ───
+// ⭐ 平台边界：Docker Desktop (macOS) 的 bind mount 下，宿主侧拷入文件不会传播事件到容器内，
+//    该场景由前端「进页必刷 + visibilitychange + ≤15s 轮询」兜底；本监听覆盖服务自身写盘
+//    （下载完成 rename / 转码产物落盘 / 服务进程内删除）的实时推送。
+const LIBRARY_WATCH_DEBOUNCE_MS = 300;   // 合并批量写盘事件，避免逐文件抖动
+const libraryWatchTimers = new Map();    // owner → debounce timer
+let libraryWatcher = null;
+try {
+  fs.mkdirSync(DOWNLOADS_DIR, { recursive: true });
+  libraryWatcher = fs.watch(DOWNLOADS_DIR, { recursive: true }, (_event, filename) => {
+    try {
+      if (!filename) return;
+      const parts = String(filename).split(/[/\\]/).filter(Boolean);
+      if (parts.length < 2) return; // 非用户子目录内的变更（downloads 根目录级事件，如启动迁移）
+      const owner = parts[0];
+      const base = parts[parts.length - 1];
+      if (base.startsWith('.')) return;                                  // 隐藏文件 / .cache 目录内容
+      if (/\.part($|\.)/i.test(base) || /\.tmp$/i.test(base)) return;   // 下载临时文件（X.part / X.part.mp4）
+      if (!VIDEO_EXTS.has(path.extname(base).toLowerCase())) return;     // 仅白名单媒体文件触发刷新
+      const prev = libraryWatchTimers.get(owner);
+      if (prev) clearTimeout(prev);
+      libraryWatchTimers.set(owner, setTimeout(() => {
+        libraryWatchTimers.delete(owner);
+        broadcastLibrary(owner);
+      }, LIBRARY_WATCH_DEBOUNCE_MS));
+    } catch { /* 单个事件解析失败可忽略 */ }
+  });
+  libraryWatcher.on('error', (err) => log.warn({ err: err.message }, 'fs.watch 视频库监听异常'));
+  log.info({ dir: DOWNLOADS_DIR }, '视频库 fs.watch 监听已启动（library-update 推送）');
+} catch (err) {
+  log.warn({ err: err.message }, 'fs.watch 初始化失败：视频库自动推送不可用（前端轮询兜底）');
+}
 
 // ═══════════════════════════════════════════════════════
 // REST API
@@ -391,10 +437,15 @@ app.get('/api/tasks', (req, res) => {
  */
 app.get('/api/library', (req, res) => {
   const userDir = path.join(DOWNLOADS_DIR, req.user);
-  const runningIds = new Set(
-    taskManager.listByOwner(req.user)
-      .filter(t => [TaskStatus.CREATED, TaskStatus.RUNNING].includes(t.status))
-      .map(t => t.id)
+  // 进行中/排队中任务：既按 taskId 前缀过滤，也按实际输出名过滤
+  // （引擎按 resolveOutputName 的标题命名直接落最终文件，仅 taskId 前缀匹配不住）
+  const runningTasks = taskManager.listByOwner(req.user)
+    .filter(t => [TaskStatus.CREATED, TaskStatus.RUNNING].includes(t.status));
+  const runningIds = new Set(runningTasks.map(t => t.id));
+  const runningOutputs = new Set(
+    runningTasks.flatMap(t => [t.outputFile, t.outputName])
+      .filter(Boolean)
+      .map(n => path.basename(String(n)))
   );
   // 已加入列表（含私密列表）的视频：浏览页不再直接可见，仅存于对应列表
   const listedNames = listStore.allItemNames();
@@ -403,8 +454,13 @@ app.get('/api/library', (req, res) => {
     files = fs.readdirSync(userDir)
       .filter((name) => {
         if (name.startsWith('.')) return false;
-        if (name.endsWith('.part')) return false;
+        // ⭐ 下载临时文件：X.part（旧形态）与 X.part.mp4（直链断点续传写盘形态）
+        if (name.endsWith('.part') || name.includes('.part.')) return false;
         if (runningIds.has(name) || [...runningIds].some(id => name.startsWith(`${id}.`))) return false;
+        // ⭐ 进行中/排队中任务的实际输出文件（标题命名）不得泄漏入库
+        if (runningOutputs.has(name)) return false;
+        // ⭐ 扩展名白名单：仅可播放/可转码格式入库（.txt/.zip/.srt/.ts 等一律隐藏）
+        if (!VIDEO_EXTS.has(path.extname(name).toLowerCase())) return false;
         if (listedNames.has(name)) return false; // ⭐ 已入列表：浏览页隐藏
         const p = path.join(userDir, name);
         let stat;
@@ -454,6 +510,58 @@ app.delete('/api/library/:name', (req, res) => {
     res.json({ ok: true, name });
   } catch (err) {
     res.status(500).json({ error: `删除失败: ${err.message}` });
+  }
+});
+
+/**
+ * POST /api/transcode — 将浏览器无法直接播放的容器（MKV 等）转为 H.264/AAC MP4
+ *
+ * 管线（src/transcode.js）：ffprobe 探测编码 → H.264/AAC 走 -c copy remux（秒级），
+ * 否则 libx264+aac 转码；产物 <原名>.mp4 落同一用户 downloads 目录（白名单内自动入库）；
+ * 进度经 user 房间 socket 推送 transcode-status；未安装 ffmpeg 时明确 503（不静默）。
+ */
+app.post('/api/transcode', async (req, res) => {
+  const ffmpegOk = await probeFfmpeg();
+  if (!ffmpegOk) return res.status(503).json({ error: '服务端未安装 ffmpeg，无法转码' });
+  // ⭐ 防路径穿越：与 DELETE /api/library/:name 同款 basename + startsWith 校验
+  const name = path.basename(req.body?.name || '');
+  if (!name || name === '.' || name === '..' || name.includes('\\')) {
+    return res.status(400).json({ error: '非法文件名' });
+  }
+  const userDir = path.join(DOWNLOADS_DIR, req.user);
+  const inputPath = path.join(userDir, name);
+  if (!inputPath.startsWith(userDir + path.sep)) {
+    return res.status(400).json({ error: '非法文件名' });
+  }
+  const ext = path.extname(name).toLowerCase();
+  if (!VIDEO_EXTS.has(ext)) return res.status(400).json({ error: '不支持的媒体格式' });
+  if (ext === '.mp4' || ext === '.m3u8') {
+    return res.status(400).json({ error: '该格式浏览器可直接播放，无需转码' });
+  }
+  if (!fs.existsSync(inputPath) || !fs.statSync(inputPath).isFile()) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  const outputName = name.slice(0, -ext.length) + '.mp4';
+  if (fs.existsSync(path.join(userDir, outputName))) {
+    return res.status(409).json({ error: `转码产物已存在：${outputName}` });
+  }
+  if (isTranscoding(req.user, name)) {
+    return res.status(409).json({ error: '该文件正在转码中，请稍候' });
+  }
+  try {
+    startTranscode({
+      owner: req.user,
+      name,
+      userDir,
+      onStatus: (s) => {
+        // ⭐ 转码进度经 user 房间 socket 推送（与任务广播同一隔离模型）
+        io.to(`user:${req.user}`).emit('transcode-status', s);
+      },
+    });
+    log.info({ owner: req.user, name, outputName }, '开始转码');
+    res.json({ ok: true, name, output: outputName, status: 'running' });
+  } catch (err) {
+    res.status(500).json({ error: `转码启动失败: ${err.message}` });
   }
 });
 
@@ -1100,6 +1208,12 @@ httpServer.listen(PORT, () => {
   log.info(`  📊 统计: http://0.0.0.0:${PORT}/api/stats`);
   log.info(`  ❤️ 健康检查: http://0.0.0.0:${PORT}/api/health`);
 
+  // ⭐ ffmpeg 可用性探测：转码能力前置声明（不可用时 POST /api/transcode 明确 503，不静默）
+  probeFfmpeg().then((ok) => {
+    if (ok) log.info('ffmpeg 可用，MKV 等容器的服务端转码已启用');
+    else log.warn('未检测到 ffmpeg，转码功能不可用（POST /api/transcode 将返回 503）');
+  });
+
   // 设置全局带宽限制
   if (MAX_GLOBAL_BANDWIDTH > 0) {
     setBandwidthLimit(MAX_GLOBAL_BANDWIDTH);
@@ -1178,6 +1292,9 @@ async function gracefulShutdown(signal) {
       cancelDownload(task.id);
     }
   }
+
+  // 2.5 终止运行中的转码子进程（防僵尸 ffmpeg）
+  cancelAllTranscodes();
 
   // 3. 刷新任务持久化
   taskManager.flush();
