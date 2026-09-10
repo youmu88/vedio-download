@@ -18,6 +18,9 @@ window.PlayerCore = (() => {
   let userPaused = false;
   let playSession = 0;      // 播放会话代际：异步回调代际不匹配时丢弃，防止切换竞态
   let activeBlobUrl = null;  // 当前播放的 blob URL（切换/关闭时 revoke 防泄漏）
+  let currentStream = null;  // 当前边转边播会话 { streamId, name, pfx }（状态条/取消/seek 提示的依据）
+  let streamConvertedSec = 0; // 会话已转换秒数（socket 推送更新；seek 提示与进度显示用）
+  let lastSeekWarnAt = 0;     // seek 超界提示节流
 
   // ═══ 双端差异注入 ═══
   // navigateTo(target): 切换页面（'browse' | 'private'）
@@ -44,6 +47,11 @@ window.PlayerCore = (() => {
     setTitle(titleEl, title, target);
     box.hidden = false;
     removeTranscodeNotice(pfx); // 新播放会话开始时清掉上一轮的转码提示条
+    // 新播放会话开始时清掉上一轮的边转边播状态条；非流式播放则解除会话上下文
+    // （会话本体不受影响：按「转完为止」策略后台继续转换，仅停止 UI 跟进）
+    removeStreamStatus(pfx);
+    if (!(typeof id === 'string' && id.startsWith('stream:'))) currentStream = null;
+    detachSilentFailDetector(video); // 同理拆掉上一会话的静默弃轨检测
     userPaused = false;
     if (currentPlay) upsertHistory({ ...currentPlay, updatedAt: Date.now() });
     currentPlay = { id, title, src, time: 0, duration: 0, updatedAt: Date.now() };
@@ -61,7 +69,12 @@ window.PlayerCore = (() => {
     if (isHls && window.Hls && Hls.isSupported()) {
       // ⚠️ 使用局部 hlsInst 引用（而非全局 hls）：快速切换后全局 hls 已指向新实例，
       // 旧实例的 ERROR 事件若引用全局 hls 会误操作新实例
-      const hlsInst = new Hls({ enableWorker: true, maxBufferLength: 60, fLoader: CachedFragmentLoader });
+      // ⭐ 边转边播流（/api/stream/）：startPosition:0 从第 0 秒起播（EVENT 列表默认会跳到直播边缘）；
+      //   initialLiveManifestSize:1 首个分片就绪即可起播（首屏约 5 秒）
+      const streamCfg = /\/api\/stream\//.test(src)
+        ? { startPosition: 0, initialLiveManifestSize: 1 }
+        : {};
+      const hlsInst = new Hls({ enableWorker: true, maxBufferLength: 60, fLoader: CachedFragmentLoader, ...streamCfg });
       hls = hlsInst;
       let fatalNetErrors = 0;
       hlsInst.loadSource(src);
@@ -114,6 +127,13 @@ window.PlayerCore = (() => {
           video.src = src;
         }
       });
+      // ⭐ 主动触发模型（替代旧「被动等 onerror」）：库内「需转码」文件点击即预判——
+      // 服务端 ffprobe 编码 × 客户端 canPlayType，不可播直接给转码入口，不再让用户先看黑屏；
+      // 同时挂上静默弃轨检测，覆盖探测判「可播」但实际零帧输出的浮动面
+      if (typeof id === 'string' && id.startsWith('file:') && needsTranscode(title)) {
+        probeLibraryPlayability(session, pfx, title);
+        attachSilentFailDetector(session, pfx, title, video);
+      }
     }
 
     const prev = history.find(h => h.id === id);
@@ -141,12 +161,24 @@ window.PlayerCore = (() => {
       currentPlay.time = currentPlay.duration;
       upsertHistory({ ...currentPlay, updatedAt: Date.now() });
     };
+    video.onseeking = () => {
+      if (session !== playSession || !currentStream) return;
+      // 边转边播会话：目标超出已转换范围 → 提示（内容尚不存在，播放会停在转换前沿）
+      if (streamConvertedSec > 0 && video.currentTime > streamConvertedSec + 3) {
+        const now = Date.now();
+        if (now - lastSeekWarnAt > 4000) {
+          lastSeekWarnAt = now;
+          showToast(`该位置尚未转换完成（已转换到 ${fmtSec(streamConvertedSec)}）`);
+        }
+      }
+    };
     video.onerror = () => {
       if (session !== playSession) return;
-      // ⭐ MKV 等浏览器无法直接播放的库内文件：给出去转码入口而非裸报错
+      // ⭐ 兜底信号（三信号之一）：主动预判/静默检测之外的显式失败（如 WebKit 拒收
+      // matroska 容器、文件损坏）仍走 error 事件 → 触发边转边播而非裸报错
       if (currentPlay && typeof currentPlay.id === 'string' && currentPlay.id.startsWith('file:')
         && needsTranscode(currentPlay.title)) {
-        showTranscodeNotice(pfx, currentPlay.title);
+        startStreamAndPlay(pfx, currentPlay.title);
       } else {
         showToast('播放失败：请确认链接可访问且格式受支持', true);
       }
@@ -170,7 +202,9 @@ window.PlayerCore = (() => {
     video.pause();
     video.removeAttribute('src');
     video.load();
+    detachSilentFailDetector(video);
     removeTranscodeNotice(pfx);
+    removeStreamStatus(pfx);
     box.hidden = true;
     if (target === 'browse') loadLibrary();
   }
@@ -204,6 +238,13 @@ window.PlayerCore = (() => {
 
   // ═══ MKV 等不可直播格式的服务端转码 ═══
   // 浏览器 <video> 无法直接播放的容器/编码（.ts 容器 Chrome/Firefox 不支持；白名单已拦在库外）
+  //
+  // 转码入口触发模型（三信号，单一入口 showTranscodeNotice）：
+  //   1. 主动预判（主）：点击「需转码」文件即 ffprobe 编码 × canPlayType 判定，不可播直接给入口；
+  //   2. 静默弃轨检测：Chromium 对「容器可 demux + 编码不可解」是 canplaythrough 照发、
+  //      videoWidth 恒 0、零帧输出且不抛 error —— loadeddata/canplaythrough 后仍无画面即给入口；
+  //   3. onerror 兜底：显式失败（容器拒收/损坏文件）保留旧链路。
+  // 旧「仅 onerror 驱动」模型已被上列替代删除（根因：Chromium 静默失败不抛 error，入口结构性不可达）。
   const TRANSCODE_EXTS = new Set(['.mkv', '.ts', '.avi', '.wmv', '.flv', '.mpg', '.mpeg', '.vob', '.3gp']);
 
   function extOf(name) {
@@ -215,12 +256,74 @@ window.PlayerCore = (() => {
     return TRANSCODE_EXTS.has(extOf(name));
   }
 
+  // ── 主动可播性判定：容器/编码 → MIME，交浏览器 canPlayType ──
+  // 只判视频轨：不支持的音轨浏览器会静默弃轨照常出画面（复现报告 C 形态实证），不构成「不可播」
+  const CONTAINER_MIME = {
+    '.mkv': 'video/x-matroska', '.mp4': 'video/mp4', '.webm': 'video/webm',
+    '.mov': 'video/quicktime', '.ts': 'video/mp2t', '.avi': 'video/x-msvideo',
+    '.wmv': 'video/x-ms-wmv', '.flv': 'video/x-flv', '.mpg': 'video/mpeg',
+    '.mpeg': 'video/mpeg', '.vob': 'video/mpeg', '.3gp': 'video/3gpp',
+  };
+  const VIDEO_CODEC_MIME = {
+    h264: 'avc1.42E01E', avc1: 'avc1.42E01E',
+    hevc: 'hvc1.1.6.L93.B0', h265: 'hvc1.1.6.L93.B0',
+    vp9: 'vp09.00.10.08', vp8: 'vp8', av1: 'av01.0.05M.08',
+    mpeg4: 'mp4v.20.8',
+  };
+
+  /** 客户端能力判定：服务端探测到的编码 × 本浏览器 canPlayType（浮动面：同 HEVC 真机硬解可直解） */
+  function clientCanPlay(ext, videoCodec) {
+    const container = CONTAINER_MIME[ext];
+    if (!container) return false;  // 未知容器：判不可播，交给转码
+    if (!videoCodec) return false; // 无视频流（纯音频）：同样给转码入口
+    const cs = VIDEO_CODEC_MIME[videoCodec];
+    const type = cs ? `${container}; codecs="${cs}"` : container;
+    const verdict = document.createElement('video').canPlayType(type);
+    return verdict === 'probably' || verdict === 'maybe';
+  }
+
+  /** 点击「需转码」文件即预判：服务端 ffprobe 编码 × 客户端能力 → 不可播直接启动边转边播 */
+  async function probeLibraryPlayability(session, pfx, title) {
+    let info = null;
+    try {
+      const tk = getAuthToken();
+      const res = await fetch(`/api/media-info?name=${encodeURIComponent(title)}${tk ? `&token=${encodeURIComponent(tk)}` : ''}`);
+      if (res.ok) info = await res.json().catch(() => null);
+    } catch { /* 探测失败不阻塞播放：交由静默检测 / onerror 兜底 */ }
+    if (session !== playSession || !info) return;
+    // ⭐ 点击即触发（替代旧「手动点按钮等全量转码」）：不可播直接启动边转边播会话
+    if (!clientCanPlay(extOf(title), info.videoCodec)) startStreamAndPlay(pfx, title);
+  }
+
+  // ── 静默弃轨检测（信号 2）：videoWidth 恒 0 且无 error → 触发边转边播 ──
+  // 处理器按 video 元素登记，openPlayer 重挂 / closePlayer 拆除，不累积
+  const silentFailHandlers = new Map();
+
+  function attachSilentFailDetector(session, pfx, title, video) {
+    detachSilentFailDetector(video);
+    const handler = () => {
+      if (session !== playSession || video.error) return;
+      if (video.readyState >= 3 && video.videoWidth === 0) startStreamAndPlay(pfx, title);
+    };
+    silentFailHandlers.set(video, handler);
+    video.addEventListener('loadeddata', handler);
+    video.addEventListener('canplaythrough', handler);
+  }
+
+  function detachSilentFailDetector(video) {
+    const h = silentFailHandlers.get(video);
+    if (!h) return;
+    video.removeEventListener('loadeddata', h);
+    video.removeEventListener('canplaythrough', h);
+    silentFailHandlers.delete(video);
+  }
+
   function removeTranscodeNotice(pfx) {
     const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
     box?.querySelector('.transcode-notice')?.remove();
   }
 
-  /** 播放失败且属于可转码格式时：在播放器盒内展示提示条 + 「转码后播放」按钮 */
+  /** 边转边播启动失败时的兜底入口：播放器盒内提示条 + 「开始边转边播」按钮 */
   function showTranscodeNotice(pfx, name) {
     const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
     if (!box || box.querySelector('.transcode-notice')) return;
@@ -229,42 +332,145 @@ window.PlayerCore = (() => {
     bar.setAttribute('style', 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;'
       + 'background:rgba(255,204,0,.12);border-top:1px solid rgba(255,204,0,.35);font-size:13px;');
     const label = document.createElement('span');
-    label.textContent = `${extOf(name).toUpperCase()} 格式浏览器无法直接播放，可转码为 MP4 后观看`;
+    label.textContent = `${extOf(name).toUpperCase()} 格式浏览器无法直接播放，可边转边播观看`;
     const btn = document.createElement('button');
-    btn.textContent = '转码后播放';
+    btn.textContent = '开始边转边播';
     btn.setAttribute('style', 'flex-shrink:0;padding:4px 12px;border:none;border-radius:14px;'
       + 'background:var(--accent,#0a84ff);color:#fff;font-size:13px;cursor:pointer;');
-    btn.addEventListener('click', () => { bar.remove(); requestTranscodeAndPlay(name); });
+    btn.addEventListener('click', () => { bar.remove(); startStreamAndPlay(pfx, name); });
     bar.appendChild(label);
     bar.appendChild(btn);
     box.appendChild(bar);
   }
 
-  // 转码进度经 socket → macos.js/ios.js 转发为 window CustomEvent，此处订阅并自动续播
-  let transcodeWaitOutput = null;
-  let transcodeListenerBound = false;
+  // ── 边转边播：会话启动 + 状态条（进度/停止） + socket 事件订阅 ──
+  // （全面替代旧「全量转码完成才播」模型：点击不可播文件 → 启动流式会话 → 从第 0 秒起播，
+  //   转换在后台限速进行且始终领先播放；完成后自动合封 MP4 入库）
 
-  function ensureTranscodeListener() {
-    if (transcodeListenerBound) return;
-    transcodeListenerBound = true;
-    window.addEventListener('transcode-status', (ev) => {
-      const s = ev.detail || {};
-      if (!transcodeWaitOutput || s.output !== transcodeWaitOutput) return;
-      if (s.status === 'running') {
-        showToast(`转码中 ${s.progress ?? 0}%`);
-      } else if (s.status === 'done') {
-        transcodeWaitOutput = null;
-        showToast('转码完成，开始播放');
-        playLibrary(s.output);
-      } else if (s.status === 'failed') {
-        transcodeWaitOutput = null;
-        showToast(`转码失败：${s.error || '未知错误'}`, true);
-      }
-    });
+  function fmtSec(sec) {
+    const s = Math.max(0, Math.round(sec));
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const ss = String(s % 60).padStart(2, '0');
+    return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
   }
 
-  /** 请求服务端转码，完成后自动播放产物 MP4 */
-  async function requestTranscodeAndPlay(name) {
+  function streamStatusEl(pfx) {
+    const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+    return box ? box.querySelector('.stream-status') : null;
+  }
+
+  /** 展示/更新边转边播状态条（含「停止转换」按钮；同一播放器盒内单实例） */
+  function showStreamStatus(pfx, text) {
+    const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+    if (!box) return;
+    let bar = box.querySelector('.stream-status');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.className = 'stream-status';
+      bar.setAttribute('style', 'display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 12px;'
+        + 'background:rgba(10,132,255,.12);border-top:1px solid rgba(10,132,255,.35);font-size:13px;');
+      const label = document.createElement('span');
+      label.className = 'stream-status-text';
+      const btn = document.createElement('button');
+      btn.className = 'stream-cancel';
+      btn.textContent = '停止转换';
+      btn.setAttribute('style', 'flex-shrink:0;padding:4px 12px;border:none;border-radius:14px;'
+        + 'background:rgba(255,255,255,.18);color:inherit;font-size:13px;cursor:pointer;');
+      btn.addEventListener('click', cancelCurrentStream);
+      bar.appendChild(label);
+      bar.appendChild(btn);
+      box.appendChild(bar);
+    }
+    bar.querySelector('.stream-status-text').textContent = text;
+  }
+
+  function updateStreamStatus(pfx, text) {
+    const el = streamStatusEl(pfx);
+    if (el) el.querySelector('.stream-status-text').textContent = text;
+  }
+
+  function removeStreamStatus(pfx) {
+    const box = $(pfx ? 'privateInlinePlayer' : 'inlinePlayer');
+    if (box) box.querySelector('.stream-status')?.remove();
+  }
+
+  /** 停止后台转换（用户手动取消；会话终止、分片稍后由清理器回收，仅能观看已转换部分） */
+  function cancelCurrentStream() {
+    if (!currentStream) return;
+    const { streamId, pfx } = currentStream;
+    fetch(`/api/stream/${streamId}/cancel`, { method: 'POST' })
+      .then((r) => r.json().catch(() => ({})))
+      .then(() => { showToast('已停止后台转换（仅可观看已转换部分）'); removeStreamStatus(pfx); })
+      .catch((err) => showToast(`停止失败：${err.message}`, true));
+  }
+
+  // 会话进度经 socket → macos.js/ios.js 转发为 window CustomEvent，此处按 streamId 订阅
+  window.addEventListener('transcode-status', (ev) => {
+    const s = ev.detail || {};
+    if (!currentStream || s.streamId !== currentStream.streamId) return;
+    if (s.status === 'running') {
+      streamConvertedSec = s.convertedSec || 0;
+      updateStreamStatus(currentStream.pfx, `后台转换中 ${s.progress ?? 0}%（已转换 ${fmtSec(streamConvertedSec)}）`);
+    } else if (s.status === 'finalizing') {
+      updateStreamStatus(currentStream.pfx, '转换完成，封装入库中…');
+    } else if (s.status === 'done') {
+      if (s.durationSec) streamConvertedSec = s.durationSec;
+      removeStreamStatus(currentStream.pfx);
+      showToast('转换完成，MP4 已入库');
+    } else if (s.status === 'failed') {
+      removeStreamStatus(currentStream.pfx);
+      showToast(`转换失败：${s.error || '未知错误'}`, true);
+    } else if (s.status === 'cancelled') {
+      removeStreamStatus(currentStream.pfx);
+    }
+  });
+
+  /** 等待播放列表出现首个分片（转换启动约 2-5 秒；404=尚未生成，继续轮询） */
+  async function waitPlaylistReady(url, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      try {
+        const res = await fetch(url, { cache: 'no-store' });
+        if (res.ok) {
+          const text = await res.text();
+          if (text.includes('#EXTINF')) return true;
+        }
+      } catch { /* 网络瞬态错误继续轮询 */ }
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    return false;
+  }
+
+  /** 起播边转边播流：等待首分片 → 用 HLS 播放器打开（src 指向 /api/stream/…） */
+  async function playStream(pfx, name, streamId, playlistPath) {
+    const tk = getAuthToken();
+    const url = `${playlistPath}${tk ? `?token=${encodeURIComponent(tk)}` : ''}`;
+    showStreamStatus(pfx, '边转边播启动中…');
+    const ready = await waitPlaylistReady(url, 25000);
+    if (!ready) {
+      removeStreamStatus(pfx);
+      showToast('流启动超时，请重试', true);
+      showTranscodeNotice(pfx, name);
+      return;
+    }
+    currentStream = { streamId, name, pfx };
+    streamConvertedSec = 0;
+    openPlayer(name, url, `stream:${streamId}`, pfx === 'private' ? 'private' : 'browse');
+    updateStreamStatus(pfx, '边转边播中…');
+  }
+
+  /**
+   * 点击「需转码」文件即触发边转边播（替代旧「等全量转码完成」）：
+   *   200 → 起播流；409 exists → 直接播 MP4 产物；409 running → 起播现有会话流；
+   *   失败 → 落回手动「边转边播」入口（showTranscodeNotice）并提示原因
+   */
+  let startingStreamName = null; // 启动中的文件名：探测+静默检测双信号并发时防重复 POST
+  async function startStreamAndPlay(pfx, name) {
+    if (startingStreamName === name) return;
+    if (currentStream && currentStream.name === name
+      && currentPlay && currentPlay.id === `stream:${currentStream.streamId}`) return; // 同一文件正在播流
+    startingStreamName = name;
     try {
       const res = await fetch('/api/transcode', {
         method: 'POST',
@@ -272,12 +478,29 @@ window.PlayerCore = (() => {
         body: JSON.stringify({ name }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) { showToast(data.error || `转码请求失败 (${res.status})`, true); return; }
-      transcodeWaitOutput = data.output;
-      ensureTranscodeListener();
-      showToast('已提交转码任务，完成后自动播放');
+      if (!res.ok) {
+        // ⭐ 409 续接：产物已存在（如用户重进页面）→ 直接播产物；转换中 → 起播现有会话流
+        if (res.status === 409 && data.output) {
+          if (data.code === 'exists') {
+            showToast('转码产物已存在，直接播放');
+            playLibrary(data.output);
+            return;
+          }
+          if (data.code === 'running' && data.playlist && data.streamId) {
+            await playStream(pfx, name, data.streamId, data.playlist);
+            return;
+          }
+        }
+        showToast(data.error || `转换请求失败 (${res.status})`, true);
+        showTranscodeNotice(pfx, name);
+        return;
+      }
+      await playStream(pfx, name, data.streamId, data.playlist);
     } catch (err) {
-      showToast(`转码请求失败: ${err.message}`, true);
+      showToast(`转换请求失败: ${err.message}`, true);
+      showTranscodeNotice(pfx, name);
+    } finally {
+      if (startingStreamName === name) startingStreamName = null;
     }
   }
 

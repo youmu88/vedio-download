@@ -43,7 +43,7 @@ import { createLogger, taskLogger } from './logger.js';
 import { assertPublicUrl } from './security.js';
 import browserPool from './browser-pool.js';
 import listStore from './list-store.js';
-import { probeFfmpeg, isTranscoding, startTranscode, cancelAllTranscodes } from './transcode.js';
+import { probeFfmpeg, probeMedia, startStreamSession, findActiveSession, getSession, touchSession, cancelSession, cancelAllSessions, sweepSessions, cleanupOrphanDirs } from './transcode.js';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -327,6 +327,11 @@ try {
   log.warn({ err: err.message }, 'fs.watch 初始化失败：视频库自动推送不可用（前端轮询兜底）');
 }
 
+// ⭐ 流式转换会话：启动清理孤儿分片目录（上次进程残留）+ 定时清理结束态会话
+// （点开头目录 .vd-stream：不入库、不触发库刷新，清理周期为分钟级）
+try { cleanupOrphanDirs(DOWNLOADS_DIR); } catch (err) { log.warn({ err: err.message }, '清理孤儿流式会话目录失败'); }
+setInterval(sweepSessions, 60 * 1000).unref();
+
 // ═══════════════════════════════════════════════════════
 // REST API
 // ═══════════════════════════════════════════════════════
@@ -514,11 +519,13 @@ app.delete('/api/library/:name', (req, res) => {
 });
 
 /**
- * POST /api/transcode — 将浏览器无法直接播放的容器（MKV 等）转为 H.264/AAC MP4
+ * POST /api/transcode — 确保某文件的流式转换会话（边转边播）
  *
- * 管线（src/transcode.js）：ffprobe 探测编码 → H.264/AAC 走 -c copy remux（秒级），
- * 否则 libx264+aac 转码；产物 <原名>.mp4 落同一用户 downloads 目录（白名单内自动入库）；
- * 进度经 user 房间 socket 推送 transcode-status；未安装 ffmpeg 时明确 503（不静默）。
+ * 语义（全面替换旧「全量转码完成才播」模型）：点击浏览器无法直接播放的文件时调用。
+ *   首次 → 200 返回 streamId/playlist（前端即可起播，后台限速转换持续领先）；
+ *   产物已存在 → 409 code='exists'（前端直接播 MP4 产物）；
+ *   正在转换 → 409 code='running'（前端直接播现有会话的播放列表）；
+ * 转换完成自动合封 <原名>.mp4 入库；进度经 user 房间 socket 推送 transcode-status。
  */
 app.post('/api/transcode', async (req, res) => {
   const ffmpegOk = await probeFfmpeg();
@@ -543,25 +550,148 @@ app.post('/api/transcode', async (req, res) => {
   }
   const outputName = name.slice(0, -ext.length) + '.mp4';
   if (fs.existsSync(path.join(userDir, outputName))) {
-    return res.status(409).json({ error: `转码产物已存在：${outputName}` });
+    // code/output 供前端机器可读地续接：产物已存在 → 直接播产物
+    return res.status(409).json({ error: `转码产物已存在：${outputName}`, code: 'exists', output: outputName });
   }
-  if (isTranscoding(req.user, name)) {
-    return res.status(409).json({ error: '该文件正在转码中，请稍候' });
+  const active = findActiveSession(req.user, name);
+  if (active) {
+    // code/streamId/playlist 供前端机器可读地续接：转换中 → 直接播现有会话流
+    return res.status(409).json({
+      error: '该文件正在边转边播中',
+      code: 'running',
+      output: outputName,
+      streamId: active.streamId,
+      playlist: `/api/stream/${active.streamId}/index.m3u8`,
+    });
   }
   try {
-    startTranscode({
+    const session = startStreamSession({
       owner: req.user,
       name,
       userDir,
       onStatus: (s) => {
-        // ⭐ 转码进度经 user 房间 socket 推送（与任务广播同一隔离模型）
+        // ⭐ 转换进度经 user 房间 socket 推送（与任务广播同一隔离模型）
         io.to(`user:${req.user}`).emit('transcode-status', s);
       },
     });
-    log.info({ owner: req.user, name, outputName }, '开始转码');
-    res.json({ ok: true, name, output: outputName, status: 'running' });
+    log.info({ owner: req.user, name, outputName, streamId: session.streamId }, '开始边转边播转换');
+    res.json({
+      ok: true,
+      name,
+      output: outputName,
+      status: 'running',
+      streamId: session.streamId,
+      playlist: `/api/stream/${session.streamId}/index.m3u8`,
+    });
   } catch (err) {
-    res.status(500).json({ error: `转码启动失败: ${err.message}` });
+    const status = err.code === 'busy' ? 429 : 500;
+    res.status(status).json({ error: `转换启动失败: ${err.message}` });
+  }
+});
+
+/**
+ * 流式会话路由公共前置：鉴权 + 会话归属校验 + 访问打点
+ * 返回 session（调用方继续处理）；失败时已发送响应并返回 null。
+ */
+function resolveStreamSession(req, res) {
+  const token = resolveToken(req);
+  const username = token ? listStore.getSessionUser(token) : null;
+  if (!username) {
+    res.status(401).json({ error: '未登录：请先登录' });
+    return null;
+  }
+  const id = String(req.params.id || '');
+  if (!/^[a-f0-9]{32}$/.test(id)) {
+    res.status(404).json({ error: '流式会话不存在' });
+    return null;
+  }
+  const session = getSession(id);
+  if (!session || session.owner !== username) {
+    res.status(404).json({ error: '流式会话不存在' });
+    return null;
+  }
+  touchSession(id);
+  return session;
+}
+
+/**
+ * GET /api/stream/:id/index.m3u8 — 边转边播播放列表（随转换增长的 EVENT 列表）
+ *
+ * ⭐ 服务端重写分片行附加 token：分片加载器（CachedFragmentLoader）以 credentials:'omit'
+ * 请求、局域网 http 下 SameSite=None Cookie 不可用 —— token 入 URL 是唯一全场景（hls.js/原生 HLS）成立的鉴权方式。
+ */
+app.get('/api/stream/:id/index.m3u8', (req, res) => {
+  const session = resolveStreamSession(req, res);
+  if (!session) return;
+  let content;
+  try {
+    content = fs.readFileSync(session.playlistPath, 'utf8');
+  } catch {
+    return res.status(404).json({ error: '播放列表尚未生成（首分片产出中）' });
+  }
+  const token = resolveToken(req);
+  const rewritten = content.split('\n').map((line) => {
+    const t = line.trim();
+    if (!t || t.startsWith('#')) return line;
+    return line.replace(t, `${t}${t.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`);
+  }).join('\n');
+  res.set('Content-Type', 'application/vnd.apple.mpegurl');
+  res.set('Cache-Control', 'no-store');
+  res.send(rewritten);
+});
+
+/** GET /api/stream/:id/:segment — HLS 分片文件（文件名为服务端生成的固定格式） */
+app.get('/api/stream/:id/:segment', (req, res) => {
+  const session = resolveStreamSession(req, res);
+  if (!session) return;
+  const seg = String(req.params.segment || '');
+  if (!/^seg\d{5}\.ts$/.test(seg)) return res.status(404).json({ error: '分片不存在' });
+  const filePath = path.join(session.dir, seg);
+  if (!filePath.startsWith(session.dir + path.sep) || !fs.existsSync(filePath)) {
+    return res.status(404).json({ error: '分片不存在' });
+  }
+  // dotfiles:'allow'：会话目录 .vd-stream 为点开头，默认策略会把含隐藏目录段的路径当 404
+  res.sendFile(filePath, { dotfiles: 'allow' });
+});
+
+/** POST /api/stream/:id/cancel — 取消后台转换（用户手动停止；分片目录稍后由清理器回收） */
+app.post('/api/stream/:id/cancel', (req, res) => {
+  const session = resolveStreamSession(req, res);
+  if (!session) return;
+  const ok = cancelSession(session.streamId);
+  res.json({ ok, streamId: session.streamId, status: session.status });
+});
+
+/**
+ * GET /api/media-info?name=… — ffprobe 探测库内媒体文件的音视频编码
+ *
+ * 主动触发模型的前端半部：浏览页点击「需转码」文件时，前端用它拿到真实编码，
+ * 与浏览器 canPlayType 组合预判可播性（替代被动等 video.onerror 的旧模型）。
+ */
+app.get('/api/media-info', async (req, res) => {
+  const ffmpegOk = await probeFfmpeg();
+  if (!ffmpegOk) return res.status(503).json({ error: '服务端未安装 ffmpeg，无法探测媒体信息' });
+  // ⭐ 防路径穿越：与 POST /api/transcode 同款 basename + startsWith 校验
+  const name = path.basename(req.query?.name || '');
+  if (!name || name === '.' || name === '..' || name.includes('\\')) {
+    return res.status(400).json({ error: '非法文件名' });
+  }
+  const userDir = path.join(DOWNLOADS_DIR, req.user);
+  const filePath = path.join(userDir, name);
+  if (!filePath.startsWith(userDir + path.sep)) {
+    return res.status(400).json({ error: '非法文件名' });
+  }
+  if (!VIDEO_EXTS.has(path.extname(name).toLowerCase())) {
+    return res.status(400).json({ error: '不支持的媒体格式' });
+  }
+  if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    return res.status(404).json({ error: '文件不存在' });
+  }
+  try {
+    const { videoCodec, audioCodec, durationSec } = await probeMedia(filePath);
+    res.json({ name, videoCodec, audioCodec, durationSec });
+  } catch (err) {
+    res.status(500).json({ error: `媒体探测失败: ${err.message}` });
   }
 });
 
@@ -1293,8 +1423,8 @@ async function gracefulShutdown(signal) {
     }
   }
 
-  // 2.5 终止运行中的转码子进程（防僵尸 ffmpeg）
-  cancelAllTranscodes();
+  // 2.5 终止运行中的转换子进程（防僵尸 ffmpeg）
+  cancelAllSessions();
 
   // 3. 刷新任务持久化
   taskManager.flush();

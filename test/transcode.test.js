@@ -3,7 +3,8 @@
  *
  * 覆盖（对 src/index.js POST /api/transcode 与 src/transcode.js）：
  *   ⑤ 转码链路：POST /api/transcode → transcode-status（user 房间推送）→ 产物 <原名>.mp4 入库
- *   ⑥ 重复转码互斥：产物已存在/运行中重复提交 → 409
+ *   ⑥ 重复转码互斥：产物已存在重复提交 → 409 + code='exists' + output（前端续接契约）
+ *   ⑥b 重复转码互斥：转码进行中重复提交 → 409 + code='running' + output（前端订阅续播契约）
  *   ⑦ 路径穿越防护：../ 等非法 name 被拒绝
  *
  * ffmpeg 探测契约：`ffmpeg -version` 可用则跑真实断言；不可用则 t.skip（不失败）。
@@ -27,6 +28,9 @@ const ENTRY = path.join(REPO_ROOT, 'src', 'index.js');
 
 const SAMPLE_MKV = 'transcode-sample.mkv';
 const OUTPUT_MP4 = 'transcode-sample.mp4';
+// ⑥b 专用样本：HEVC 源 → 走 libx264 重编码管线（秒级以上），保证二次 POST 稳定落在 running 窗口内
+const SAMPLE_RUNNING = 'transcode-running.mkv';
+const OUTPUT_RUNNING = 'transcode-running.mp4';
 
 // ─── 共享夹具状态 ────────────────────────────────────
 let tmpRoot = null;
@@ -36,6 +40,7 @@ let token = null;
 let username = null;
 let userDir = null;
 let ffmpegOk = false;
+let libx265Ok = false;
 let childLogTail = '';
 
 // ─── 小工具（与 library.test.js 保持同构） ───────────
@@ -104,16 +109,16 @@ function probeFfmpegBin() {
   });
 }
 
-/** 用 ffmpeg lavfi 生成一个 0.6s 的 H.264/AAC MKV 样本（走 remux 快速管线，产物确定性高） */
-function makeSampleMkv(dest) {
+/** 用 ffmpeg lavfi 生成一个 0.6s 样本（默认 libx264 走 remux 快速管线；libx265 走重编码管线） */
+function makeSampleMkv(dest, vcodec = 'libx264') {
   return new Promise((resolve, reject) => {
     execFile('ffmpeg', [
       '-y', '-f', 'lavfi', '-i', 'testsrc=duration=0.6:size=160x120:rate=12',
       '-f', 'lavfi', '-i', 'sine=duration=0.6:frequency=440',
-      '-shortest', '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac',
+      '-shortest', '-c:v', vcodec, '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac',
       dest,
     ], { timeout: 30000 }, (err, _stdout, stderr) => {
-      if (err) return reject(new Error(`生成 MKV 样本失败: ${err.message}\n${String(stderr).slice(-400)}`));
+      if (err) return reject(new Error(`生成 MKV 样本失败（${vcodec}）: ${err.message}\n${String(stderr).slice(-400)}`));
       resolve();
     });
   });
@@ -155,6 +160,13 @@ async function spawnServer(attempt = 0) {
 // ─── 装配 / 拆卸 ────────────────────────────────────
 before(async () => {
   ffmpegOk = await probeFfmpegBin();
+  if (ffmpegOk) {
+    const encoders = await new Promise((resolve) => {
+      execFile('ffmpeg', ['-hide_banner', '-encoders'], { timeout: 15000, maxBuffer: 4 * 1024 * 1024 },
+        (err, stdout) => resolve(err ? '' : String(stdout)));
+    });
+    libx265Ok = /libx265/.test(encoders);
+  }
   if (!ffmpegOk) return; // 无 ffmpeg 环境：用例在 test 体内 t.skip，不装配服务
 
   tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'vd-transcode-'));
@@ -179,6 +191,7 @@ before(async () => {
   else throw new Error(`无法定位服务生效的用户下载目录（${tmpCandidate} 与 ${repoCandidate} 均不存在）`);
 
   await makeSampleMkv(path.join(userDir, SAMPLE_MKV));
+  if (libx265Ok) await makeSampleMkv(path.join(userDir, SAMPLE_RUNNING), 'libx265');
 });
 
 after(async () => {
@@ -230,11 +243,52 @@ test('⑤ MKV 转码：POST /api/transcode 后产物 MP4 入库且经 socket 推
   }
 });
 
-// ─── ⑥ 重复转码互斥 ─────────────────────────────────
-test('⑥ 重复转码互斥：产物已存在时再次提交应被 409 拒绝', async (t) => {
+// ─── ⑥ 重复转码互斥：产物已存在 → 409 + exists 续接契约 ──
+test('⑥ 重复转码互斥：产物已存在时再次提交应被 409 拒绝并携带 code=exists/output', async (t) => {
   if (!ffmpegOk) return t.skip('未检测到 ffmpeg，跳过转码断言');
   const res = await api('POST', '/api/transcode', { authToken: token, body: { name: SAMPLE_MKV } });
   assert.equal(res.status, 409, `重复转码应被 409 拒绝，实际 ${res.status}: ${JSON.stringify(res.json)}`);
+  // 409 机器可读续接契约（public/js/player-core.js requestTranscodeAndPlay exists 分支消费）：
+  // code='exists' → 前端直接 playLibrary(output)；output 必须是产物名
+  assert.equal(res.json.code, 'exists',
+    `409 响应应携带 code='exists'（前端 exists 续接分支依赖），实际: ${JSON.stringify(res.json)}`);
+  assert.equal(res.json.output, OUTPUT_MP4,
+    `409 响应应携带 output='${OUTPUT_MP4}'（前端 playLibrary(output) 依赖），实际: ${JSON.stringify(res.json)}`);
+  assert.ok(String(res.json.error || '').includes(OUTPUT_MP4), 'error 文案应含产物名（人类可读半部）');
+});
+
+// ─── ⑥b 重复转码互斥：转码进行中 → 409 + running 续接契约 ──
+test('⑥b 重复转码互斥：转码进行中再次提交应被 409 拒绝并携带 code=running/output', async (t) => {
+  if (!ffmpegOk) return t.skip('未检测到 ffmpeg，跳过转码断言');
+  if (!libx265Ok) return t.skip('ffmpeg 无 libx265 编码器，无法生成 HEVC 源（重编码管线保证 running 窗口），跳过');
+
+  const { ws, frames } = await openSocketIO(token);
+  try {
+    // HEVC 源走 libx264 重编码管线（秒级以上），且 startTranscode 在返回 200 前已同步置
+    // running 标志（src/transcode.js L114）→ 紧随其后的二次 POST 必然落在 running 窗口内
+    const first = await api('POST', '/api/transcode', { authToken: token, body: { name: SAMPLE_RUNNING } });
+    assert.equal(first.status, 200, `首次提交应 200，实际 ${first.status}: ${JSON.stringify(first.json)}`);
+    assert.equal(first.json.output, OUTPUT_RUNNING, '首次提交响应应声明产物名');
+    assert.equal(first.json.status, 'running', '首次提交响应应为 running');
+
+    // 不等待完成、立即二次提交（毫秒级间隔 vs 重编码秒级耗时，窗口确定性由夹具形态保证）
+    const second = await api('POST', '/api/transcode', { authToken: token, body: { name: SAMPLE_RUNNING } });
+    assert.equal(second.status, 409, `转码中二次提交应 409，实际 ${second.status}: ${JSON.stringify(second.json)}`);
+    // 409 机器可读续接契约（player-core.js running 分支消费）：code='running' → 前端订阅
+    // transcode-status、done 后自动 playLibrary(output)
+    assert.equal(second.json.code, 'running',
+      `409 响应应携带 code='running'（前端 running 续播分支依赖），实际: ${JSON.stringify(second.json)}`);
+    assert.equal(second.json.output, OUTPUT_RUNNING,
+      `409 响应应携带 output='${OUTPUT_RUNNING}'，实际: ${JSON.stringify(second.json)}`);
+
+    // 等待转码真正完成再收尾（不留悬挂 ffmpeg 进程影响拆卸/后续用例）
+    await waitFor(() => frames.some((f) => {
+      if (!f.startsWith('42["transcode-status",')) return false;
+      try { return JSON.parse(f.slice(2))[1]?.status === 'done'; } catch { return false; }
+    }), { timeoutMs: 45000, intervalMs: 200, label: '⑥b 转码 done（收尾）' });
+  } finally {
+    try { ws.close(); } catch { /* noop */ }
+  }
 });
 
 // ─── ⑦ 路径穿越防护 ─────────────────────────────────
