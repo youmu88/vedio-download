@@ -1,8 +1,10 @@
 import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { join, resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = '/Users/wilsonwen/code/video-download'
+// 项目根由脚本位置推导（历史硬编码绝对路径已随机器迁移失效）
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const PORT = 3198
 const OUT_DIR = '/tmp/vd-verify-shots'
 const DATA_DIR = '/tmp/vd-dev-verify'
