@@ -181,21 +181,56 @@ async function main() {
     check('左缘起手横滑不 seek（让位系统返回）', Math.abs(st.t - 30) < 0.01, `t=${st.t.toFixed(2)}`)
     check('左缘返回手势仍存活（慢速右滑回弹，未导航）', appStill, 'appStage 已隐藏')
 
-    // ── A. 双指外扩 → 全屏 + 等比撑满 ──
-    await pinch(cdp, vc.x, vc.y, 40, 190)
+    // ── A1. 外扩至中途松手 → 磁性吸附「铺满全屏」档（自动适配屏幕比例，零黑框）──
+    await pinch(cdp, vc.x, vc.y, 40, 130) // 跟手至 ≈3.25x，最近档为铺满档
+    await page.waitForFunction(() => { // 等吸附动画结束（transition 清除）
+      const v = document.getElementById('inlinePlayerVideo')
+      const tr = getComputedStyle(v).transform
+      if (!tr || tr === 'none') return false
+      const sx = new DOMMatrixReadOnly(tr).a
+      const w = v.offsetWidth || 1, h = v.offsetHeight || 1
+      const vw2 = v.videoWidth || 16, vh2 = v.videoHeight || 9
+      const cw = Math.min(w, vw2 * h / vh2), ch = Math.min(h, vh2 * w / vw2)
+      return Math.abs(sx - Math.max(w / cw, h / ch)) < 0.06
+    }, null, { timeout: 2500 }).catch(() => {})
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
     check('双指外扩 → 播放器进入全屏浮层', st.fs && st.parentIsBody, JSON.stringify({ fs: st.fs, body: st.parentIsBody }))
-    check('全屏且视频元素覆盖视口', st.coversViewport, JSON.stringify(st))
+    check('松手吸附铺满档（scale==coverScale）', Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
     check('等比缩放（scaleX==scaleY）', st.equalRatio, `sx=${st.sx.toFixed(3)} sy=${st.sy.toFixed(3)}`)
-    check('内容撑满视口（scale ≥ coverScale，去黑边）', st.sx >= st.coverScale - 0.02, `sx=${st.sx.toFixed(2)} cover=${st.coverScale.toFixed(2)}`)
+    check('铺满档零黑框（内容完全覆盖视口）', st.coversViewport, JSON.stringify(st))
+    await page.waitForFunction(() => {
+      const p = document.querySelector('#inlinePlayer .pg-pill')
+      return p && p.classList.contains('on') && p.textContent.includes('铺满全屏')
+    }, null, { timeout: 1500 }).then(() => check('指示条显示档位名「铺满全屏」', true)).catch(() => check('指示条显示档位名「铺满全屏」', false, '未捕获到'))
     await page.screenshot({ path: SHOTS + '/pg-fullscreen.png' })
+
+    // ── A2. 捏合顶满 → 吸附放大档 min(2×cover, 4) ──
+    await pinch(cdp, vc.x, vc.y, 40, 190)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    const maxL = Math.min(st.coverScale * 2, 4)
+    check('顶满吸附放大档（min(2×cover,4)）', st.fs && Math.abs(st.sx - maxL) < 0.06, `sx=${st.sx.toFixed(3)} maxL=${maxL.toFixed(3)}`)
 
     // ── A2. 全屏中单指平移（scale>1）不破坏覆盖 ──
     await drag(cdp, vc.x, vc.y, 60, 0)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
     check('全屏放大后单指平移仍覆盖视口', st.fs && st.coversViewport && st.equalRatio, JSON.stringify({ tx: st.tx.toFixed(0) }))
 
-    // ── B. 双指收拢 → 退出全屏（外扩被夹到 4x 后，收拢需覆盖 4 倍行程：150→25 ⇒ 0.67x 触发退出意图）──
+    // ── A3. 收拢至 ≈3.15x 松手 → 吸回铺满档（起手 spread 165：双指 x≥28 不落边缘让位区）──
+    await pinch(cdp, vc.x, vc.y, 165, 130)
+    await page.waitForFunction(() => {
+      const v = document.getElementById('inlinePlayerVideo')
+      const tr = getComputedStyle(v).transform
+      if (!tr || tr === 'none') return false
+      const sx = new DOMMatrixReadOnly(tr).a
+      const w = v.offsetWidth || 1, h = v.offsetHeight || 1
+      const vw2 = v.videoWidth || 16, vh2 = v.videoHeight || 9
+      const cw = Math.min(w, vw2 * h / vh2), ch = Math.min(h, vh2 * w / vw2)
+      return Math.abs(sx - Math.max(w / cw, h / ch)) < 0.06
+    }, null, { timeout: 2500 }).catch(() => {})
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('收拢松手吸回铺满档', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
+
+    // ── B. 双指收拢退出全屏（铺满档起手，150→25 ⇒ 0.17x，必发退出意图）──
     await pinch(cdp, vc.x, vc.y, 150, 25)
     await page.waitForFunction(() => {
       const box = document.getElementById('inlinePlayer')
@@ -256,6 +291,22 @@ async function main() {
     await sleep(120)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
     check('桌面 ctrl+滚轮放大 → 全屏且等比覆盖', st.fs && st.coversViewport && st.equalRatio && st.sx >= st.coverScale - 0.02, JSON.stringify({ fs: st.fs, sx: st.sx.toFixed(2), cover: st.coverScale.toFixed(2) }))
+
+    // 滚轮连滚停止 → 吸附最近档位（放大档 min(2×cover,4)）
+    await page.waitForFunction(() => {
+      const v = document.getElementById('inlinePlayerVideo')
+      const tr = getComputedStyle(v).transform
+      if (!tr || tr === 'none') return false
+      const sx = new DOMMatrixReadOnly(tr).a
+      const w = v.offsetWidth || 1, h = v.offsetHeight || 1
+      const vw2 = v.videoWidth || 16, vh2 = v.videoHeight || 9
+      const cw = Math.min(w, vw2 * h / vh2), ch = Math.min(h, vh2 * w / vw2)
+      const cover = Math.max(w / cw, h / ch)
+      return Math.abs(sx - Math.min(cover * 2, 4)) < 0.06
+    }, null, { timeout: 2500 }).catch(() => {})
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    const dmaxL = Math.min(st.coverScale * 2, 4)
+    check('桌面滚轮停止后吸附最近档位', st.fs && Math.abs(st.sx - dmaxL) < 0.06, `sx=${st.sx.toFixed(3)} maxL=${dmaxL.toFixed(3)}`)
 
     // 滚轮回缩到 1 以下 → 退出全屏
     await page.evaluate(() => {

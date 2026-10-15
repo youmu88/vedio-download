@@ -2,8 +2,9 @@
  * PlayerGestures — 播放器手势层（ios.js / macos.js 共用）
  *
  * 能力：
- *   1. 双指捏合等比缩放（transform scale，1–4x，指尖锚点，绝不扭曲）；
- *      内联卡片中双指外扩 → 播放器展开为全屏浮层继续跟手缩放 → 内容撑满全屏（去黑边）；
+ *   1. 双指捏合等比缩放，档位化（主流播放器模式）：连续跟手，松手磁性吸附最近档——
+ *      [原比例 1x, 铺满全屏（coverScale，按屏幕与视频比例实时计算，零黑框、长边裁切）, 放大档 min(2×铺满, 4x)]；
+ *      内联卡片中双指外扩 → 播放器展开为全屏浮层继续跟手缩放 → 吸附档位；
  *      全屏中收拢到 1x 后继续收 → 退出全屏回内联卡片。缩放后单指可平移（夹取不露边）。
  *   2. 横滑快进/快退：视频面单指横滑（|dx|>|dy| 激活），每 64px 一步 ±15 秒，
  *      拖动中指示条实时显示聚合秒数，松手生效并夹取 [0, duration]。
@@ -65,7 +66,7 @@ window.PlayerGestures = (() => {
     st.ty = clamp(st.ty, -my, my);
   }
   function setScale(st, s, ax, ay) {
-    const target = clamp(s, 1, MAX_SCALE);
+    const target = clamp(s, 1, maxLevel(st));
     const k = target / st.scale;
     if (k !== 1) {
       // 锚点不动：video 布局盒中心 = 视觉中心 - 位移（scale 绕中心，不改中心）
@@ -78,6 +79,46 @@ window.PlayerGestures = (() => {
     }
     clampPan(st);
     apply(st);
+  }
+
+  // ── 档位缩放（原比例 / 铺满全屏 / 放大档）──
+  // coverScale：内容 contain 显示后等比放大到恰好铺满视口的倍数（零黑框、长边裁切）——
+  // 即主流播放器「铺满全屏/适配屏幕比例」档；随屏幕尺寸与视频分辨率实时计算，旋转自动适配。
+  function coverScale(st) {
+    const w = st.video.offsetWidth || 1, h = st.video.offsetHeight || 1;
+    const vw = st.video.videoWidth || 16, vh = st.video.videoHeight || 9;
+    const cw = Math.min(w, vw * h / vh), ch = Math.min(h, vh * w / vw);
+    return Math.max(w / cw, h / ch);
+  }
+  function levels(st) {
+    const c = coverScale(st);
+    const arr = [1, c];
+    const zoom = Math.min(c * 2, MAX_SCALE);
+    if (zoom > c + 0.2) arr.push(zoom); // 放大档与铺满档保持有意义的距离
+    return arr;
+  }
+  function maxLevel(st) { return levels(st).slice(-1)[0]; }
+  function levelName(st, L) {
+    if (Math.abs(L - 1) < 0.02) return '原比例';
+    if (Math.abs(L - coverScale(st)) < 0.02) return '铺满全屏';
+    return '放大 ' + (Math.round(L * 10) / 10) + '×';
+  }
+  // 磁性吸附：缩放/捏合结束后归位到最近档位（平移归中 + 平滑过渡）
+  function snapToLevel(st) {
+    if (!st.fs || !isLoaded(st)) return;
+    let best = null, bd = Infinity;
+    for (const L of levels(st)) {
+      const d = Math.abs(st.scale - L);
+      if (d < bd) { bd = d; best = L; }
+    }
+    if (Math.abs(best - st.scale) < 0.01) { showPill(st, '', levelName(st, best)); return; }
+    const v = st.video;
+    v.style.transition = 'transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1)'; // 仅吸附动画期开启，不污染捏合跟手
+    st.scale = best; st.tx = 0; st.ty = 0;
+    apply(st);
+    clearTimeout(st.snapT);
+    st.snapT = setTimeout(() => { v.style.transition = ''; }, 300);
+    showPill(st, '', levelName(st, best));
   }
 
   // ── 全屏浮层 ──
@@ -123,7 +164,12 @@ window.PlayerGestures = (() => {
     if (!e.ctrlKey && !e.metaKey) return; // 仅捏合语义，普通滚动不劫持
     e.preventDefault();
     const st = S.get(e.currentTarget);
-    if (st) zoomAt(st, Math.exp(-e.deltaY * 0.0022), e.clientX, e.clientY);
+    if (st) {
+      zoomAt(st, Math.exp(-e.deltaY * 0.0022), e.clientX, e.clientY);
+      // 连滚停止后吸附最近档位（滚轮无“松手”语义，用静默期判定）
+      clearTimeout(st.wheelSnapT);
+      st.wheelSnapT = setTimeout(() => snapToLevel(st), 350);
+    }
   }
   function onGestureStart(e) { e.preventDefault(); const st = S.get(e.currentTarget); if (st) st.gestureScale0 = st.scale; }
   function onGestureChange(e) {
@@ -159,6 +205,9 @@ window.PlayerGestures = (() => {
       st.seekStartX = e.clientX;
       st.seekStartY = e.clientY;
       st.seekActive = false;
+      // 新触摸立即接管：中断吸附过渡动画，避免 transform 跟手滞后
+      clearTimeout(st.snapT);
+      st.video.style.transition = '';
     }
   }
 
@@ -174,7 +223,7 @@ window.PlayerGestures = (() => {
       if (!st.fs && d > st.pinchStartDist * 1.04) enterFs(st); // 外扩即展开全屏，同手势继续跟手缩放
       let s = st.pinchStartScale * d / st.pinchStartDist;
       if (st.fs) {
-        s = clamp(s, 1, MAX_SCALE);
+        s = clamp(s, 1, maxLevel(st));
         // 收拢到 1x 后继续内收 → 记退出意图（松手生效，回内联卡片）
         if (s <= 1.001 && d < st.pinchStartDist * EXIT_RATIO) st.collapsed = true;
       }
@@ -220,9 +269,11 @@ window.PlayerGestures = (() => {
 
     if (st.mode === 'pinch') {
       if (st.pointers.size < 2) {
+        const snapping = st.fs && !st.collapsed;
         if (st.fs && st.collapsed) exitFs(st);
+        else if (st.fs) snapToLevel(st);
         if (st.pointers.size === 0) st.mode = null;
-        hidePill(st);
+        if (!snapping) hidePill(st);
       }
       e.preventDefault();
       return;
@@ -264,8 +315,10 @@ window.PlayerGestures = (() => {
     if (st.pointers.size === 0) {
       st.mode = null;
       st.seekActive = false;
-      hidePill(st);
+      const snapping = st.fs && !st.collapsed;
       if (st.fs && st.collapsed) exitFs(st);
+      else if (st.fs) snapToLevel(st);
+      if (!snapping) hidePill(st);
     }
   }
 
@@ -285,6 +338,7 @@ window.PlayerGestures = (() => {
       pinchStartDist: 1, pinchStartScale: 1, collapsed: false,
       gestureScale0: null,
       pillTimer: 0,
+      snapT: 0, wheelSnapT: 0,
       pill: null,
     };
     S.set(video, st);
@@ -302,7 +356,7 @@ window.PlayerGestures = (() => {
     // Safari 桌面触控板捏合（gesture 事件为 Safari 专有，其他浏览器不触发）
     video.addEventListener('gesturestart', onGestureStart);
     video.addEventListener('gesturechange', onGestureChange);
-    video.addEventListener('gestureend', (e) => { e.preventDefault(); const s = S.get(e.currentTarget); if (s) s.gestureScale0 = null; });
+    video.addEventListener('gestureend', (e) => { e.preventDefault(); const s = S.get(e.currentTarget); if (s) { s.gestureScale0 = null; snapToLevel(s); } });
 
     // 切换视频/关闭播放器（PlayerCore 会 removeAttribute('src')+load()）→ 自复位
     video.addEventListener('emptied', () => { exitFs(st); hidePill(st); });
