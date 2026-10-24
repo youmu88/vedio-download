@@ -7,9 +7,9 @@
  *          → 点击播放 → CDP Input.dispatchTouchEvent 派发真实触摸序列 → DOM 几何/transform/currentTime 断言
  *
  * 覆盖：
- *   A. 双指外扩 → 播放器进入全屏浮层（.fs 迁移 body）+ 方向偏置吸附：轻扩中途松手也必到铺满档
- *      （scaleX==scaleY、零黑框）；放大档中度收拢 → 逐级吸回铺满档；铺满档轻收拢 → 回 1x 默认态（上下黑边）
- *   B. 全屏中双指收拢 → 退出全屏回卡片、scale 复位 1；内联卡片揾合收拢松手无缩放残留
+ *   A. 双指外扩 → 播放器进入全屏浮层（.fs 迁移 body）+ 逐级吸附：轻扩中途松手也必到铺满档
+ *      （scaleX==scaleY、内容矩形四边真满屏、全屏标题栏隐藏）；已铺满后继续外扩不放大；铺满档轻收拢 → 回 1x 默认态
+ *   B. 全屏中双指收拢 → 退出全屏回卡片、scale 复位 1；内联卡片捏合收拢松手无缩放残留
  *   C. 双击切换全屏（进/出）；切换视频后手势状态复位
  *   D. 横滑 +80px → +15s；-80px → -15s（暂停态精确断言）+ 拖动中指示条文案
  *   E. 竖滑不 seek；起手 x<28 让位系统左缘返回手势（不 seek、页面不被导航）
@@ -66,6 +66,16 @@ function stateEval(page, boxId, videoId) {
       equalRatio: Math.abs(sx - sy) < 1e-6,
       coverScale: Math.max(innerWidth / cw, innerHeight / ch),
       coversViewport: r.left <= 1 && r.top <= 1 && r.right >= innerWidth - 1 && r.bottom >= innerHeight - 1,
+      // 内容矩形（object-fit contain 后的实际画面区域）：元素盒矩形内居中——
+      // 测「真满屏」必须看内容矩形而非元素盒矩形（元素盒可能溢出裁切但内容仍有黑边）
+      ...(() => {
+        const cW = Math.min(r.width, r.height * vw / vh), cH = Math.min(r.height, r.width * vh / vw);
+        const cl = r.left + (r.width - cW) / 2, ct = r.top + (r.height - cH) / 2;
+        return {
+          content: { left: cl, top: ct, right: cl + cW, bottom: ct + cH },
+          coversContent: cl <= 1 && ct <= 1 && cl + cW >= innerWidth - 1 && ct + cH >= innerHeight - 1,
+        };
+      })(),
       pillOn: !!(pill && pill.classList.contains('on')),
       pillText: pill ? pill.textContent : '',
       t: v.currentTime,
@@ -199,7 +209,9 @@ async function main() {
     check('双指外扩 → 播放器进入全屏浮层', st.fs && st.parentIsBody, JSON.stringify({ fs: st.fs, body: st.parentIsBody }))
     check('松手吸附铺满档（scale==coverScale）', Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
     check('等比缩放（scaleX==scaleY）', st.equalRatio, `sx=${st.sx.toFixed(3)} sy=${st.sy.toFixed(3)}`)
-    check('铺满档零黑框（内容完全覆盖视口）', st.coversViewport, JSON.stringify(st))
+    check('铺满档真满屏：内容矩形覆盖视口四边（顶部无黑边）', st.coversContent, JSON.stringify(st.content))
+    const barState = await page.evaluate(() => { const b = document.querySelector('#inlinePlayer .inline-player-bar'); return b ? getComputedStyle(b).display : 'missing' })
+    check('全屏时标题栏隐藏（不占文档流）', barState === 'none', `bar display=${barState}`)
     await page.waitForFunction(() => {
       const p = document.querySelector('#inlinePlayer .pg-pill')
       return p && p.classList.contains('on') && p.textContent.includes('铺满全屏')
@@ -223,36 +235,19 @@ async function main() {
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
     check('轻扩中途松手仍吸附铺满档（外扩必升档）', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
 
-    // ── A2. 捏合顶满 → 吸附放大档 min(2×cover, 4) ──
+    // ── A2. 已铺满后继续外扩 → 固定两档：保持铺满，不再继续放大 ──
     await pinch(cdp, vc.x, vc.y, 40, 190)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    const maxL = Math.min(st.coverScale * 2, 4)
-    check('顶满吸附放大档（min(2×cover,4)）', st.fs && Math.abs(st.sx - maxL) < 0.06, `sx=${st.sx.toFixed(3)} maxL=${maxL.toFixed(3)}`)
+    check('已铺满后继续外扩仍停在铺满档（固定两档，不继续放大）', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
 
-    // ── A2b. 放大档单指横滑 → 快进/快退（缩放态画面恒居中不平移，快进全档位可用）──
+    // ── A2b. 铺满档（scale>1）单指横滑 → 快进/快退（画面恒居中不平移，快进全档位可用）──
     await page.evaluate(() => { const v = document.getElementById('inlinePlayerVideo'); v.pause(); v.currentTime = 30 })
     await drag(cdp, vc.x, vc.y, 80, 0)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    check('放大态单指横滑 +80px → 快进 15s（不再被平移吞掉）', Math.abs(st.t - 45) < 0.5 && st.tx === 0 && st.ty === 0, `t=${st.t.toFixed(2)} tx=${st.tx} ty=${st.ty}`)
+    check('铺满档单指横滑 +80px → 快进 15s（不被平移吞掉）', Math.abs(st.t - 45) < 0.5 && st.tx === 0 && st.ty === 0, `t=${st.t.toFixed(2)} tx=${st.tx} ty=${st.ty}`)
     await drag(cdp, vc.x, vc.y, -80, 0)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    check('放大态单指横滑 -80px → 快退 15s', Math.abs(st.t - 30) < 0.5, `t=${st.t.toFixed(2)}`)
-
-    // ── A2c. 放大档中度收拢（scale≈3.39，仍 ≥ 铺满档）→ 吸回铺满档（方向偏置：收拢必降档）──
-    // spread≤165：双指 x≥28 不落左缘让位区（iPhone 14 视口 390px）
-    await pinch(cdp, vc.x, vc.y, 165, 140)
-    await page.waitForFunction(() => {
-      const v = document.getElementById('inlinePlayerVideo')
-      const tr = getComputedStyle(v).transform
-      if (!tr || tr === 'none') return false
-      const sx = new DOMMatrixReadOnly(tr).a
-      const w = v.offsetWidth || 1, h = v.offsetHeight || 1
-      const vw2 = v.videoWidth || 16, vh2 = v.videoHeight || 9
-      const cw = Math.min(w, vw2 * h / vh2), ch = Math.min(h, vh2 * w / vw2)
-      return Math.abs(sx - Math.max(w / cw, h / ch)) < 0.06
-    }, null, { timeout: 2500 }).catch(() => {})
-    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    check('放大档中度收拢 → 吸回铺满档（收拢必降档）', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
+    check('铺满档单指横滑 -80px → 快退 15s', Math.abs(st.t - 30) < 0.5, `t=${st.t.toFixed(2)}`)
 
     // ── A3. 铺满档轻收拢（scale≈cover×0.9）→ 回 1x 默认全屏（上下黑边），不退出全屏 ──
     await pinch(cdp, vc.x, vc.y, 165, 148)
@@ -276,10 +271,10 @@ async function main() {
     check('双指收拢 → 退出全屏回卡片', !st.fs && !st.parentIsBody, JSON.stringify({ fs: st.fs, body: st.parentIsBody }))
     check('退出后 scale 复位 1', Math.abs(st.sx - 1) < 0.05, `sx=${st.sx.toFixed(3)}`)
 
-    // ── B2. 内联卡片揾合收拢松手 → scale 复位 1，无缩放残留 ──
+    // ── B2. 内联卡片捏合收拢松手 → scale 复位 1，无缩放残留 ──
     await pinch(cdp, vc.x, vc.y, 60, 25)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    check('内联揾合收拢松手 scale 复位 1（无缩放残留）', !st.fs && Math.abs(st.sx - 1) < 0.02, JSON.stringify({ fs: st.fs, sx: st.sx.toFixed(3) }))
+    check('内联捏合收拢松手 scale 复位 1（无缩放残留）', !st.fs && Math.abs(st.sx - 1) < 0.02, JSON.stringify({ fs: st.fs, sx: st.sx.toFixed(3) }))
 
     // ── C. 双击切换全屏 ──
     await doubleTap(cdp, vc.x, vc.y)
@@ -333,7 +328,7 @@ async function main() {
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
     check('桌面 ctrl+滚轮放大 → 全屏且等比覆盖', st.fs && st.coversViewport && st.equalRatio && st.sx >= st.coverScale - 0.02, JSON.stringify({ fs: st.fs, sx: st.sx.toFixed(2), cover: st.coverScale.toFixed(2) }))
 
-    // 滚轮连滚停止 → 吸附最近档位（放大档 min(2×cover,4)）
+    // 滚轮连滚停止 → 吸附最近档位（固定两档上限=铺满）
     await page.waitForFunction(() => {
       const v = document.getElementById('inlinePlayerVideo')
       const tr = getComputedStyle(v).transform
@@ -343,11 +338,10 @@ async function main() {
       const vw2 = v.videoWidth || 16, vh2 = v.videoHeight || 9
       const cw = Math.min(w, vw2 * h / vh2), ch = Math.min(h, vh2 * w / vw2)
       const cover = Math.max(w / cw, h / ch)
-      return Math.abs(sx - Math.min(cover * 2, 4)) < 0.06
+      return Math.abs(sx - cover) < 0.06
     }, null, { timeout: 2500 }).catch(() => {})
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    const dmaxL = Math.min(st.coverScale * 2, 4)
-    check('桌面滚轮停止后吸附最近档位', st.fs && Math.abs(st.sx - dmaxL) < 0.06, `sx=${st.sx.toFixed(3)} maxL=${dmaxL.toFixed(3)}`)
+    check('桌面滚轮停止后吸附铺满档（两档上限）', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
 
     // 滚轮回缩到 1 以下 → 退出全屏（先复位回内联，供 gesture 序列从 1x 起手）
     await page.evaluate(() => {
@@ -358,7 +352,8 @@ async function main() {
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
     check('桌面滚轮回缩 → 退出全屏复位', !st.fs && !st.parentIsBody && Math.abs(st.sx - 1) < 0.05, JSON.stringify({ fs: st.fs, sx: st.sx.toFixed(3) }))
 
-    // Safari 桌面触控板揾合（gesture 事件）：连续手势按绝对倍数缩放，不复合放大
+    // Safari 桌面触控板捏合（gesture 事件）：绝对倍数语义，不复合乘算。
+    // ① 放大方向：连续手势 1 → 1.5 → 1.6，正确实现目标始终 = gestureScale0 × e.scale，固定两档下 clamp 到铺满档
     await page.evaluate(() => {
       const v = document.getElementById('inlinePlayerVideo')
       const mk = (type, sc) => { const ev = new Event(type, { cancelable: true, bubbles: true }); ev.scale = sc; v.dispatchEvent(ev) }
@@ -368,7 +363,7 @@ async function main() {
     })
     await sleep(120)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    check('桌面 gesture 连续手势 sx==1.6（不复合放大）', Math.abs(st.sx - 1.6) < 0.08, `sx=${st.sx.toFixed(3)}`)
+    check('桌面 gesture 放大手势封顶铺满档（两档上限）', st.fs && Math.abs(st.sx - st.coverScale) < 0.08, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
     await page.evaluate(() => {
       const v = document.getElementById('inlinePlayerVideo')
       const ev = new Event('gestureend', { cancelable: true, bubbles: true }); ev.scale = 1.6; v.dispatchEvent(ev)
@@ -384,7 +379,19 @@ async function main() {
       return Math.abs(sx - Math.max(w / cw, h / ch)) < 0.06
     }, null, { timeout: 2500 }).catch(() => {})
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    check('桌面 gestureend 外扩方向吸附铺满档', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
+    check('桌面 gestureend 吸附铺满档', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
+
+    // ② 缩小方向验证绝对倍数语义（放大方向被两档上限掩盖，缩小方向可区分）：
+    // 从铺满档起手 e.scale=0.9 ⇒ 目标 = gestureScale0(cover)×0.9 = 1x（正确）；复合乘算 bug 会得到 cover×(cover×0.9)≈cover，留在铺满档。
+    await page.evaluate(() => {
+      const v = document.getElementById('inlinePlayerVideo')
+      const mk = (type, sc) => { const ev = new Event(type, { cancelable: true, bubbles: true }); ev.scale = sc; v.dispatchEvent(ev) }
+      mk('gesturestart', 1) // gestureScale0 = 当前 cover
+      mk('gesturechange', 0.9)
+    })
+    await sleep(120)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('桌面 gesture 绝对倍数语义：缩小手势回 1x（不复合乘算）', Math.abs(st.sx - 1) < 0.08 && !st.fs, `sx=${st.sx.toFixed(3)} fs=${st.fs}`)
 
     // gesture 测试后复位回内联（下一个断言的干净起点）
     await page.evaluate(() => {

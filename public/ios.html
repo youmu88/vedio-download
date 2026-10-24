@@ -449,6 +449,7 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 /* 播放器手势层：全屏浮层（z 位于 toast(500)/pin(800)/login(900) 之下，盖过状态栏(100)/手势层(300)） */
 .inline-player.fs { position: fixed; inset: 0; z-index: 490; margin: 0; border-radius: 0; box-shadow: none; background: #000; }
 .inline-player.fs video { max-height: none; height: 100%; object-fit: contain; }
+.inline-player.fs .inline-player-bar { display: none; } /* 全屏隐藏标题栏：否则 bar 占文档流高度、video 从栏下开始，缩放后顶部露黑边 */
 .pg-pill { position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%); z-index: 5; pointer-events: none; display: flex; align-items: center; gap: 7px; padding: 9px 16px; border-radius: 999px; background: rgba(20,20,22,0.72); color: #fff; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); opacity: 0; transition: opacity 0.16s ease; white-space: nowrap; }
 .pg-pill.on { opacity: 1; }
 .pg-pill svg { display: block; }

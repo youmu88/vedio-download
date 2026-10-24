@@ -2,9 +2,9 @@
  * PlayerGestures — 播放器手势层（ios.js / macos.js 共用）
  *
  * 能力：
- *   1. 双指捏合缩放，档位开关式（腾讯视频模式）：跟手缩放，松手按手势方向偏置吸附档位——
- *      [原比例 1x（默认全屏，上下黑边）, 铺满全屏（coverScale，按屏幕与视频比例实时计算，零黑框、长边裁切）,
- *       放大档 min(2×铺满, 4x)]；外扩松手必到 ≥ 当前的最小档（轻扩即铺满），收拢松手必到 ≤ 当前的最大档（轻收即回 1x）；
+ *   1. 双指捏合缩放，固定两档开关（腾讯视频模式）：跟手缩放，松手按手势方向逐级吸附——
+ *      [原比例 1x（默认全屏，上下黑边）, 铺满全屏（coverScale，按屏幕与视频比例实时计算，零黑框、长边裁切）]；
+ *      外扩松手必升一档（1x → 铺满），铺满后继续外扩不再放大；收拢松手必降一档（铺满 → 1x）；
  *      内联卡片中双指外扩 → 播放器展开为全屏浮层继续跟手缩放 → 吸附档位；
  *      全屏中收拢到 1x 后继续收 → 退出全屏回内联卡片。所有档位画面恒居中（不平移），单指横滑任何档位都可快进。
  *   2. 横滑快进/快退：视频面单指横滑（|dx|>|dy| 激活），每 64px 一步 ±15 秒，
@@ -24,7 +24,6 @@
  *   - 直播流（duration 无穷）禁用 seek，保留缩放。
  */
 window.PlayerGestures = (() => {
-  const MAX_SCALE = 4;          // 缩放上限：覆盖 16:9 横屏视频撑满竖屏手机（≈3.85x）
   const SEEK_STEP_PX = 64;      // 每步快进/快退的横滑距离
   const SEEK_STEP_SEC = 15;     // 每步秒数（需求：右滑快进 / 左滑快退 15 秒）
   const DRAG_ACTIVATE = 18;     // seek 激活位移阈值
@@ -64,7 +63,7 @@ window.PlayerGestures = (() => {
     apply(st);
   }
 
-  // ── 档位缩放（原比例 / 铺满全屏 / 放大档）──
+  // ── 档位缩放（固定两档：原比例 / 铺满全屏）──
   // coverScale：内容 contain 显示后等比放大到恰好铺满视口的倍数（零黑框、长边裁切）——
   // 即主流播放器「铺满全屏/适配屏幕比例」档；随屏幕尺寸与视频分辨率实时计算，旋转自动适配。
   function coverScale(st) {
@@ -73,21 +72,11 @@ window.PlayerGestures = (() => {
     const cw = Math.min(w, vw * h / vh), ch = Math.min(h, vh * w / vw);
     return Math.max(w / cw, h / ch);
   }
-  function levels(st) {
-    const c = coverScale(st);
-    const arr = [1, c];
-    const zoom = Math.min(c * 2, MAX_SCALE);
-    if (zoom > c + 0.2) arr.push(zoom); // 放大档与铺满档保持有意义的距离
-    return arr;
-  }
-  function maxLevel(st) { return levels(st).slice(-1)[0]; }
-  function levelName(st, L) {
-    if (Math.abs(L - 1) < 0.02) return '原比例';
-    if (Math.abs(L - coverScale(st)) < 0.02) return '铺满全屏';
-    return '放大 ' + (Math.round(L * 10) / 10) + '×';
-  }
+  function levels(st) { return [1, coverScale(st)]; } // 固定两档：1x 原始比例（上下黑边）↔ 铺满屏幕比例（零黑框）
+  function maxLevel(st) { return coverScale(st); }
+  function levelName(st, L) { return Math.abs(L - 1) < 0.02 ? '原比例' : '铺满全屏'; }
   // 逐级开关吸附：缩放/捏合结束后按手势方向归位到「起点档位 ±1 级」（平滑过渡）——
-  // dir>0 外扩：起点档上一级（从 1x 扩必到铺满，从铺满扩到放大档）；dir<0 收拢：起点档下一级（从铺满收必回 1x 默认态）；
+  // dir>0 外扩：起点档上一级（从 1x 扩必到铺满；铺满为顶档，继续外扩保持铺满）；dir<0 收拢：起点档下一级（从铺满收必回 1x 默认态）；
   // dir=0（pointercancel/桌面 gesture 静默）退回最近档。落点只由起点档决定、与松手时的中间值无关——完全可预测。
   function snapToLevel(st, dir = 0) {
     if (!st.fs || !isLoaded(st)) return;
@@ -178,6 +167,9 @@ window.PlayerGestures = (() => {
     if (e.clientX < EDGE_YIELD_PX) return; // 让位系统左缘返回手势
     const vr = st.video.getBoundingClientRect();
     if (e.clientY > vr.bottom - CONTROL_GUARD) return; // 原生控制条保护区
+    // 新触摸序列（primary 首指落下）：清掉上一序列可能残留的幽灵指针——
+    // iOS Safari 的 pointerup/pointercancel 丢失时 Map 会残留旧点，单指按下将假性凑成 2 指误入 pinch 缩放。
+    if (e.isPrimary && st.pointers.size > 0) st.pointers.clear();
     st.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
     try { st.video.setPointerCapture(e.pointerId); } catch (_) {}
     if (st.pointers.size === 2) {
