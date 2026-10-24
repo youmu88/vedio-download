@@ -7,12 +7,14 @@
  *          → 点击播放 → CDP Input.dispatchTouchEvent 派发真实触摸序列 → DOM 几何/transform/currentTime 断言
  *
  * 覆盖：
- *   A. 双指外扩 → 播放器进入全屏浮层（.fs 迁移 body）+ 内容等比覆盖视口（scaleX==scaleY 且 ≥ coverScale）
- *   B. 全屏中双指收拢 → 退出全屏回卡片、scale 复位 1
+ *   A. 双指外扩 → 播放器进入全屏浮层（.fs 迁移 body）+ 方向偏置吸附：轻扩中途松手也必到铺满档
+ *      （scaleX==scaleY、零黑框）；放大档中度收拢 → 逐级吸回铺满档；铺满档轻收拢 → 回 1x 默认态（上下黑边）
+ *   B. 全屏中双指收拢 → 退出全屏回卡片、scale 复位 1；内联卡片揾合收拢松手无缩放残留
  *   C. 双击切换全屏（进/出）；切换视频后手势状态复位
  *   D. 横滑 +80px → +15s；-80px → -15s（暂停态精确断言）+ 拖动中指示条文案
  *   E. 竖滑不 seek；起手 x<28 让位系统左缘返回手势（不 seek、页面不被导航）
- *   F. 桌面端（macos.html）：鼠标横滑 seek + ctrl+滚轮缩放进/出全屏
+ *   F. 桌面端（macos.html）：鼠标横滑 seek + ctrl+滚轮缩放进/出全屏 + gesture 连续手势不复合放大
+ *   G. 放大态（scale>1）单指横滑仍可快进/快退（缩放态不平移，快进全档位可用）
  */
 import { spawn } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
@@ -204,19 +206,10 @@ async function main() {
     }, null, { timeout: 1500 }).then(() => check('指示条显示档位名「铺满全屏」', true)).catch(() => check('指示条显示档位名「铺满全屏」', false, '未捕获到'))
     await page.screenshot({ path: SHOTS + '/pg-fullscreen.png' })
 
-    // ── A2. 捏合顶满 → 吸附放大档 min(2×cover, 4) ──
-    await pinch(cdp, vc.x, vc.y, 40, 190)
-    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    const maxL = Math.min(st.coverScale * 2, 4)
-    check('顶满吸附放大档（min(2×cover,4)）', st.fs && Math.abs(st.sx - maxL) < 0.06, `sx=${st.sx.toFixed(3)} maxL=${maxL.toFixed(3)}`)
-
-    // ── A2. 全屏中单指平移（scale>1）不破坏覆盖 ──
-    await drag(cdp, vc.x, vc.y, 60, 0)
-    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    check('全屏放大后单指平移仍覆盖视口', st.fs && st.coversViewport && st.equalRatio, JSON.stringify({ tx: st.tx.toFixed(0) }))
-
-    // ── A3. 收拢至 ≈3.15x 松手 → 吸回铺满档（起手 spread 165：双指 x≥28 不落边缘让位区）──
-    await pinch(cdp, vc.x, vc.y, 165, 130)
+    // ── A1b. 轻扩中途松手（scale≈1.3，明确外扩意图未到铺满）→ 方向偏置仍吸附铺满档 ──
+    await doubleTap(cdp, vc.x, vc.y) // 先退出全屏回内联
+    await sleep(150)
+    await pinch(cdp, vc.x, vc.y, 40, 52)
     await page.waitForFunction(() => {
       const v = document.getElementById('inlinePlayerVideo')
       const tr = getComputedStyle(v).transform
@@ -228,7 +221,50 @@ async function main() {
       return Math.abs(sx - Math.max(w / cw, h / ch)) < 0.06
     }, null, { timeout: 2500 }).catch(() => {})
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    check('收拢松手吸回铺满档', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
+    check('轻扩中途松手仍吸附铺满档（外扩必升档）', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
+
+    // ── A2. 捏合顶满 → 吸附放大档 min(2×cover, 4) ──
+    await pinch(cdp, vc.x, vc.y, 40, 190)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    const maxL = Math.min(st.coverScale * 2, 4)
+    check('顶满吸附放大档（min(2×cover,4)）', st.fs && Math.abs(st.sx - maxL) < 0.06, `sx=${st.sx.toFixed(3)} maxL=${maxL.toFixed(3)}`)
+
+    // ── A2b. 放大档单指横滑 → 快进/快退（缩放态画面恒居中不平移，快进全档位可用）──
+    await page.evaluate(() => { const v = document.getElementById('inlinePlayerVideo'); v.pause(); v.currentTime = 30 })
+    await drag(cdp, vc.x, vc.y, 80, 0)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('放大态单指横滑 +80px → 快进 15s（不再被平移吞掉）', Math.abs(st.t - 45) < 0.5 && st.tx === 0 && st.ty === 0, `t=${st.t.toFixed(2)} tx=${st.tx} ty=${st.ty}`)
+    await drag(cdp, vc.x, vc.y, -80, 0)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('放大态单指横滑 -80px → 快退 15s', Math.abs(st.t - 30) < 0.5, `t=${st.t.toFixed(2)}`)
+
+    // ── A2c. 放大档中度收拢（scale≈3.39，仍 ≥ 铺满档）→ 吸回铺满档（方向偏置：收拢必降档）──
+    // spread≤165：双指 x≥28 不落左缘让位区（iPhone 14 视口 390px）
+    await pinch(cdp, vc.x, vc.y, 165, 140)
+    await page.waitForFunction(() => {
+      const v = document.getElementById('inlinePlayerVideo')
+      const tr = getComputedStyle(v).transform
+      if (!tr || tr === 'none') return false
+      const sx = new DOMMatrixReadOnly(tr).a
+      const w = v.offsetWidth || 1, h = v.offsetHeight || 1
+      const vw2 = v.videoWidth || 16, vh2 = v.videoHeight || 9
+      const cw = Math.min(w, vw2 * h / vh2), ch = Math.min(h, vh2 * w / vw2)
+      return Math.abs(sx - Math.max(w / cw, h / ch)) < 0.06
+    }, null, { timeout: 2500 }).catch(() => {})
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('放大档中度收拢 → 吸回铺满档（收拢必降档）', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
+
+    // ── A3. 铺满档轻收拢（scale≈cover×0.9）→ 回 1x 默认全屏（上下黑边），不退出全屏 ──
+    await pinch(cdp, vc.x, vc.y, 165, 148)
+    await page.waitForFunction(() => {
+      const v = document.getElementById('inlinePlayerVideo')
+      const tr = getComputedStyle(v).transform
+      if (!tr || tr === 'none') return false
+      const sx = new DOMMatrixReadOnly(tr).a
+      return Math.abs(sx - 1) < 0.06
+    }, null, { timeout: 2500 }).catch(() => {})
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('铺满档轻收拢 → 回 1x 默认态（仍全屏、画面居中）', st.fs && Math.abs(st.sx - 1) < 0.06 && st.tx === 0 && st.ty === 0, JSON.stringify({ fs: st.fs, sx: st.sx.toFixed(3), tx: st.tx, ty: st.ty }))
 
     // ── B. 双指收拢退出全屏（铺满档起手，150→25 ⇒ 0.17x，必发退出意图）──
     await pinch(cdp, vc.x, vc.y, 150, 25)
@@ -239,6 +275,11 @@ async function main() {
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
     check('双指收拢 → 退出全屏回卡片', !st.fs && !st.parentIsBody, JSON.stringify({ fs: st.fs, body: st.parentIsBody }))
     check('退出后 scale 复位 1', Math.abs(st.sx - 1) < 0.05, `sx=${st.sx.toFixed(3)}`)
+
+    // ── B2. 内联卡片揾合收拢松手 → scale 复位 1，无缩放残留 ──
+    await pinch(cdp, vc.x, vc.y, 60, 25)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('内联揾合收拢松手 scale 复位 1（无缩放残留）', !st.fs && Math.abs(st.sx - 1) < 0.02, JSON.stringify({ fs: st.fs, sx: st.sx.toFixed(3) }))
 
     // ── C. 双击切换全屏 ──
     await doubleTap(cdp, vc.x, vc.y)
@@ -308,14 +349,49 @@ async function main() {
     const dmaxL = Math.min(st.coverScale * 2, 4)
     check('桌面滚轮停止后吸附最近档位', st.fs && Math.abs(st.sx - dmaxL) < 0.06, `sx=${st.sx.toFixed(3)} maxL=${dmaxL.toFixed(3)}`)
 
-    // 滚轮回缩到 1 以下 → 退出全屏
+    // 滚轮回缩到 1 以下 → 退出全屏（先复位回内联，供 gesture 序列从 1x 起手）
     await page.evaluate(() => {
       const v = document.getElementById('inlinePlayerVideo')
       for (let i = 0; i < 12; i++) v.dispatchEvent(new WheelEvent('wheel', { ctrlKey: true, deltaY: 120, bubbles: true, cancelable: true }))
     })
-    await sleep(120)
+    await sleep(500)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
     check('桌面滚轮回缩 → 退出全屏复位', !st.fs && !st.parentIsBody && Math.abs(st.sx - 1) < 0.05, JSON.stringify({ fs: st.fs, sx: st.sx.toFixed(3) }))
+
+    // Safari 桌面触控板揾合（gesture 事件）：连续手势按绝对倍数缩放，不复合放大
+    await page.evaluate(() => {
+      const v = document.getElementById('inlinePlayerVideo')
+      const mk = (type, sc) => { const ev = new Event(type, { cancelable: true, bubbles: true }); ev.scale = sc; v.dispatchEvent(ev) }
+      mk('gesturestart', 1)
+      mk('gesturechange', 1.5)
+      mk('gesturechange', 1.6)
+    })
+    await sleep(120)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('桌面 gesture 连续手势 sx==1.6（不复合放大）', Math.abs(st.sx - 1.6) < 0.08, `sx=${st.sx.toFixed(3)}`)
+    await page.evaluate(() => {
+      const v = document.getElementById('inlinePlayerVideo')
+      const ev = new Event('gestureend', { cancelable: true, bubbles: true }); ev.scale = 1.6; v.dispatchEvent(ev)
+    })
+    await page.waitForFunction(() => {
+      const v = document.getElementById('inlinePlayerVideo')
+      const tr = getComputedStyle(v).transform
+      if (!tr || tr === 'none') return false
+      const sx = new DOMMatrixReadOnly(tr).a
+      const w = v.offsetWidth || 1, h = v.offsetHeight || 1
+      const vw2 = v.videoWidth || 16, vh2 = v.videoHeight || 9
+      const cw = Math.min(w, vw2 * h / vh2), ch = Math.min(h, vh2 * w / vw2)
+      return Math.abs(sx - Math.max(w / cw, h / ch)) < 0.06
+    }, null, { timeout: 2500 }).catch(() => {})
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('桌面 gestureend 外扩方向吸附铺满档', st.fs && Math.abs(st.sx - st.coverScale) < 0.06, `sx=${st.sx.toFixed(3)} cover=${st.coverScale.toFixed(3)}`)
+
+    // gesture 测试后复位回内联（下一个断言的干净起点）
+    await page.evaluate(() => {
+      const v = document.getElementById('inlinePlayerVideo')
+      for (let i = 0; i < 12; i++) v.dispatchEvent(new WheelEvent('wheel', { ctrlKey: true, deltaY: 120, bubbles: true, cancelable: true }))
+    })
+    await sleep(500)
 
     check('macOS 无页面错误', errors.length === 0, errors.join(' | '))
     await ctx.close()

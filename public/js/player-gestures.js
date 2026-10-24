@@ -2,10 +2,11 @@
  * PlayerGestures — 播放器手势层（ios.js / macos.js 共用）
  *
  * 能力：
- *   1. 双指捏合等比缩放，档位化（主流播放器模式）：连续跟手，松手磁性吸附最近档——
- *      [原比例 1x, 铺满全屏（coverScale，按屏幕与视频比例实时计算，零黑框、长边裁切）, 放大档 min(2×铺满, 4x)]；
+ *   1. 双指捏合缩放，档位开关式（腾讯视频模式）：跟手缩放，松手按手势方向偏置吸附档位——
+ *      [原比例 1x（默认全屏，上下黑边）, 铺满全屏（coverScale，按屏幕与视频比例实时计算，零黑框、长边裁切）,
+ *       放大档 min(2×铺满, 4x)]；外扩松手必到 ≥ 当前的最小档（轻扩即铺满），收拢松手必到 ≤ 当前的最大档（轻收即回 1x）；
  *      内联卡片中双指外扩 → 播放器展开为全屏浮层继续跟手缩放 → 吸附档位；
- *      全屏中收拢到 1x 后继续收 → 退出全屏回内联卡片。缩放后单指可平移（夹取不露边）。
+ *      全屏中收拢到 1x 后继续收 → 退出全屏回内联卡片。所有档位画面恒居中（不平移），单指横滑任何档位都可快进。
  *   2. 横滑快进/快退：视频面单指横滑（|dx|>|dy| 激活），每 64px 一步 ±15 秒，
  *      拖动中指示条实时显示聚合秒数，松手生效并夹取 [0, duration]。
  *   3. 双击切换全屏（桌面鼠标无捏合时的等价入口；重置缩放）。
@@ -54,30 +55,12 @@ window.PlayerGestures = (() => {
   }
   function hidePill(st) { clearTimeout(st.pillTimer); st.pill.classList.remove('on'); }
 
-  // ── 缩放（指尖/光标锚点）与平移夹取 ──
+  // ── 缩放（档位值，画面恒居中：不平移、无锚点偏移，单指横滑全档位让给快进）──
   function apply(st) {
-    st.video.style.transform = `translate3d(${st.tx}px, ${st.ty}px, 0) scale(${st.scale})`;
+    st.video.style.transform = `scale(${st.scale})`;
   }
-  function clampPan(st) {
-    // 平移范围：缩放后元素盒仍需完全覆盖布局盒（全屏时即视口），不露黑边
-    const w = st.video.offsetWidth, h = st.video.offsetHeight;
-    const mx = Math.max(0, w * (st.scale - 1) / 2), my = Math.max(0, h * (st.scale - 1) / 2);
-    st.tx = clamp(st.tx, -mx, mx);
-    st.ty = clamp(st.ty, -my, my);
-  }
-  function setScale(st, s, ax, ay) {
-    const target = clamp(s, 1, maxLevel(st));
-    const k = target / st.scale;
-    if (k !== 1) {
-      // 锚点不动：video 布局盒中心 = 视觉中心 - 位移（scale 绕中心，不改中心）
-      const vr = st.video.getBoundingClientRect();
-      const axOff = ax - (vr.left + vr.width / 2 - st.tx);
-      const ayOff = ay - (vr.top + vr.height / 2 - st.ty);
-      st.tx += axOff * (1 - k);
-      st.ty += ayOff * (1 - k);
-      st.scale = target;
-    }
-    clampPan(st);
+  function setScale(st, s) {
+    st.scale = clamp(s, 1, maxLevel(st));
     apply(st);
   }
 
@@ -103,18 +86,26 @@ window.PlayerGestures = (() => {
     if (Math.abs(L - coverScale(st)) < 0.02) return '铺满全屏';
     return '放大 ' + (Math.round(L * 10) / 10) + '×';
   }
-  // 磁性吸附：缩放/捏合结束后归位到最近档位（平移归中 + 平滑过渡）
-  function snapToLevel(st) {
+  // 逐级开关吸附：缩放/捏合结束后按手势方向归位到「起点档位 ±1 级」（平滑过渡）——
+  // dir>0 外扩：起点档上一级（从 1x 扩必到铺满，从铺满扩到放大档）；dir<0 收拢：起点档下一级（从铺满收必回 1x 默认态）；
+  // dir=0（pointercancel/桌面 gesture 静默）退回最近档。落点只由起点档决定、与松手时的中间值无关——完全可预测。
+  function snapToLevel(st, dir = 0) {
     if (!st.fs || !isLoaded(st)) return;
-    let best = null, bd = Infinity;
-    for (const L of levels(st)) {
-      const d = Math.abs(st.scale - L);
-      if (d < bd) { bd = d; best = L; }
+    const Ls = levels(st);
+    let best;
+    if (dir !== 0) {
+      // 逐级开关：落点 = 手势起点档位 ±1 级（起点必在档位上——每次捏合结束都吸附归档）
+      let idx = 0, bd = Infinity;
+      for (let i = 0; i < Ls.length; i++) { const d = Math.abs(Ls[i] - st.pinchStartScale); if (d < bd) { bd = d; idx = i; } }
+      best = Ls[clamp(idx + dir, 0, Ls.length - 1)];
+    } else {
+      best = Ls[0]; let bd = Infinity;
+      for (const L of Ls) { const d = Math.abs(st.scale - L); if (d < bd) { bd = d; best = L; } }
     }
     if (Math.abs(best - st.scale) < 0.01) { showPill(st, '', levelName(st, best)); return; }
     const v = st.video;
     v.style.transition = 'transform 0.26s cubic-bezier(0.32, 0.72, 0.35, 1)'; // 仅吸附动画期开启，不污染捏合跟手
-    st.scale = best; st.tx = 0; st.ty = 0;
+    st.scale = best;
     apply(st);
     clearTimeout(st.snapT);
     st.snapT = setTimeout(() => { v.style.transition = ''; }, 300);
@@ -139,7 +130,7 @@ window.PlayerGestures = (() => {
     }
     st.fsOrigin = null;
     st.fs = false;
-    st.scale = 1; st.tx = 0; st.ty = 0;
+    st.scale = 1;
     apply(st);
     hidePill(st);
   }
@@ -151,33 +142,33 @@ window.PlayerGestures = (() => {
   }
 
   // ── 滚轮/触控板捏合（ctrl/cmd+wheel；Safari 桌面走 gesturechange）──
-  function zoomAt(st, factor, ax, ay) {
+  // target 为绝对缩放目标（相对手势起点的倍数），不做相对乘算——
+  // gesturechange 的 e.scale 本就是相对 gesturestart 的倍数，若再乘当前 scale 会复合放大（1.5→1.6 变 2.4）。
+  function zoomTo(st, target) {
     if (!isLoaded(st)) return;
-    const target = st.scale * factor;
-    if (!st.fs && target > st.scale) enterFs(st);
+    const t = clamp(target, 1, maxLevel(st));
+    if (!st.fs && t > st.scale) enterFs(st);
     // 缩到 1x 仍继续收 → 退出全屏（与双指收拢退出对称）
-    if (st.fs && target <= 1.001 && factor < 1) { exitFs(st); hidePill(st); return; }
-    setScale(st, target, ax, ay);
+    if (st.fs && t <= 1.001 && target < st.scale) { exitFs(st); hidePill(st); return; }
+    setScale(st, t);
     showPill(st, '', Math.round(st.scale * 100) + '%');
   }
   function onWheel(e) {
     if (!e.ctrlKey && !e.metaKey) return; // 仅捏合语义，普通滚动不劫持
     e.preventDefault();
     const st = S.get(e.currentTarget);
-    if (st) {
-      zoomAt(st, Math.exp(-e.deltaY * 0.0022), e.clientX, e.clientY);
-      // 连滚停止后吸附最近档位（滚轮无“松手”语义，用静默期判定）
-      clearTimeout(st.wheelSnapT);
-      st.wheelSnapT = setTimeout(() => snapToLevel(st), 350);
-    }
+    if (!st) return;
+    zoomTo(st, st.scale * Math.exp(-e.deltaY * 0.0022));
+    // 连滚停止后吸附最近档位（滚轮/触控板为连续调焦范式，无逐级档位语义）
+    clearTimeout(st.wheelSnapT);
+    st.wheelSnapT = setTimeout(() => { st.wheelSnapT = 0; snapToLevel(st); }, 350);
   }
   function onGestureStart(e) { e.preventDefault(); const st = S.get(e.currentTarget); if (st) st.gestureScale0 = st.scale; }
   function onGestureChange(e) {
     e.preventDefault();
     const st = S.get(e.currentTarget);
     if (!st || st.gestureScale0 == null) return;
-    const r = st.video.getBoundingClientRect();
-    zoomAt(st, st.gestureScale0 * e.scale, e.clientX || r.left + r.width / 2, e.clientY || r.top + r.height / 2);
+    zoomTo(st, st.gestureScale0 * e.scale); // e.scale 是相对 gesturestart 的绝对倍数
   }
 
   // ── 指针事件（触摸/鼠标/触控笔统一）──
@@ -227,7 +218,7 @@ window.PlayerGestures = (() => {
         // 收拢到 1x 后继续内收 → 记退出意图（松手生效，回内联卡片）
         if (s <= 1.001 && d < st.pinchStartDist * EXIT_RATIO) st.collapsed = true;
       }
-      setScale(st, s, (a.x + b.x) / 2, (a.y + b.y) / 2);
+      setScale(st, s);
       showPill(st, '', Math.round(st.scale * 100) + '%');
       e.preventDefault();
       return;
@@ -237,18 +228,8 @@ window.PlayerGestures = (() => {
     const dxs = e.clientX - st.seekStartX, dys = e.clientY - st.seekStartY;
     if (Math.hypot(e.clientX - prev.x, e.clientY - prev.y) > 1) st.moved = true;
 
-    if (st.fs && st.scale > 1.01) {
-      // 放大态：单指平移
-      st.mode = 'pan';
-      st.tx += e.clientX - prev.x;
-      st.ty += e.clientY - prev.y;
-      clampPan(st);
-      apply(st);
-      e.preventDefault();
-      return;
-    }
-
-    // 1x 态：横滑 seek（横向占优才激活，纵向让位页面滚动）
+    // 横滑 seek（任何缩放档位都可用——缩放态画面恒居中不平移，单指横滑不再被平移独占；
+    // 横向占优才激活，纵向让位页面滚动）
     if (!st.seekActive) {
       if (Math.abs(dxs) > DRAG_ACTIVATE && Math.abs(dxs) > Math.abs(dys) * 1.2 && canSeek(st)) {
         st.seekActive = true;
@@ -269,16 +250,28 @@ window.PlayerGestures = (() => {
 
     if (st.mode === 'pinch') {
       if (st.pointers.size < 2) {
+        // 手势方向决定吸附方向：外扩必升档（≥当前最小档），收拢必降档（≤当前最大档）
+        const dir = st.scale > st.pinchStartScale + 0.001 ? 1 : st.scale < st.pinchStartScale - 0.001 ? -1 : 0;
         const snapping = st.fs && !st.collapsed;
         if (st.fs && st.collapsed) exitFs(st);
-        else if (st.fs) snapToLevel(st);
-        if (st.pointers.size === 0) st.mode = null;
-        if (!snapping) hidePill(st);
+        else if (st.fs) snapToLevel(st, dir);
+        else { st.scale = 1; apply(st); } // 内联卡片不残留中间缩放态
+        if (st.pointers.size === 1) {
+          // 捏合中断（先抬一指）：剩余指从当前位置重新起算，不继承捏合位移（防误触 seek 多步跳秒/误判双击）
+          const p = [...st.pointers.values()][0];
+          st.mode = null;
+          st.moved = true;
+          st.seekStartX = p.x; st.seekStartY = p.y;
+          st.seekActive = false;
+          if (!snapping) hidePill(st);
+        } else {
+          st.mode = null;
+          if (!snapping) hidePill(st);
+        }
       }
       e.preventDefault();
       return;
     }
-    if (st.mode === 'pan') { if (st.pointers.size === 0) st.mode = null; return; }
 
     if (st.seekActive) {
       const dxs = e.clientX - st.seekStartX;
@@ -317,7 +310,8 @@ window.PlayerGestures = (() => {
       st.seekActive = false;
       const snapping = st.fs && !st.collapsed;
       if (st.fs && st.collapsed) exitFs(st);
-      else if (st.fs) snapToLevel(st);
+      else if (st.fs) snapToLevel(st); // pointercancel 方向未知，按最近档保守归位
+      else { st.scale = 1; apply(st); }
       if (!snapping) hidePill(st);
     }
   }
@@ -329,8 +323,8 @@ window.PlayerGestures = (() => {
     const st = {
       video, box,
       pointers: new Map(),
-      mode: null,           // 'pinch' | 'pan' | 'seek' | null
-      scale: 1, tx: 0, ty: 0,
+      mode: null,           // 'pinch' | 'seek' | null
+      scale: 1,
       fs: false, fsOrigin: null,
       seekStartX: 0, seekStartY: 0, seekActive: false,
       moved: false,
@@ -356,7 +350,13 @@ window.PlayerGestures = (() => {
     // Safari 桌面触控板捏合（gesture 事件为 Safari 专有，其他浏览器不触发）
     video.addEventListener('gesturestart', onGestureStart);
     video.addEventListener('gesturechange', onGestureChange);
-    video.addEventListener('gestureend', (e) => { e.preventDefault(); const s = S.get(e.currentTarget); if (s) { s.gestureScale0 = null; snapToLevel(s); } });
+    video.addEventListener('gestureend', (e) => {
+      e.preventDefault();
+      const s = S.get(e.currentTarget);
+      if (!s) return;
+      s.gestureScale0 = null;
+      snapToLevel(s); // 触控板捏合是连续调焦范式，按最近档归位
+    });
 
     // 切换视频/关闭播放器（PlayerCore 会 removeAttribute('src')+load()）→ 自复位
     video.addEventListener('emptied', () => { exitFs(st); hidePill(st); });
