@@ -1524,6 +1524,7 @@ let gestureCommitted = false; // 松手后动画进行中
 let frontSnapshot = null;     // 前页 DOM 快照
 
 function canIosBack() {
+  if (document.querySelector('.inline-player.fs')) return false; // 全屏播放：手势让位给播放器（退出全屏走顶部图标）
   if (!activeApp) return false;                        // 桌面：无返回
   if (privatePageActive) return true;                  // 私密页：返回设置 App
   if (browseFolder && browseFolder.id && activeApp === 'browse') return true; // 文件夹：返回浏览根
@@ -1695,8 +1696,15 @@ $('downloadBtn').addEventListener('click', submitDownload);
 $('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitDownload(); });
 $('playUrlBtn').addEventListener('click', playUrl);
 $('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
-$('inlinePlayerClose').addEventListener('click', () => closePlayer('browse'));
-$('privateInlinePlayerClose').addEventListener('click', () => closePrivatePlayerOnly());
+// 全屏时图标语义 = 退出全屏（回内联卡片）；非全屏 = 关闭播放
+$('inlinePlayerClose').addEventListener('click', () => {
+  if (window.PlayerGestures && window.PlayerGestures.exitFullscreen($('inlinePlayerVideo'))) return;
+  closePlayer('browse');
+});
+$('privateInlinePlayerClose').addEventListener('click', () => {
+  if (window.PlayerGestures && window.PlayerGestures.exitFullscreen($('privateInlinePlayerVideo'))) return;
+  closePrivatePlayerOnly();
+});
 $('cacheMenuBtn').addEventListener('click', () => {
   if (!PlayerCore.getCurrentPlay()) return;
   const btn = $('cacheMenuBtn');

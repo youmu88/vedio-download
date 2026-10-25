@@ -1539,8 +1539,15 @@ $('downloadBtn').addEventListener('click', submitDownload);
 $('urlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') submitDownload(); });
 $('playUrlBtn').addEventListener('click', playUrl);
 $('playUrlInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') playUrl(); });
-$('inlinePlayerClose').addEventListener('click', () => closePlayer('browse'));
-$('privateInlinePlayerClose').addEventListener('click', () => closePlayer('private'));
+// 全屏时图标语义 = 退出全屏（回内联卡片）；非全屏 = 关闭播放
+$('inlinePlayerClose').addEventListener('click', () => {
+  if (window.PlayerGestures && window.PlayerGestures.exitFullscreen($('inlinePlayerVideo'))) return;
+  closePlayer('browse');
+});
+$('privateInlinePlayerClose').addEventListener('click', () => {
+  if (window.PlayerGestures && window.PlayerGestures.exitFullscreen($('privateInlinePlayerVideo'))) return;
+  closePlayer('private');
+});
 $('cacheMenuBtn').addEventListener('click', () => {
   if (!PlayerCore.getCurrentPlay()) return;
   const btn = $('cacheMenuBtn');

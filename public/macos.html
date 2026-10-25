@@ -345,11 +345,14 @@ select.text-input { appearance: none; -webkit-appearance: none; padding-right: 2
 .inline-player { position: relative; margin-top: 12px; background: var(--card); border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow); }
 .inline-player-bar { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 0.5px solid var(--separator); }
 .inline-player-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.inline-player video { display: block; width: 100%; max-height: 360px; background: #000; touch-action: none; -webkit-user-select: none; user-select: none; will-change: transform; }
+.inline-player video { display: block; width: 100%; max-height: 360px; background: #000; touch-action: none; -webkit-user-select: none; user-select: none; }
 /* 播放器手势层：全屏浮层（z 995 盖过窗口全屏(990)/菜单栏(900)/Dock(800)） */
 .inline-player.fs { position: fixed; inset: 0; z-index: 995; margin: 0; border-radius: 0; box-shadow: none; background: #000; }
 .inline-player.fs video { max-height: none; height: 100%; object-fit: contain; }
-.inline-player.fs .inline-player-bar { display: none; } /* 全屏隐藏标题栏：否则 bar 占文档流高度、video 从栏下开始，缩放后顶部露黑边 */
+.inline-player.fs.fill video { object-fit: cover; } /* 铺满档：只让画面内容 cover，元素盒仍等于视口——原生进度条等控件不被放大出屏 */
+.inline-player.fs .inline-player-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 6; padding-top: calc(10px + env(safe-area-inset-top, 0px)); border-bottom: none; background: linear-gradient(180deg, rgba(0,0,0,0.62), rgba(0,0,0,0)); } /* 全屏顶部栏浮层化：不占文档流（否则 video 从栏下开始、顶部露黑边），同时保留退出图标可达 */
+.inline-player.fs .inline-player-title { color: #fff; }
+.inline-player.fs .inline-player-close { box-shadow: 0 0 0 0.5px rgba(255,255,255,0.35), 0 1px 3px rgba(0,0,0,0.3); }
 .pg-pill { position: absolute; left: 50%; top: 44%; transform: translate(-50%, -50%); z-index: 5; pointer-events: none; display: flex; align-items: center; gap: 7px; padding: 9px 16px; border-radius: 999px; background: rgba(20,20,22,0.72); color: #fff; font-size: 14px; font-weight: 600; letter-spacing: 0.02em; -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); opacity: 0; transition: opacity 0.16s ease; white-space: nowrap; }
 .pg-pill.on { opacity: 1; }
 .pg-pill svg { display: block; }
