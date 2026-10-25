@@ -43,6 +43,7 @@ import { createLogger, taskLogger } from './logger.js';
 import { assertPublicUrl } from './security.js';
 import browserPool from './browser-pool.js';
 import listStore from './list-store.js';
+import { VIDEO_EXTS, listLibraryFiles, resolveUserFile } from './library.js';
 import { probeFfmpeg, probeMedia, startStreamSession, findActiveSession, getSession, touchSession, cancelSession, cancelAllSessions, sweepSessions, cleanupOrphanDirs } from './transcode.js';
 import fs from 'fs';
 import path from 'path';
@@ -53,10 +54,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 // ⭐ 下载目录支持环境变量覆盖：测试/隔离环境可用 VD_DOWNLOADS_DIR 指向独立目录，避免污染真实下载
 const DOWNLOADS_DIR = process.env.VD_DOWNLOADS_DIR ? path.resolve(process.env.VD_DOWNLOADS_DIR) : path.resolve(__dirname, '../downloads');
 
-// ⭐ 视频库扩展名白名单：/api/library 仅列出浏览器可直接播放或可服务端转码的媒体格式。
-// .ts 容器（Chrome/Firefox <video> 不支持）且无转码入口 → 不入库；
-// 本集合同时作为 fs.watch 变更事件的过滤依据（非白名单文件变更不触发刷新推送）。
-const VIDEO_EXTS = new Set(['.mp4', '.webm', '.mkv', '.mov', '.m3u8']);
+// ⭐ 视频库白名单 / 扫描 / 路径解析统一在 src/library.js（VIDEO_EXTS 同时作为 fs.watch 过滤依据）
 
 const PORT = process.env.PORT || 3456;
 const MAX_GLOBAL_BANDWIDTH = process.env.MAX_BANDWIDTH ? parseInt(process.env.MAX_BANDWIDTH, 10) : 0; // 0 = 无限制
@@ -446,38 +444,25 @@ app.get('/api/library', (req, res) => {
   // （引擎按 resolveOutputName 的标题命名直接落最终文件，仅 taskId 前缀匹配不住）
   const runningTasks = taskManager.listByOwner(req.user)
     .filter(t => [TaskStatus.CREATED, TaskStatus.RUNNING].includes(t.status));
-  const runningIds = new Set(runningTasks.map(t => t.id));
+  const runningIds = [...new Set(runningTasks.map(t => t.id))];
   const runningOutputs = new Set(
     runningTasks.flatMap(t => [t.outputFile, t.outputName])
       .filter(Boolean)
       .map(n => path.basename(String(n)))
   );
-  // 已加入列表（含私密列表）的视频：浏览页不再直接可见，仅存于对应列表
+  // 已加入列表（含私密列表）的视频：浏览页不再直接可见，仅存于对应列表（条目名 = 相对路径）
   const listedNames = listStore.allItemNames();
   let files = [];
   try {
-    files = fs.readdirSync(userDir)
-      .filter((name) => {
-        if (name.startsWith('.')) return false;
-        // ⭐ 下载临时文件：X.part（旧形态）与 X.part.mp4（直链断点续传写盘形态）
-        if (name.endsWith('.part') || name.includes('.part.')) return false;
-        if (runningIds.has(name) || [...runningIds].some(id => name.startsWith(`${id}.`))) return false;
-        // ⭐ 进行中/排队中任务的实际输出文件（标题命名）不得泄漏入库
-        if (runningOutputs.has(name)) return false;
-        // ⭐ 扩展名白名单：仅可播放/可转码格式入库（.txt/.zip/.srt/.ts 等一律隐藏）
-        if (!VIDEO_EXTS.has(path.extname(name).toLowerCase())) return false;
-        if (listedNames.has(name)) return false; // ⭐ 已入列表：浏览页隐藏
-        const p = path.join(userDir, name);
-        let stat;
-        try { stat = fs.statSync(p); } catch { return false; }
-        return stat.isFile();
-      })
-      .map((name) => {
-        const p = path.join(userDir, name);
-        const stat = fs.statSync(p);
-        return { name, size: stat.size, mtime: stat.mtimeMs };
-      })
-      .sort((a, b) => b.mtime - a.mtime);
+    files = listLibraryFiles(userDir, {
+      isExcluded: (rel, base) => {
+        if (listedNames.has(rel)) return true;
+        // 任务产物只落账号目录顶层：子目录里的同名文件不受 running 过滤影响
+        if (rel !== base) return false;
+        if (runningIds.includes(base) || runningIds.some(id => base.startsWith(`${id}.`))) return true;
+        return runningOutputs.has(base);
+      },
+    });
   } catch (err) {
     return res.status(500).json({ error: `读取视频库失败: ${err.message}` });
   }
@@ -490,14 +475,13 @@ app.get('/api/library', (req, res) => {
  */
 app.delete('/api/library/:name', (req, res) => {
   const userDir = path.join(DOWNLOADS_DIR, req.user);
-  const name = path.basename(req.params.name || '');
-  if (!name || name === '.' || name === '..') {
+  // ⭐ name 为相对账号目录的路径（可含子目录）；统一解析 + 越界校验（src/library.js）
+  const resolved = resolveUserFile(userDir, req.params.name);
+  if (!resolved) {
     return res.status(400).json({ error: '非法文件名' });
   }
-  const filePath = path.join(userDir, name);
-  if (!filePath.startsWith(userDir + path.sep)) {
-    return res.status(400).json({ error: '非法文件名' });
-  }
+  const { absPath: filePath, relName } = resolved;
+  const name = path.basename(relName);
   if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
     return res.status(404).json({ error: '文件不存在' });
   }
@@ -511,8 +495,8 @@ app.delete('/api/library/:name', (req, res) => {
   }
   try {
     fs.unlinkSync(filePath);
-    log.info({ name }, '删除视频库文件');
-    res.json({ ok: true, name });
+    log.info({ name: relName }, '删除视频库文件');
+    res.json({ ok: true, name: relName });
   } catch (err) {
     res.status(500).json({ error: `删除失败: ${err.message}` });
   }
@@ -530,16 +514,13 @@ app.delete('/api/library/:name', (req, res) => {
 app.post('/api/transcode', async (req, res) => {
   const ffmpegOk = await probeFfmpeg();
   if (!ffmpegOk) return res.status(503).json({ error: '服务端未安装 ffmpeg，无法转码' });
-  // ⭐ 防路径穿越：与 DELETE /api/library/:name 同款 basename + startsWith 校验
-  const name = path.basename(req.body?.name || '');
-  if (!name || name === '.' || name === '..' || name.includes('\\')) {
+  // ⭐ 防路径穿越：统一解析（拒绝绝对路径/../反斜杠）+ 越界校验（src/library.js）
+  const resolved = resolveUserFile(path.join(DOWNLOADS_DIR, req.user), req.body?.name);
+  if (!resolved) {
     return res.status(400).json({ error: '非法文件名' });
   }
+  const { absPath: inputPath, relName: name } = resolved;
   const userDir = path.join(DOWNLOADS_DIR, req.user);
-  const inputPath = path.join(userDir, name);
-  if (!inputPath.startsWith(userDir + path.sep)) {
-    return res.status(400).json({ error: '非法文件名' });
-  }
   const ext = path.extname(name).toLowerCase();
   if (!VIDEO_EXTS.has(ext)) return res.status(400).json({ error: '不支持的媒体格式' });
   if (ext === '.mp4' || ext === '.m3u8') {
@@ -671,16 +652,12 @@ app.post('/api/stream/:id/cancel', (req, res) => {
 app.get('/api/media-info', async (req, res) => {
   const ffmpegOk = await probeFfmpeg();
   if (!ffmpegOk) return res.status(503).json({ error: '服务端未安装 ffmpeg，无法探测媒体信息' });
-  // ⭐ 防路径穿越：与 POST /api/transcode 同款 basename + startsWith 校验
-  const name = path.basename(req.query?.name || '');
-  if (!name || name === '.' || name === '..' || name.includes('\\')) {
+  // ⭐ 防路径穿越：与 POST /api/transcode 同款统一解析（可含子目录，src/library.js）
+  const resolved = resolveUserFile(path.join(DOWNLOADS_DIR, req.user), req.query?.name);
+  if (!resolved) {
     return res.status(400).json({ error: '非法文件名' });
   }
-  const userDir = path.join(DOWNLOADS_DIR, req.user);
-  const filePath = path.join(userDir, name);
-  if (!filePath.startsWith(userDir + path.sep)) {
-    return res.status(400).json({ error: '非法文件名' });
-  }
+  const { absPath: filePath, relName: name } = resolved;
   if (!VIDEO_EXTS.has(path.extname(name).toLowerCase())) {
     return res.status(400).json({ error: '不支持的媒体格式' });
   }

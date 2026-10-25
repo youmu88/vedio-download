@@ -370,7 +370,13 @@ class ListStore {
     const now = new Date().toISOString();
     for (const name of names) {
       const clean = String(name || '').trim();
-      if (!clean || exist.has(clean)) continue;
+      if (!clean) continue;
+      // ⭐ 条目名语义 = 相对账号目录的 POSIX 路径（与 /api/library 一致）：
+      // 拒绝穿越/绝对路径/空段，避免列表条目指向账号目录之外
+      if (clean.includes('\\') || clean.startsWith('/') || clean.split('/').some((s) => !s || s === '.' || s === '..')) {
+        throw new Error(`非法条目名：${clean}`);
+      }
+      if (exist.has(clean)) continue;
       list.items.push({ name: clean, size: null, mtime: null, addedAt: now });
       exist.add(clean);
     }

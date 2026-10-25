@@ -89,10 +89,12 @@ async function waitFor(fn, { timeoutMs, intervalMs = 100, label = '条件' }) {
 }
 
 function writeFixture(name, size = 1024) {
-  fs.writeFileSync(path.join(userDir, name), Buffer.alloc(size, 0));
+  const p = path.join(userDir, ...name.split('/'));
+  fs.mkdirSync(path.dirname(p), { recursive: true });
+  fs.writeFileSync(p, Buffer.alloc(size, 0));
 }
 function removeFixture(name) {
-  try { fs.unlinkSync(path.join(userDir, name)); } catch { /* 已清理 */ }
+  try { fs.unlinkSync(path.join(userDir, ...name.split('/'))); } catch { /* 已清理 */ }
 }
 
 /**
@@ -321,5 +323,144 @@ test('④ 服务端检测到新增文件后应向用户房间推送 library-upda
   } finally {
     removeFixture('libtest-watch-discovery.mp4');
     try { ws.close(); } catch { /* noop */ }
+  }
+});
+
+// ─── ⑤ 子目录递归可见（20261024 缺陷回归）────────────
+test('⑤ /api/library 递归列出子目录视频，name 为相对路径', async () => {
+  const fixtures = [
+    'libtest-sub/top.mp4',
+    'libtest-sub/dir/clip.mp4',
+    'libtest-sub/dir/deep/episode.mkv',
+  ];
+  fixtures.forEach((n) => writeFixture(n));
+  try {
+    const names = await listLibrary();
+    for (const n of fixtures) {
+      assert.ok(names.includes(n), `子目录视频应可见：${n}（实际列表：${JSON.stringify(names)}）`);
+    }
+  } finally {
+    fixtures.forEach(removeFixture);
+  }
+});
+
+// ─── ⑥ 深度上限 + 隐藏目录 / 符号链接 ──────────────
+test('⑥ 第 7 层视频不列出；隐藏目录与符号链接目录不跟进', async () => {
+  const okDeep = 'libtest-depth/a/b/c/d/ok.mp4';              // 6 段（等于上限）
+  const tooDeep = 'libtest-depth/a/b/c/d/e/deep.mp4';         // 7 段（超上限）
+  const hidden = 'libtest-depth/.hidden/secret.mp4';
+  const realDir = path.join(userDir, 'libtest-depth', 'real');
+  const linkDir = path.join(userDir, 'libtest-depth', 'link');
+  [okDeep, tooDeep, hidden].forEach((n) => writeFixture(n));
+  fs.mkdirSync(realDir, { recursive: true });
+  fs.writeFileSync(path.join(realDir, 'inside.mp4'), Buffer.alloc(64));
+  try { fs.symlinkSync(realDir, linkDir); } catch { /* 平台不支持则跳过符号链接断言 */ }
+  try {
+    const names = await listLibrary();
+    assert.ok(names.includes(okDeep), `第 6 层应可见：${okDeep}（实际：${JSON.stringify(names)}）`);
+    assert.ok(!names.includes(tooDeep), `第 7 层不应可见：${tooDeep}`);
+    assert.ok(!names.includes(hidden), `隐藏目录内视频不应可见：${hidden}`);
+    assert.ok(names.includes('libtest-depth/real/inside.mp4'), '真实目录内视频应可见');
+    if (fs.existsSync(linkDir)) {
+      assert.ok(!names.some((n) => n.startsWith('libtest-depth/link/')), '符号链接目录不应被跟进');
+    }
+  } finally {
+    [okDeep, tooDeep, hidden].forEach(removeFixture);
+    try { fs.unlinkSync(path.join(realDir, 'inside.mp4')); } catch { /* noop */ }
+    try { if (fs.existsSync(linkDir)) fs.unlinkSync(linkDir); } catch { /* noop */ }
+  }
+});
+
+// ─── ⑦ 白名单覆盖前端可转码格式 ──────────────────
+test('⑦ /api/library 列出 .avi/.flv/.wmv/.mpg/.ts（前端有转码能力的格式），非媒体仍隐藏', async () => {
+  const now = ['libtest-format.avi', 'libtest-format.flv', 'libtest-format.wmv', 'libtest-format.mpg', 'libtest-format.ts'];
+  const notMedia = ['libtest-format.txt', 'libtest-format.zip'];
+  [...now, ...notMedia].forEach((n) => writeFixture(n));
+  try {
+    const names = await listLibrary();
+    for (const n of now) assert.ok(names.includes(n), `应入库：${n}（实际：${JSON.stringify(names)}）`);
+    for (const n of notMedia) assert.ok(!names.includes(n), `不应入库：${n}`);
+  } finally {
+    [...now, ...notMedia].forEach(removeFixture);
+  }
+});
+
+// ─── ⑧ 收藏列表：相对路径条目 + 隐藏语义保持 ──────
+test('⑧ 已加入列表的相对路径条目在浏览页隐藏；../ 条目被拒', async () => {
+  const rel = 'libtest-listed/sub/clip.mp4';
+  writeFixture(rel);
+  const created = await api('POST', '/api/lists', { authToken: token, body: { name: 'libtest 列表' } });
+  assert.equal(created.status, 200, `创建列表失败：${JSON.stringify(created.json)}`);
+  const listId = created.json.list.id;
+  try {
+    const added = await api('POST', `/api/lists/${listId}/items`, { authToken: token, body: { names: [rel] } });
+    assert.equal(added.status, 200, `添加相对路径条目失败：${JSON.stringify(added.json)}`);
+    assert.ok(added.json.list.items.some((i) => i.name === rel), '列表应保存相对路径条目');
+    const names = await listLibrary();
+    assert.ok(!names.includes(rel), '已入列表的条目不应在浏览页出现（隐藏语义保持）');
+
+    const bad = await api('POST', `/api/lists/${listId}/items`, { authToken: token, body: { names: ['../escape.mp4'] } });
+    assert.equal(bad.status, 400, `../ 条目应被拒（实际 ${bad.status}）`);
+  } finally {
+    removeFixture(rel);
+    await api('DELETE', `/api/lists/${listId}`, { authToken: token });
+  }
+});
+
+// ─── ⑨ DELETE：子目录相对路径 + 穿越拒绝 ───────────
+test('⑨ DELETE 子目录文件只删目标、不误删顶层同名文件；../ 与绝对路径返回 400', async () => {
+  const nested = 'libtest-del/sub/same.mp4';
+  const topSame = 'libtest-del/same.mp4';
+  writeFixture(nested);
+  writeFixture(topSame);
+  try {
+    const del = await api('DELETE', `/api/library/${encodeURIComponent(nested)}`, { authToken: token });
+    assert.equal(del.status, 200, `删除子目录文件失败（${del.status}）：${JSON.stringify(del.json)}`);
+    assert.equal(del.json.name, nested, '返回的 name 应为相对路径');
+    assert.ok(!fs.existsSync(path.join(userDir, 'libtest-del', 'sub', 'same.mp4')), '子目录目标文件应被删除');
+    assert.ok(fs.existsSync(path.join(userDir, 'libtest-del', 'same.mp4')), '顶层同名文件不应被误删');
+
+    const traversal = await api('DELETE', `/api/library/${encodeURIComponent('../escape.mp4')}`, { authToken: token });
+    assert.equal(traversal.status, 400, `../ 穿越应返回 400（实际 ${traversal.status}）`);
+    const absolute = await api('DELETE', `/api/library/${encodeURIComponent('/etc/passwd')}`, { authToken: token });
+    assert.equal(absolute.status, 400, `绝对路径应返回 400（实际 ${absolute.status}）`);
+  } finally {
+    removeFixture(nested);
+    removeFixture(topSame);
+  }
+});
+
+// ─── ⑩ media-info / transcode 接受相对路径 ─────────
+test('⑩ media-info 与 transcode 接受子目录相对路径（不再被 basename 截断成 400/404）', async () => {
+  const rel = 'libtest-media/sub/clip.mkv';
+  writeFixture(rel, 4096);
+  let streamId = null;
+  try {
+    const info = await api('GET', `/api/media-info?name=${encodeURIComponent(rel)}`, { authToken: token });
+    assert.ok(![400, 404].includes(info.status),
+      `media-info 不应因路径截断而 400/404（实际 ${info.status}: ${JSON.stringify(info.json)}）`);
+    const tc = await api('POST', '/api/transcode', { authToken: token, body: { name: rel } });
+    assert.ok(![400, 404].includes(tc.status),
+      `transcode 不应因路径截断而 400/404（实际 ${tc.status}: ${JSON.stringify(tc.json)}）`);
+    streamId = tc.json?.streamId || null;
+  } finally {
+    if (streamId) await api('POST', `/api/stream/${streamId}/cancel`, { authToken: token });
+    removeFixture(rel);
+  }
+});
+
+// ─── ⑪ 播放 URL：子目录逐段编码 → 206 Range ─────────
+test('⑪ 子目录视频播放 URL（逐段编码）可 Range 取流', async () => {
+  const rel = 'libtest-play/sub/clip.mp4';
+  writeFixture(rel, 4096);
+  try {
+    const urlPath = rel.split('/').map(encodeURIComponent).join('/');
+    const res = await fetch(`http://127.0.0.1:${port}/downloads/${urlPath}?token=${encodeURIComponent(token)}`, {
+      headers: { range: 'bytes=0-99' },
+    });
+    assert.equal(res.status, 206, `子目录播放 URL 应支持 Range（实际 ${res.status}）`);
+    assert.equal((await res.arrayBuffer()).byteLength, 100);
+  } finally {
+    removeFixture(rel);
   }
 });

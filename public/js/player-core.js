@@ -211,17 +211,26 @@ window.PlayerCore = (() => {
 
   function closePrivatePlayerOnly() { closePlayer('private'); }
 
+  /**
+   * 库内相对路径（可能含子目录，如 `子目录/视频.mp4`）→ URL 路径。
+   * 逐段 encodeURIComponent 而非整体编码：保留 `/` 作为路径分隔符，
+   * 交给 express.static 正常映射到账号目录内的子路径。
+   */
+  function encodeLibraryPath(name) {
+    return String(name || '').split('/').map(encodeURIComponent).join('/');
+  }
+
   function playLibrary(name) {
     const tk = getAuthToken();
     const q = tk ? `?token=${encodeURIComponent(tk)}` : '';
-    openPlayer(name, `/downloads/${encodeURIComponent(name)}${q}`, `file:${name}`);
+    openPlayer(name, `/downloads/${encodeLibraryPath(name)}${q}`, `file:${name}`);
   }
 
   /** 私密 App 内播放：保持私密上下文（私密播放器） */
   function playPrivateVideo(name) {
     const tk = getAuthToken();
     const q = tk ? `?token=${encodeURIComponent(tk)}` : '';
-    openPlayer(name, `/downloads/${encodeURIComponent(name)}${q}`, `file:${name}`, 'private');
+    openPlayer(name, `/downloads/${encodeLibraryPath(name)}${q}`, `file:${name}`, 'private');
   }
 
   function playUrl() {
