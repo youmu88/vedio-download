@@ -169,7 +169,7 @@ async function main() {
     const samplesInline = []
     await pinch(cdp, C.x, C.y, 60, 140, async () => { samplesInline.push((await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')).sx) })
     let st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    findings['非全屏双指外扩进入全屏（旧行为，新规格应为否）'] = st.fs === true
+    findings['内联双指外扩进入全屏（第 7 轮起允许：任何状态都能放大到满屏）'] = st.fs === true
 
     // 进入全屏：修复前双指外扩已进入；修复后走双击（与顶部图标等价的全屏入口）
     if (!st.fs) { await doubleTap(cdp, C.x, C.y); st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo') }

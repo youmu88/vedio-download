@@ -64,6 +64,11 @@ function stateEval(page, boxId, videoId) {
     const bar = box.querySelector('.inline-player-bar');
     const barCs = bar ? getComputedStyle(bar) : null;
     const barRect = bar ? bar.getBoundingClientRect() : null;
+    const ctl = box.querySelector('.pg-ctl');
+    const ctlCs = ctl ? getComputedStyle(ctl) : null;
+    const track = box.querySelector('.pg-ctl-track');
+    const trackRect = track ? track.getBoundingClientRect() : null;
+    const ctlBtn = box.querySelector('.pg-ctl-btn');
     return {
       fs: box.classList.contains('fs'),
       fill: box.classList.contains('fill'),
@@ -82,6 +87,14 @@ function stateEval(page, boxId, videoId) {
       barRect: barRect ? { top: barRect.top, bottom: barRect.bottom, height: barRect.height } : null,
       pillOn: !!(pill && pill.classList.contains('on')),
       pillText: pill ? pill.textContent : '',
+      // 自绘控制条与原生 controls（全屏时原生控件必须关闭：它会吞掉控件带上的触摸）
+      nativeControls: v.controls,
+      ctlOn: !!(ctl && ctl.classList.contains('on')),
+      ctlOpacity: ctlCs ? Number(ctlCs.opacity) : 0,
+      trackRect: trackRect ? { left: trackRect.left, right: trackRect.right, width: trackRect.width, top: trackRect.top, bottom: trackRect.bottom } : null,
+      ctlBtnVisible: !!(ctlBtn && ctlBtn.getBoundingClientRect().height > 0),
+      paused: v.paused,
+      dur: v.duration,
       t: v.currentTime,
       vw: innerWidth, vh: innerHeight,
     };
@@ -217,6 +230,35 @@ async function main() {
     check('全屏档 video 元素盒等于视口（控件在屏内）', st.elFitsViewport && st.coversViewport, JSON.stringify({ fits: st.elFitsViewport }))
     check('全屏时顶部按钮栏可见（退出图标可达）', st.barVisible, JSON.stringify(st.barRect))
 
+    // ── A1b. 全屏自绘控制条（原生 controls 的控件带会吞掉触摸 → 全屏改自绘）──
+    check('全屏时原生 controls 关闭（自绘控制条接管）', st.nativeControls === false, `controls=${st.nativeControls}`)
+    check('全屏自绘控制条可见（播放按钮 + 进度条轨道）', st.ctlOn && st.ctlOpacity > 0.5 && !!st.trackRect && st.trackRect.width > 60 && st.ctlBtnVisible, JSON.stringify({ on: st.ctlOn, op: st.ctlOpacity, track: st.trackRect }))
+    const beforePaused = st.paused
+    const btnPt = await page.evaluate(() => { const b = document.querySelector('#inlinePlayer .pg-ctl-btn'); const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+    await page.mouse.click(btnPt.x, btnPt.y)
+    await sleep(220)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('自绘控制条：播放/暂停按钮可切换播放状态', st.paused !== beforePaused, `paused ${beforePaused} → ${st.paused}`)
+    await page.evaluate(() => { const v = document.getElementById('inlinePlayerVideo'); v.pause(); v.currentTime = 0 })
+    const trk = st.trackRect
+    await page.mouse.move(trk.left + trk.width * 0.2, (trk.top + trk.bottom) / 2)
+    await page.mouse.down()
+    for (let i = 1; i <= 6; i++) { await page.mouse.move(trk.left + trk.width * (0.2 + 0.4 * i / 6), (trk.top + trk.bottom) / 2); await sleep(16) }
+    await page.mouse.up()
+    await sleep(220)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('自绘控制条：拖动进度条可定位（≈60% 时长）', st.dur > 0 && Math.abs(st.t / st.dur - 0.6) < 0.08, `t=${st.t.toFixed(2)} dur=${st.dur}`)
+    await page.mouse.click(vc.x, vc.y)
+    await sleep(200)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('全屏单击画面 → 控制条隐藏', !st.ctlOn, `on=${st.ctlOn}`)
+    await sleep(420) // 拉出双击窗口（320ms），否则第二次单击会被判成双击而退出全屏
+    await page.mouse.click(vc.x, vc.y)
+    await sleep(200)
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('再次单击画面 → 控制条重新显示', st.ctlOn, `on=${st.ctlOn}`)
+    await page.evaluate(() => { const v = document.getElementById('inlinePlayerVideo'); v.pause(); v.currentTime = 30 })
+
     // ── A2. 双指外扩 → 铺满全屏档（object-fit: cover，零黑边）──
     await pinch(cdp, vc.x, vc.y, 40, 90)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
@@ -226,7 +268,13 @@ async function main() {
     await page.waitForFunction(() => { const p = document.querySelector('#inlinePlayer .pg-pill'); return p && p.classList.contains('on') && p.textContent.includes('铺满全屏') }, null, { timeout: 1500 }).then(() => check('指示条显示档位名「铺满全屏」', true)).catch(() => check('指示条显示档位名「铺满全屏」', false, '未捕获到'))
     await page.screenshot({ path: SHOTS + '/pg-fill.png' })
 
-    // ── A3. 铺满档单指横滑 → 快进/快退（缩放后横滑快进必须可用）──
+    // ── A2b. 双指落在底部控制带（进度条区域）也必须能切档（第 7 轮回归）──
+    await pinch(cdp, vc.x, vc.y, 90, 55)   // 先收拢回全屏档
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    const guardY = st.vh - 44
+    await pinch(cdp, vc.x, guardY, 40, 90)  // 双指落在底部 44px 处
+    st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
+    check('双指落在底部控制带 → 仍能切到铺满档（自绘控件不吞手势）', st.fs && st.fill && st.objectFit === 'cover', JSON.stringify({ fs: st.fs, fill: st.fill, y: guardY }))
     await page.evaluate(() => { const v = document.getElementById('inlinePlayerVideo'); v.pause(); v.currentTime = 30 })
     await drag(cdp, vc.x, vc.y, 80, 0)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
@@ -260,11 +308,14 @@ async function main() {
     check('全屏点 close 图标 → 退出全屏且播放器仍打开', !st.fs && !st.parentIsBody && st.boxVisible, JSON.stringify({ fs: st.fs, visible: st.boxVisible }))
     check('退出全屏后档位复位（无 fill/cover 残留）', !st.fill && st.objectFit !== 'cover', `fill=${st.fill} fit=${st.objectFit}`)
 
-    // ── B. 内联（非全屏）双指手势：不进入全屏、无缩放残留（全屏切换走图标/双击）──
+    // ── B. 内联（非全屏）双指外扩 → 进入全屏并落在铺满档（任何状态都能放大到满屏）──
     await pinch(cdp, vc.x, vc.y, 40, 120)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    check('内联双指外扩不进入全屏（手势不做全屏切换）', !st.fs && !st.parentIsBody && !st.fill, JSON.stringify({ fs: st.fs, fill: st.fill }))
+    check('内联双指外扩 → 进入全屏并落在铺满档', st.fs && st.parentIsBody && st.fill && st.objectFit === 'cover', JSON.stringify({ fs: st.fs, fill: st.fill, fit: st.objectFit }))
     check('内联捏合后无缩放残留（transform 恒 1）', Math.abs(st.sx - 1) < 0.02 && Math.abs(st.sy - 1) < 0.02, `sx=${st.sx.toFixed(3)} sy=${st.sy.toFixed(3)}`)
+    const closePt2 = await page.evaluate(() => { const b = document.querySelector('#inlinePlayer .inline-player-close'); const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+    await page.mouse.click(closePt2.x, closePt2.y)
+    await sleep(240)
 
     // ── C. 双击切换全屏 ──
     await doubleTap(cdp, vc.x, vc.y)
@@ -311,14 +362,17 @@ async function main() {
     let st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
     check('桌面鼠标横滑 +80px → 快进 15s', Math.abs(st.t - 35) < 0.5, `t=${st.t.toFixed(2)}`)
 
-    // ctrl+滚轮（触控板捏合语义）：非全屏不响应——全屏切换只走图标/双击
+    // ctrl+滚轮（触控板捏合语义）：非全屏外扩 → 进入全屏并铺满（与触摸手势一致）
     await page.evaluate(() => {
       const v = document.getElementById('inlinePlayerVideo')
       for (let i = 0; i < 4; i++) v.dispatchEvent(new WheelEvent('wheel', { ctrlKey: true, deltaY: -120, bubbles: true, cancelable: true }))
     })
     await sleep(150)
     st = await stateEval(page, 'inlinePlayer', 'inlinePlayerVideo')
-    check('桌面非全屏 ctrl+滚轮不进入全屏（手势不做全屏切换）', !st.fs, JSON.stringify({ fs: st.fs }))
+    check('桌面非全屏 ctrl+滚轮外扩 → 进入全屏并铺满档', st.fs && st.fill && st.objectFit === 'cover', JSON.stringify({ fs: st.fs, fill: st.fill }))
+    const closePt3 = await page.evaluate(() => { const b = document.querySelector('#inlinePlayer .inline-player-close'); const r = b.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 } })
+    await page.mouse.click(closePt3.x, closePt3.y)
+    await sleep(240)
 
     // 双击进全屏（默认「全屏」档 contain）
     await page.mouse.dblclick(vc.x, vc.y)
